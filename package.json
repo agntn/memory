@@ -1,0 +1,109 @@
+{
+  "name": "@agntn/memory",
+  "version": "0.1.0",
+  "description": "Unified interface for agent memory systems.",
+  "keywords": [
+    "agents",
+    "cloudflare",
+    "memory"
+  ],
+  "homepage": "https://github.com/agntn/memory#readme",
+  "bugs": "https://github.com/agntn/memory/issues",
+  "license": "MIT",
+  "author": "oritwoen (https://github.com/oritwoen)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agntn/memory.git"
+  },
+  "bin": {
+    "memory": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "packages/shared",
+    "packages/pi/extensions",
+    "packages/omp/extensions"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.mts",
+      "import": "./dist/mcp.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "obuild",
+    "dev": "obuild --stub",
+    "fmt": "oxlint . --fix && oxfmt .",
+    "lint": "oxlint . && oxfmt --check .",
+    "lint:fix": "oxlint . --fix && oxfmt .",
+    "typecheck": "tsc --noEmit --skipLibCheck && pnpm build && tsc --noEmit -p tsconfig.extensions.json",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "prepack": "pnpm run build",
+    "release": "pnpm test && pnpm build && changelogen --release --push"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "citty": "0.2.2",
+    "typebox": "1.3.14"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
+    "@oh-my-pi/omptype": "17.3.5",
+    "@oh-my-pi/pi-coding-agent": "17.3.5",
+    "@oh-my-pi/pi-tui": "17.3.5",
+    "@types/node": "26.2.0",
+    "changelogen": "0.6.2",
+    "obuild": "0.4.38",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <1",
+    "@earendil-works/pi-tui": ">=0.84.2 <1",
+    "@oh-my-pi/pi-coding-agent": ">=17.3.5 <18",
+    "@oh-my-pi/pi-tui": ">=17.3.5 <18"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-tui": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "omp": {
+    "extensions": [
+      "./packages/omp/extensions/memory.ts"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./packages/pi/extensions/memory.ts"
+    ]
+  }
+}

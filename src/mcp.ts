@@ -1,0 +1,216 @@
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolResult,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
+import {
+  ingestParameters,
+  listParameters,
+  memoryParameters,
+  namespaceListParameters,
+  namespaceParameters,
+  profileOnlyParameters,
+  recallParameters,
+  rememberParameters,
+  sessionParameters,
+  summaryParameters,
+} from "../packages/shared/memory-tool-schemas.ts";
+import { memoryToolExecutors, memoryToolMeta } from "../packages/shared/memory-tools.ts";
+import type {
+  IngestParams,
+  ListParams,
+  MemoryParams,
+  MemoryToolResult,
+  NamespaceListParams,
+  NamespaceParams,
+  ProfileParams,
+  RecallParams,
+  RememberParams,
+  SessionParams,
+  SummaryParams,
+} from "../packages/shared/memory-tools.types.ts";
+import { version } from "./version.ts";
+
+/** One row of the MCP server's tool table; Pi and OMP register their own shapes. */
+interface MemoryToolDefinition {
+  name: keyof typeof memoryToolMeta;
+  inputSchema: TSchema;
+  annotations: Tool["annotations"];
+  /** Called only after `Value.Check` accepted the arguments against `inputSchema`. */
+  execute(args: unknown): Promise<MemoryToolResult>;
+}
+
+/** Every tool reaches Cloudflare Agent Memory, so no operation is closed-world. */
+const readAnnotations: Tool["annotations"] = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+const writeAnnotations: Tool["annotations"] = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+const destructiveAnnotations: Tool["annotations"] = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
+const tools: MemoryToolDefinition[] = [
+  {
+    name: "memory_namespace_list",
+    inputSchema: namespaceListParameters,
+    annotations: readAnnotations,
+    execute: (args) => memoryToolExecutors.listNamespaces(args as NamespaceListParams),
+  },
+  {
+    name: "memory_namespace_create",
+    inputSchema: namespaceParameters,
+    annotations: writeAnnotations,
+    execute: (args) => memoryToolExecutors.createNamespace(args as NamespaceParams),
+  },
+  {
+    name: "memory_namespace_delete",
+    inputSchema: namespaceParameters,
+    annotations: destructiveAnnotations,
+    execute: (args) => memoryToolExecutors.deleteNamespace(args as NamespaceParams),
+  },
+  {
+    name: "memory_remember",
+    inputSchema: rememberParameters,
+    annotations: writeAnnotations,
+    execute: (args) => memoryToolExecutors.remember(args as RememberParams),
+  },
+  {
+    name: "memory_ingest",
+    inputSchema: ingestParameters,
+    annotations: writeAnnotations,
+    execute: (args) => memoryToolExecutors.ingest(args as IngestParams),
+  },
+  {
+    name: "memory_recall",
+    inputSchema: recallParameters,
+    annotations: readAnnotations,
+    execute: (args) => memoryToolExecutors.recall(args as RecallParams),
+  },
+  {
+    name: "memory_list",
+    inputSchema: listParameters,
+    annotations: readAnnotations,
+    execute: (args) => memoryToolExecutors.list(args as ListParams),
+  },
+  {
+    name: "memory_get",
+    inputSchema: memoryParameters,
+    annotations: readAnnotations,
+    execute: (args) => memoryToolExecutors.memory(args as MemoryParams, "get"),
+  },
+  {
+    name: "memory_delete",
+    inputSchema: memoryParameters,
+    annotations: destructiveAnnotations,
+    execute: (args) => memoryToolExecutors.memory(args as MemoryParams, "delete"),
+  },
+  {
+    name: "memory_summary",
+    inputSchema: summaryParameters,
+    annotations: readAnnotations,
+    execute: (args) => memoryToolExecutors.summary(args as SummaryParams),
+  },
+  {
+    name: "memory_delete_session",
+    inputSchema: sessionParameters,
+    annotations: destructiveAnnotations,
+    execute: (args) => memoryToolExecutors.deleteSession(args as SessionParams),
+  },
+  {
+    name: "memory_delete_profile",
+    inputSchema: profileOnlyParameters,
+    annotations: destructiveAnnotations,
+    execute: (args) => memoryToolExecutors.deleteProfile(args as ProfileParams),
+  },
+];
+
+/** Format the first TypeBox validation failure for an MCP client. */
+function validationError(schema: TSchema, value: unknown): string {
+  const first = Value.Errors(schema, value)[0];
+  if (!first) return "Invalid arguments";
+  return `Invalid arguments at ${first.instancePath || "/"}: ${first.message}`;
+}
+
+/**
+ * Convert a shared tool result to the MCP text-result contract.
+ *
+ * `structuredContent` is intentionally omitted because clients prefer it over
+ * `content`, which would hide the human-readable memory result.
+ */
+function toCallToolResult(result: MemoryToolResult): CallToolResult {
+  return { content: result.content.map((part) => ({ type: "text" as const, text: part.text })) };
+}
+
+/**
+ * Create a stdio-compatible MCP server exposing the shared memory tool surface.
+ *
+ * The server publishes the TypeBox schemas that back the Pi extension and
+ * validates every request before forwarding it to the shared executors. The
+ * low-level `Server` is deliberate: `McpServer` accepts Zod schemas only, which
+ * would require a second definition of every tool parameter shape.
+ *
+ * @returns An unconnected MCP server; the caller owns its transport and lifecycle.
+ */
+export function createMcpServer(): Server {
+  const toolsByName = new Map(tools.map((tool) => [tool.name as string, tool]));
+  const server = new Server({ name: "memory", version }, { capabilities: { tools: {} } });
+
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: tools.map((tool): Tool => ({
+      name: tool.name,
+      title: memoryToolMeta[tool.name].label,
+      description: memoryToolMeta[tool.name].description,
+      inputSchema: tool.inputSchema as Tool["inputSchema"],
+      annotations: tool.annotations,
+    })),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const tool = toolsByName.get(request.params.name);
+    if (!tool) {
+      return {
+        content: [{ type: "text", text: `Unknown memory tool: ${request.params.name}` }],
+        isError: true,
+      };
+    }
+
+    const args = request.params.arguments ?? {};
+    if (!Value.Check(tool.inputSchema, args)) {
+      return {
+        content: [{ type: "text", text: validationError(tool.inputSchema, args) }],
+        isError: true,
+      };
+    }
+
+    try {
+      return toCallToolResult(await tool.execute(args));
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
+
+  return server;
+}

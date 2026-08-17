@@ -1,0 +1,4 @@
+/** Returns whether a value is a non-array object with string keys. */
+export function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
