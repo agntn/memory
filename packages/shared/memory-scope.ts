@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import type { ProfileParams } from "./memory-tools.types.ts";
 import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
@@ -10,6 +12,7 @@ import {
 
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
+export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
 
 const memoryNamePattern = new RegExp(MEMORY_NAME_PATTERN);
 
@@ -22,6 +25,20 @@ function validateMemoryName(name: string, label: string, maxLength: number): str
   return name;
 }
 
+function validateMemoryScope(
+  namespace: string | undefined,
+  profile: string | undefined,
+  source: string,
+): ProfileParams {
+  if (!namespace || !profile) {
+    throw new Error(`${source} must define both namespace and profile`);
+  }
+  return {
+    namespace: validateMemoryName(namespace, "Memory namespace", MAX_TOOL_NAMESPACE_CHARACTERS),
+    profile: validateMemoryName(profile, "Memory profile", MAX_TOOL_PROFILE_CHARACTERS),
+  };
+}
+
 /** Return the fixed operational scope, or undefined when the raw multi-profile surface is requested. */
 export function configuredMemoryScope(
   env: NodeJS.ProcessEnv = process.env,
@@ -32,10 +49,51 @@ export function configuredMemoryScope(
   if (!namespace || !profile) {
     throw new Error(`${MEMORY_NAMESPACE_ENV} and ${MEMORY_PROFILE_ENV} must be set together`);
   }
-  return {
-    namespace: validateMemoryName(namespace, "Memory namespace", MAX_TOOL_NAMESPACE_CHARACTERS),
-    profile: validateMemoryName(profile, "Memory profile", MAX_TOOL_PROFILE_CHARACTERS),
-  };
+  return validateMemoryScope(namespace, profile, "Memory environment");
+}
+
+/**
+ * Resolve Pi's operational scope from environment first, then its agent-local
+ * `memory-scope.json`. Pi does not load `.env` files, so the extension owns this
+ * narrow non-secret configuration path.
+ */
+export function configuredPiMemoryScope(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDirectory: string = homedir(),
+): ProfileParams | undefined {
+  const environmentScope = configuredMemoryScope(env);
+  if (environmentScope) return environmentScope;
+
+  const configuredAgentDir = env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = configuredAgentDir
+    ? configuredAgentDir === "~"
+      ? homeDirectory
+      : configuredAgentDir.startsWith("~/")
+        ? join(homeDirectory, configuredAgentDir.slice(2))
+        : resolve(configuredAgentDir)
+    : join(homeDirectory, ".pi", "agent");
+  const configPath = join(agentDir, PI_MEMORY_SCOPE_FILENAME);
+  if (!existsSync(configPath)) return undefined;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `Cannot read Pi memory scope from ${configPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Pi memory scope at ${configPath} must be a JSON object`);
+  }
+  const record = value as Record<string, unknown>;
+  return validateMemoryScope(
+    typeof record.namespace === "string" ? record.namespace.trim() : undefined,
+    typeof record.profile === "string" ? record.profile.trim() : undefined,
+    `Pi memory scope at ${configPath}`,
+  );
 }
 
 /** Inject a fixed scope after tool argument validation, so callers cannot select another profile. */

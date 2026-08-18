@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -60,6 +63,7 @@ afterEach(() => {
 
 describe("memory extensions", () => {
   it("registers the complete Pi tool surface", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     const tools: RegisteredTool[] = [];
     piMemoryExtension({
       registerTool(tool: RegisteredTool) {
@@ -138,6 +142,48 @@ describe("memory extensions", () => {
       content: "canonical",
       sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
     });
+  });
+
+  it("binds Pi operational tools from its agent-local scope file", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    try {
+      writeFileSync(
+        join(agentDir, "memory-scope.json"),
+        JSON.stringify({ namespace: "default", profile: "oritwoen" }),
+      );
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+      const tools: RegisteredTool[] = [];
+      piMemoryExtension({
+        registerTool(tool: RegisteredTool) {
+          tools.push(tool);
+        },
+      } as unknown as PiExtensionAPI);
+      const remember = tools.find((tool) => tool.name === "memory_remember") as
+        | (RegisteredTool & {
+            execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+          })
+        | undefined;
+      expect(remember).toBeDefined();
+      expect(requiredFields(remember!)).toEqual(["content"]);
+      expect(requiresNamespace(remember!)).toBe(false);
+      const execute = vi
+        .spyOn(memoryToolExecutors, "remember")
+        .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+
+      await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
+        cwd: "/workspace/movie-enigma",
+        sessionManager: { getSessionId: () => "pi-session-file" },
+      });
+
+      expect(execute).toHaveBeenCalledWith({
+        namespace: "default",
+        profile: "oritwoen",
+        content: "canonical",
+        sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+      });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("binds OMP operational tools to the canonical scope and session", async () => {

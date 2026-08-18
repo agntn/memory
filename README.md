@@ -92,6 +92,17 @@ export AGNTN_MEMORY_NAMESPACE="default"
 export AGNTN_MEMORY_PROFILE="agent"
 ```
 
+Pi does not load `.env` files. When the two environment variables are absent, its extension reads the non-secret scope from `$PI_CODING_AGENT_DIR/memory-scope.json` (default `~/.pi/agent/memory-scope.json`):
+
+```json
+{
+  "namespace": "default",
+  "profile": "agent"
+}
+```
+
+Environment variables take precedence over this Pi-specific file.
+
 Both variables are required together. In bound mode, ordinary recall/write/list/get/delete tools omit `namespace` and `profile`; the adapter injects them after argument validation, so the model cannot drift into another profile. OMP also derives write `sessionId` from its harness session and working directory. Account-level namespace tools and explicit profile deletion remain administrative.
 
 Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/memory.ts`. Reads use OMP's read approval tier, writes and deletes use the write tier.

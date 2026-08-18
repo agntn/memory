@@ -12,7 +12,7 @@ import {
 } from "../../shared/memory-tool-schemas.ts";
 import {
   applyMemoryScope,
-  configuredMemoryScope,
+  configuredPiMemoryScope,
   memorySessionId,
 } from "../../shared/memory-scope.ts";
 import { memoryTarget, memoryToolExecutors, memoryToolMeta } from "../../shared/memory-tools.ts";
@@ -38,7 +38,7 @@ function callText(
 }
 
 export default function memoryExtension(pi: ExtensionAPI) {
-  const operationalScope = configuredMemoryScope();
+  const operationalScope = configuredPiMemoryScope();
   const {
     rememberParameters,
     ingestParameters,
