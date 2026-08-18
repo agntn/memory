@@ -119,6 +119,19 @@ export function applyMemoryScope<T extends object>(
   return { ...params, ...scope };
 }
 
+/** Own write provenance in bound mode; preserve caller-owned sessions only in raw mode. */
+export function applyMemoryWriteScope<T extends object>(
+  params: T,
+  scope: ProfileParams | undefined,
+  harnessSessionId: string | undefined,
+): T & ProfileParams & { sessionId?: string } {
+  const scoped: T & ProfileParams & { sessionId?: string } = scope
+    ? applyMemoryScope(params, scope)
+    : (params as T & ProfileParams & { sessionId?: string });
+  if (!scope && scoped.sessionId) return scoped;
+  return { ...scoped, sessionId: harnessSessionId };
+}
+
 /**
  * Build a stable, non-identifying session key from the harness, project, and harness conversation id.
  * The readable prefix aids audits; the digest avoids leaking full paths or conversation identifiers.

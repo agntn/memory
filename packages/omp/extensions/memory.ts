@@ -17,6 +17,7 @@ import {
 } from "../../shared/memory-tools.ts";
 import {
   applyMemoryScope,
+  applyMemoryWriteScope,
   configuredMemoryScope,
   memorySessionId,
 } from "../../shared/memory-scope.ts";
@@ -260,13 +261,11 @@ export default function memoryExtension(omp: ExtensionAPI) {
     params: T,
     ctx: ExtensionContext,
   ): T & ProfileParams & { sessionId?: string } {
-    const scoped = operationalParams(params) as T & ProfileParams & { sessionId?: string };
-    return scoped.sessionId
-      ? scoped
-      : {
-          ...scoped,
-          sessionId: memorySessionId("omp", ctx.cwd, ctx.sessionManager.getSessionId()),
-        };
+    return applyMemoryWriteScope(
+      params,
+      operationalScope,
+      memorySessionId("omp", ctx.cwd, ctx.sessionManager.getSessionId()),
+    );
   }
   pi.registerTool({
     name: "memory_namespace_list",

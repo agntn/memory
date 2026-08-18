@@ -103,7 +103,7 @@ Pi does not load `.env` files. When the two environment variables are absent, it
 
 Environment variables take precedence over this Pi-specific file.
 
-Both variables are required together. In bound mode, ordinary recall/write/list/get/delete tools omit `namespace` and `profile`; the adapter injects them after argument validation, so the model cannot drift into another profile. OMP also derives write `sessionId` from its harness session and working directory. Account-level namespace tools and explicit profile deletion remain administrative.
+Both variables are required together. In bound mode, ordinary recall/write/list/get/delete tools omit `namespace` and `profile`; the adapter injects them after argument validation, so the model cannot drift into another profile. Pi and OMP also derive write `sessionId` from the harness session and working directory. Bound MCP writes derive it from Claude Code's injected project and conversation identifiers. Caller-supplied write `sessionId` values are honored only in unbound administrative mode. Account-level namespace tools and explicit profile deletion remain administrative.
 
 Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/memory.ts`. Reads use OMP's read approval tier, writes and deletes use the write tier.
 

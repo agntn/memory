@@ -131,10 +131,16 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
-    await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
-      cwd: "/workspace/movie-enigma",
-      sessionManager: { getSessionId: () => "pi-session-123" },
-    });
+    await remember!.execute(
+      "call-1",
+      { content: "canonical", sessionId: "model-selected-session" },
+      undefined,
+      undefined,
+      {
+        cwd: "/workspace/movie-enigma",
+        sessionManager: { getSessionId: () => "pi-session-123" },
+      },
+    );
 
     expect(execute).toHaveBeenCalledWith({
       namespace: "default",
@@ -224,10 +230,16 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
-    await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
-      cwd: "/workspace/movie-enigma",
-      sessionManager: { getSessionId: () => "omp-session-123" },
-    });
+    await remember!.execute(
+      "call-1",
+      { content: "canonical", sessionId: "model-selected-session" },
+      undefined,
+      undefined,
+      {
+        cwd: "/workspace/movie-enigma",
+        sessionManager: { getSessionId: () => "omp-session-123" },
+      },
+    );
 
     expect(execute).toHaveBeenCalledWith({
       namespace: "default",

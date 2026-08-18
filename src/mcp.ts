@@ -15,6 +15,7 @@ import {
 } from "../packages/shared/memory-tool-schemas.ts";
 import {
   applyMemoryScope,
+  applyMemoryWriteScope,
   claudeCodeMemorySessionId,
   configuredMemoryScope,
 } from "../packages/shared/memory-scope.ts";
@@ -76,8 +77,7 @@ function createTools(): MemoryToolDefinition[] {
   function operationalWriteParams<T extends object>(
     args: T,
   ): T & ProfileParams & { sessionId?: string } {
-    const params = operationalParams(args) as T & ProfileParams & { sessionId?: string };
-    return params.sessionId ? params : { ...params, sessionId: claudeCodeMemorySessionId() };
+    return applyMemoryWriteScope(args, operationalScope, claudeCodeMemorySessionId());
   }
 
   return [

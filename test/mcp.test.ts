@@ -98,7 +98,7 @@ describe("memory MCP server", () => {
 
     const response = await client.callTool({
       name: "memory_remember",
-      arguments: { content: "one canonical memory" },
+      arguments: { content: "one canonical memory", sessionId: "model-selected-session" },
     });
 
     expect(response.isError).not.toBe(true);
@@ -114,13 +114,16 @@ describe("memory MCP server", () => {
   });
 
   it("executes a tool against the configured Cloudflare namespace", async () => {
-    const urls: string[] = [];
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        urls.push(String(input));
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        });
         return Response.json({
           success: true,
           result: {
@@ -139,13 +142,22 @@ describe("memory MCP server", () => {
 
     const response = await client.callTool({
       name: "memory_remember",
-      arguments: { namespace: "mcp-remember-test", profile: "agent", content: "one" },
+      arguments: {
+        namespace: "mcp-remember-test",
+        profile: "agent",
+        content: "one",
+        sessionId: "caller-owned-session",
+      },
     });
 
     expect(response.isError).not.toBe(true);
     expect(response).not.toHaveProperty("structuredContent");
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toContain("/namespaces/mcp-remember-test/profiles/agent/remember");
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/mcp-remember-test/profiles/agent/remember"),
+        body: { content: "one", sessionId: "caller-owned-session" },
+      },
+    ]);
   });
 
   it("rejects arguments that do not match the published schema", async () => {
