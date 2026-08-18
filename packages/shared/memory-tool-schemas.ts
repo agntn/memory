@@ -178,3 +178,28 @@ export const summaryParameters = Type.Object({
   ),
 });
 export const profileOnlyParameters = Type.Object(profileParameters);
+
+/** Build the model-facing schemas for either a fixed operational scope or raw administration. */
+export function createOperationalMemoryToolSchemas(scoped: boolean) {
+  if (!scoped) {
+    return {
+      rememberParameters,
+      ingestParameters,
+      recallParameters,
+      listParameters,
+      memoryParameters,
+      summaryParameters,
+      sessionParameters,
+    };
+  }
+
+  return {
+    rememberParameters: Type.Omit(rememberParameters, ["namespace", "profile", "sessionId"]),
+    ingestParameters: Type.Omit(ingestParameters, ["namespace", "profile", "sessionId"]),
+    recallParameters: Type.Omit(recallParameters, ["namespace", "profile"]),
+    listParameters: Type.Omit(listParameters, ["namespace", "profile"]),
+    memoryParameters: Type.Omit(memoryParameters, ["namespace", "profile"]),
+    summaryParameters: Type.Omit(summaryParameters, ["namespace", "profile"]),
+    sessionParameters: Type.Omit(sessionParameters, ["namespace", "profile"]),
+  };
+}

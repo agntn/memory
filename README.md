@@ -85,7 +85,14 @@ export CLOUDFLARE_ACCOUNT_ID="..."
 export CLOUDFLARE_API_TOKEN="..."
 ```
 
-Every profile and memory call takes a `namespace`, which looks repetitive until you have an agent working across several namespaces in one session and nothing needs a restart. Namespace list, create and delete work at account level.
+By default, profile and memory calls expose `namespace` and `profile` for administrative, multi-profile use. A production agent should bind one operational scope instead:
+
+```bash
+export AGNTN_MEMORY_NAMESPACE="default"
+export AGNTN_MEMORY_PROFILE="agent"
+```
+
+Both variables are required together. In bound mode, ordinary recall/write/list/get/delete tools omit `namespace` and `profile`; the adapter injects them after argument validation, so the model cannot drift into another profile. OMP also derives write `sessionId` from its harness session and working directory. Account-level namespace tools and explicit profile deletion remain administrative.
 
 Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/memory.ts`. Reads use OMP's read approval tier, writes and deletes use the write tier.
 
@@ -107,7 +114,9 @@ Register it with an MCP client:
       "args": ["-y", "@agntn/memory", "mcp"],
       "env": {
         "CLOUDFLARE_ACCOUNT_ID": "...",
-        "CLOUDFLARE_API_TOKEN": "..."
+        "CLOUDFLARE_API_TOKEN": "...",
+        "AGNTN_MEMORY_NAMESPACE": "default",
+        "AGNTN_MEMORY_PROFILE": "agent"
       }
     }
   }
@@ -124,6 +133,8 @@ await server.connect(transport);
 ```
 
 An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the answer and then one JSON object per candidate memory, ids and scores included, because an answer you cannot trace back to a memory is a dead end. List results say `cursor` and `hasMore` instead of dropping the key on the last page. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing.
+
+When Claude Code launches the MCP server, its injected `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` are hashed into a deterministic write `sessionId`. The readable key names the harness and project but does not expose the full path or conversation id. Other MCP hosts may still pass `sessionId` explicitly when running without a bound operational scope.
 
 Two Cloudflare behaviours will bite you otherwise. An unknown memory id comes back as a generic 500, not a 404, so `memory_get` adds a line saying the id may simply not exist. Deleting a session that never existed succeeds quietly, which is why the delete counts what it found first. Both are in the tool descriptions, so an agent does not have to discover them halfway through a task.
 

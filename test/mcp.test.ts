@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpServer } from "../src/mcp.ts";
+import { memorySessionId } from "../packages/shared/memory-scope.ts";
 
 const openConnections: Array<{ close(): Promise<void> }> = [];
 
@@ -55,6 +56,61 @@ describe("memory MCP server", () => {
       response.tools.find((tool) => tool.name === "memory_delete_profile")?.annotations
         ?.destructiveHint,
     ).toBe(true);
+  });
+
+  it("binds operational tools to configured scope and harness session", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("CLAUDE_PROJECT_DIR", "/workspace/movie-enigma");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "conversation-123");
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        });
+        return Response.json({
+          success: true,
+          result: {
+            id: "memory-scoped",
+            type: "fact",
+            summary: "remembered",
+            content: "remembered",
+            sessionId: null,
+            createdAt: "2026-08-18T00:00:00.000Z",
+            updatedAt: "2026-08-18T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const tools = await client.listTools();
+    const rememberSchema = tools.tools.find((tool) => tool.name === "memory_remember")?.inputSchema;
+    expect(rememberSchema).toMatchObject({ type: "object", required: ["content"] });
+    expect(rememberSchema?.properties).not.toHaveProperty("namespace");
+    expect(rememberSchema?.properties).not.toHaveProperty("profile");
+    expect(rememberSchema?.properties).not.toHaveProperty("sessionId");
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: { content: "one canonical memory" },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/default/profiles/oritwoen/remember"),
+        body: {
+          content: "one canonical memory",
+          sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
+        },
+      },
+    ]);
   });
 
   it("executes a tool against the configured Cloudflare namespace", async () => {

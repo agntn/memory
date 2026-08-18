@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import piMemoryExtension from "../packages/pi/extensions/memory.ts";
 import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
@@ -37,15 +37,26 @@ function listLimit(tools: RegisteredTool[]): number | undefined {
   );
 }
 
-function requiresNamespace(tool: RegisteredTool): boolean {
+function requiredFields(tool: RegisteredTool): string[] {
   const required = tool.parameters.required;
+  if (Array.isArray(required)) return required;
   return (
-    (Array.isArray(required) && required.includes("namespace")) ||
-    tool.parameters.ir?.props?.some(
-      (property) => property.key === "namespace" && property.opt === false,
-    ) === true
+    tool.parameters.ir?.props
+      ?.filter((property) => property.opt === false)
+      .map((property) => property.key)
+      .filter((key): key is string => typeof key === "string") ?? []
   );
 }
+
+function requiresNamespace(tool: RegisteredTool): boolean {
+  return requiredFields(tool).includes("namespace");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe("memory extensions", () => {
   it("registers the complete Pi tool surface", () => {
@@ -93,6 +104,75 @@ describe("memory extensions", () => {
       "write",
       "write",
     ]);
+  });
+
+  it("binds Pi operational tools to the canonical scope and session", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const tools: RegisteredTool[] = [];
+    piMemoryExtension({
+      registerTool(tool: RegisteredTool) {
+        tools.push(tool);
+      },
+    } as unknown as PiExtensionAPI);
+    const remember = tools.find((tool) => tool.name === "memory_remember") as
+      | (RegisteredTool & {
+          execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+        })
+      | undefined;
+    expect(remember).toBeDefined();
+    expect(requiresNamespace(remember!)).toBe(false);
+    expect(requiredFields(remember!)).toEqual(["content"]);
+    const execute = vi
+      .spyOn(memoryToolExecutors, "remember")
+      .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+
+    await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
+      cwd: "/workspace/movie-enigma",
+      sessionManager: { getSessionId: () => "pi-session-123" },
+    });
+
+    expect(execute).toHaveBeenCalledWith({
+      namespace: "default",
+      profile: "oritwoen",
+      content: "canonical",
+      sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+    });
+  });
+
+  it("binds OMP operational tools to the canonical scope and session", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const tools: RegisteredTool[] = [];
+    ompMemoryExtension({
+      typebox: OmpTypebox,
+      registerTool(tool: RegisteredTool) {
+        tools.push(tool);
+      },
+    } as unknown as OmpExtensionAPI);
+    const remember = tools.find((tool) => tool.name === "memory_remember") as
+      | (RegisteredTool & {
+          execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+        })
+      | undefined;
+    expect(remember).toBeDefined();
+    expect(requiresNamespace(remember!)).toBe(false);
+    expect(requiredFields(remember!)).toEqual(["content"]);
+    const execute = vi
+      .spyOn(memoryToolExecutors, "remember")
+      .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+
+    await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
+      cwd: "/workspace/movie-enigma",
+      sessionManager: { getSessionId: () => "omp-session-123" },
+    });
+
+    expect(execute).toHaveBeenCalledWith({
+      namespace: "default",
+      profile: "oritwoen",
+      content: "canonical",
+      sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
+    });
   });
 
   it("selects the Cloudflare namespace independently for every tool call", async () => {

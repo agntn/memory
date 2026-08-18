@@ -1,4 +1,4 @@
-import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { Text } from "@oh-my-pi/pi-tui";
 import {
   ISO_INSTANT_PATTERN,
@@ -15,6 +15,11 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
 } from "../../shared/memory-tools.ts";
+import {
+  applyMemoryScope,
+  configuredMemoryScope,
+  memorySessionId,
+} from "../../shared/memory-scope.ts";
 import type {
   IngestParams,
   ListParams,
@@ -34,7 +39,7 @@ import type {
  * OMP validates tool parameters with its host build, so these schemas cannot be
  * imported from `shared/memory-tool-schemas.ts`, which Pi and MCP share.
  */
-function createParameters(Type: ExtensionAPI["typebox"]["Type"]) {
+function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean) {
   const namespaceName = Type.String({
     description:
       "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
@@ -56,7 +61,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"]) {
     "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.";
   const cursorDescription =
     "Cursor copied from the previous response. A response without a cursor was the last page.";
-  return {
+  const parameters = {
     namespaceParameters: Type.Object({ namespace: namespaceName }),
     namespaceListParameters: Type.Object({
       limit: Type.Optional(
@@ -204,6 +209,21 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"]) {
     }),
     profileOnlyParameters: Type.Object(profileParameters),
   };
+  if (!scoped) return parameters;
+  return {
+    ...parameters,
+    rememberParameters: Type.Omit(parameters.rememberParameters, [
+      "namespace",
+      "profile",
+      "sessionId",
+    ]),
+    ingestParameters: Type.Omit(parameters.ingestParameters, ["namespace", "profile", "sessionId"]),
+    recallParameters: Type.Omit(parameters.recallParameters, ["namespace", "profile"]),
+    listParameters: Type.Omit(parameters.listParameters, ["namespace", "profile"]),
+    memoryParameters: Type.Omit(parameters.memoryParameters, ["namespace", "profile"]),
+    summaryParameters: Type.Omit(parameters.summaryParameters, ["namespace", "profile"]),
+    sessionParameters: Type.Omit(parameters.sessionParameters, ["namespace", "profile"]),
+  };
 }
 
 function callText(
@@ -215,6 +235,7 @@ function callText(
 }
 
 export default function memoryExtension(omp: ExtensionAPI) {
+  const operationalScope = configuredMemoryScope();
   const {
     namespaceParameters,
     namespaceListParameters,
@@ -226,8 +247,27 @@ export default function memoryExtension(omp: ExtensionAPI) {
     sessionParameters,
     summaryParameters,
     profileOnlyParameters,
-  } = createParameters(omp.typebox.Type);
+  } = createParameters(omp.typebox.Type, Boolean(operationalScope));
   const pi = omp;
+
+  function operationalParams<T extends object>(params: T): T & ProfileParams {
+    return operationalScope
+      ? applyMemoryScope(params, operationalScope)
+      : (params as T & ProfileParams);
+  }
+
+  function operationalWriteParams<T extends object>(
+    params: T,
+    ctx: ExtensionContext,
+  ): T & ProfileParams & { sessionId?: string } {
+    const scoped = operationalParams(params) as T & ProfileParams & { sessionId?: string };
+    return scoped.sessionId
+      ? scoped
+      : {
+          ...scoped,
+          sessionId: memorySessionId("omp", ctx.cwd, ctx.sessionManager.getSessionId()),
+        };
+  }
   pi.registerTool({
     name: "memory_namespace_list",
     ...memoryToolMeta.memory_namespace_list,
@@ -273,10 +313,16 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "write",
     parameters: rememberParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_remember", memoryTarget(args), theme);
+      return callText("memory_remember", memoryTarget(operationalParams(args)), theme);
     },
-    execute(_id, params: RememberParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.remember(params);
+    execute(
+      _id,
+      params,
+      _signal,
+      _onUpdate,
+      ctx,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams);
     },
   });
 
@@ -286,10 +332,16 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "write",
     parameters: ingestParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_ingest", memoryTarget(args), theme);
+      return callText("memory_ingest", memoryTarget(operationalParams(args)), theme);
     },
-    execute(_id, params: IngestParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.ingest(params);
+    execute(
+      _id,
+      params,
+      _signal,
+      _onUpdate,
+      ctx,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.ingest(operationalWriteParams(params, ctx) as IngestParams);
     },
   });
 
@@ -299,10 +351,10 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "read",
     parameters: recallParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_recall", memoryTarget(args), theme);
+      return callText("memory_recall", memoryTarget(operationalParams(args)), theme);
     },
-    execute(_id, params: RecallParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.recall(params);
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.recall(operationalParams(params) as RecallParams);
     },
   });
 
@@ -312,10 +364,10 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "read",
     parameters: listParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_list", memoryTarget(args), theme);
+      return callText("memory_list", memoryTarget(operationalParams(args)), theme);
     },
-    execute(_id, params: ListParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.list(params);
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.list(operationalParams(params) as ListParams);
     },
   });
 
@@ -329,10 +381,14 @@ export default function memoryExtension(omp: ExtensionAPI) {
       approval: definition.operation === "get" ? "read" : "write",
       parameters: memoryParameters,
       renderCall(args, _options, theme) {
-        return callText(definition.name, `${memoryTarget(args)}:${args.memoryId}`, theme);
+        const params = operationalParams(args);
+        return callText(definition.name, `${memoryTarget(params)}:${params.memoryId}`, theme);
       },
-      execute(_id, params: MemoryParams): Promise<AgentToolResult<Record<string, unknown>>> {
-        return memoryToolExecutors.memory(params, definition.operation);
+      execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+        return memoryToolExecutors.memory(
+          operationalParams(params) as MemoryParams,
+          definition.operation,
+        );
       },
     });
   }
@@ -343,10 +399,10 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "read",
     parameters: summaryParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_summary", memoryTarget(args), theme);
+      return callText("memory_summary", memoryTarget(operationalParams(args)), theme);
     },
-    execute(_id, params: SummaryParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.summary(params);
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.summary(operationalParams(params) as SummaryParams);
     },
   });
 
@@ -356,10 +412,15 @@ export default function memoryExtension(omp: ExtensionAPI) {
     approval: "write",
     parameters: sessionParameters,
     renderCall(args, _options, theme) {
-      return callText("memory_delete_session", `${memoryTarget(args)}:${args.sessionId}`, theme);
+      const params = operationalParams(args);
+      return callText(
+        "memory_delete_session",
+        `${memoryTarget(params)}:${params.sessionId}`,
+        theme,
+      );
     },
-    execute(_id, params: SessionParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.deleteSession(params);
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams);
     },
   });
 

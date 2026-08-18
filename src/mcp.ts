@@ -8,17 +8,16 @@ import {
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import {
-  ingestParameters,
-  listParameters,
-  memoryParameters,
+  createOperationalMemoryToolSchemas,
   namespaceListParameters,
   namespaceParameters,
   profileOnlyParameters,
-  recallParameters,
-  rememberParameters,
-  sessionParameters,
-  summaryParameters,
 } from "../packages/shared/memory-tool-schemas.ts";
+import {
+  applyMemoryScope,
+  claudeCodeMemorySessionId,
+  configuredMemoryScope,
+} from "../packages/shared/memory-scope.ts";
 import { memoryToolExecutors, memoryToolMeta } from "../packages/shared/memory-tools.ts";
 import type {
   IngestParams,
@@ -64,80 +63,109 @@ const destructiveAnnotations: Tool["annotations"] = {
   openWorldHint: true,
 };
 
-const tools: MemoryToolDefinition[] = [
-  {
-    name: "memory_namespace_list",
-    inputSchema: namespaceListParameters,
-    annotations: readAnnotations,
-    execute: (args) => memoryToolExecutors.listNamespaces(args as NamespaceListParams),
-  },
-  {
-    name: "memory_namespace_create",
-    inputSchema: namespaceParameters,
-    annotations: writeAnnotations,
-    execute: (args) => memoryToolExecutors.createNamespace(args as NamespaceParams),
-  },
-  {
-    name: "memory_namespace_delete",
-    inputSchema: namespaceParameters,
-    annotations: destructiveAnnotations,
-    execute: (args) => memoryToolExecutors.deleteNamespace(args as NamespaceParams),
-  },
-  {
-    name: "memory_remember",
-    inputSchema: rememberParameters,
-    annotations: writeAnnotations,
-    execute: (args) => memoryToolExecutors.remember(args as RememberParams),
-  },
-  {
-    name: "memory_ingest",
-    inputSchema: ingestParameters,
-    annotations: writeAnnotations,
-    execute: (args) => memoryToolExecutors.ingest(args as IngestParams),
-  },
-  {
-    name: "memory_recall",
-    inputSchema: recallParameters,
-    annotations: readAnnotations,
-    execute: (args) => memoryToolExecutors.recall(args as RecallParams),
-  },
-  {
-    name: "memory_list",
-    inputSchema: listParameters,
-    annotations: readAnnotations,
-    execute: (args) => memoryToolExecutors.list(args as ListParams),
-  },
-  {
-    name: "memory_get",
-    inputSchema: memoryParameters,
-    annotations: readAnnotations,
-    execute: (args) => memoryToolExecutors.memory(args as MemoryParams, "get"),
-  },
-  {
-    name: "memory_delete",
-    inputSchema: memoryParameters,
-    annotations: destructiveAnnotations,
-    execute: (args) => memoryToolExecutors.memory(args as MemoryParams, "delete"),
-  },
-  {
-    name: "memory_summary",
-    inputSchema: summaryParameters,
-    annotations: readAnnotations,
-    execute: (args) => memoryToolExecutors.summary(args as SummaryParams),
-  },
-  {
-    name: "memory_delete_session",
-    inputSchema: sessionParameters,
-    annotations: destructiveAnnotations,
-    execute: (args) => memoryToolExecutors.deleteSession(args as SessionParams),
-  },
-  {
-    name: "memory_delete_profile",
-    inputSchema: profileOnlyParameters,
-    annotations: destructiveAnnotations,
-    execute: (args) => memoryToolExecutors.deleteProfile(args as ProfileParams),
-  },
-];
+function createTools(): MemoryToolDefinition[] {
+  const operationalScope = configuredMemoryScope();
+  const operationalSchemas = createOperationalMemoryToolSchemas(Boolean(operationalScope));
+
+  function operationalParams<T extends object>(args: T): T & ProfileParams {
+    return operationalScope
+      ? applyMemoryScope(args, operationalScope)
+      : (args as T & ProfileParams);
+  }
+
+  function operationalWriteParams<T extends object>(
+    args: T,
+  ): T & ProfileParams & { sessionId?: string } {
+    const params = operationalParams(args) as T & ProfileParams & { sessionId?: string };
+    return params.sessionId ? params : { ...params, sessionId: claudeCodeMemorySessionId() };
+  }
+
+  return [
+    {
+      name: "memory_namespace_list",
+      inputSchema: namespaceListParameters,
+      annotations: readAnnotations,
+      execute: (args) => memoryToolExecutors.listNamespaces(args as NamespaceListParams),
+    },
+    {
+      name: "memory_namespace_create",
+      inputSchema: namespaceParameters,
+      annotations: writeAnnotations,
+      execute: (args) => memoryToolExecutors.createNamespace(args as NamespaceParams),
+    },
+    {
+      name: "memory_namespace_delete",
+      inputSchema: namespaceParameters,
+      annotations: destructiveAnnotations,
+      execute: (args) => memoryToolExecutors.deleteNamespace(args as NamespaceParams),
+    },
+    {
+      name: "memory_remember",
+      inputSchema: operationalSchemas.rememberParameters,
+      annotations: writeAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.remember(
+          operationalWriteParams(args as { sessionId?: string }) as RememberParams,
+        ),
+    },
+    {
+      name: "memory_ingest",
+      inputSchema: operationalSchemas.ingestParameters,
+      annotations: writeAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.ingest(
+          operationalWriteParams(args as { sessionId?: string }) as IngestParams,
+        ),
+    },
+    {
+      name: "memory_recall",
+      inputSchema: operationalSchemas.recallParameters,
+      annotations: readAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.recall(operationalParams(args as object) as RecallParams),
+    },
+    {
+      name: "memory_list",
+      inputSchema: operationalSchemas.listParameters,
+      annotations: readAnnotations,
+      execute: (args) => memoryToolExecutors.list(operationalParams(args as object) as ListParams),
+    },
+    {
+      name: "memory_get",
+      inputSchema: operationalSchemas.memoryParameters,
+      annotations: readAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.memory(operationalParams(args as object) as MemoryParams, "get"),
+    },
+    {
+      name: "memory_delete",
+      inputSchema: operationalSchemas.memoryParameters,
+      annotations: destructiveAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.memory(operationalParams(args as object) as MemoryParams, "delete"),
+    },
+    {
+      name: "memory_summary",
+      inputSchema: operationalSchemas.summaryParameters,
+      annotations: readAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.summary(operationalParams(args as object) as SummaryParams),
+    },
+    {
+      name: "memory_delete_session",
+      inputSchema: operationalSchemas.sessionParameters,
+      annotations: destructiveAnnotations,
+      execute: (args) =>
+        memoryToolExecutors.deleteSession(operationalParams(args as object) as SessionParams),
+    },
+    {
+      name: "memory_delete_profile",
+      inputSchema: profileOnlyParameters,
+      annotations: destructiveAnnotations,
+      execute: (args) => memoryToolExecutors.deleteProfile(args as ProfileParams),
+    },
+  ];
+}
 
 /** Format the first TypeBox validation failure for an MCP client. */
 function validationError(schema: TSchema, value: unknown): string {
@@ -167,6 +195,7 @@ function toCallToolResult(result: MemoryToolResult): CallToolResult {
  * @returns An unconnected MCP server; the caller owns its transport and lifecycle.
  */
 export function createMcpServer(): Server {
+  const tools = createTools();
   const toolsByName = new Map(tools.map((tool) => [tool.name as string, tool]));
   const server = new Server({ name: "memory", version }, { capabilities: { tools: {} } });
 
