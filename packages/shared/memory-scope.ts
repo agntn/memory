@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ProfileParams } from "./memory-tools.types.ts";
@@ -73,16 +73,31 @@ export function configuredPiMemoryScope(
         : resolve(configuredAgentDir)
     : join(homeDirectory, ".pi", "agent");
   const configPath = join(agentDir, PI_MEMORY_SCOPE_FILENAME);
-  if (!existsSync(configPath)) return undefined;
 
-  let value: unknown;
+  let source: string;
   try {
-    value = JSON.parse(readFileSync(configPath, "utf8"));
+    source = readFileSync(configPath, "utf8");
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
     throw new Error(
       `Cannot read Pi memory scope from ${configPath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
+    );
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `Cannot parse Pi memory scope from ${configPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
     );
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {

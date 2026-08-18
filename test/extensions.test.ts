@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -181,6 +181,22 @@ describe("memory extensions", () => {
         content: "canonical",
         sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
       });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when Pi's scope file cannot be read", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    try {
+      mkdirSync(join(agentDir, "memory-scope.json"));
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+
+      expect(() =>
+        piMemoryExtension({
+          registerTool() {},
+        } as unknown as PiExtensionAPI),
+      ).toThrow("Cannot read Pi memory scope");
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
