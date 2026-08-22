@@ -38,3 +38,6 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Test packed entries
+        run: pnpm test:packed

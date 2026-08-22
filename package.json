@@ -49,6 +49,7 @@
     "lint:fix": "oxlint . --fix && oxfmt .",
     "typecheck": "pnpm build && tsc --noEmit --skipLibCheck && tsc --noEmit -p tsconfig.extensions.json",
     "test": "vitest --run",
+    "test:packed": "node --import tsx test/eval-packed.mjs",
     "test:watch": "vitest",
     "prepack": "pnpm run build",
     "release": "pnpm test && pnpm build && changelogen --release --push"
@@ -69,6 +70,7 @@
     "obuild": "0.4.38",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
+    "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   },
