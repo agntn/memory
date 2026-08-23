@@ -18,6 +18,7 @@ import {
 } from "../../shared/memory-scope.ts";
 import { memoryTarget, memoryToolExecutors, memoryToolMeta } from "../../shared/memory-tools.ts";
 import type {
+  GetParams,
   IngestParams,
   ListParams,
   MemoryParams,
@@ -45,6 +46,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     ingestParameters,
     recallParameters,
     listParameters,
+    getParameters,
     memoryParameters,
     sessionParameters,
     summaryParameters,
@@ -178,28 +180,35 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  for (const definition of [
-    { name: "memory_get", operation: "get" as const },
-    { name: "memory_delete", operation: "delete" as const },
-  ] as const) {
-    pi.registerTool({
-      name: definition.name,
-      ...memoryToolMeta[definition.name],
-      promptSnippet: memoryToolMeta[definition.name].description,
-      promptGuidelines: ["Use an exact memory id returned by another memory tool."],
-      parameters: memoryParameters,
-      renderCall(args, theme) {
-        const params = operationalParams(args);
-        return callText(definition.name, `${memoryTarget(params)}:${params.memoryId}`, theme);
-      },
-      execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-        return memoryToolExecutors.memory(
-          operationalParams(params) as MemoryParams,
-          definition.operation,
-        );
-      },
-    });
-  }
+  pi.registerTool({
+    name: "memory_get",
+    ...memoryToolMeta.memory_get,
+    promptSnippet: memoryToolMeta.memory_get.description,
+    promptGuidelines: ["Use exact memory ids returned by another memory tool."],
+    parameters: getParameters,
+    renderCall(args, theme) {
+      const params = operationalParams(args);
+      return callText("memory_get", `${memoryTarget(params)}:${params.memoryIds.join(",")}`, theme);
+    },
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.get(operationalParams(params) as GetParams);
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_delete",
+    ...memoryToolMeta.memory_delete,
+    promptSnippet: memoryToolMeta.memory_delete.description,
+    promptGuidelines: ["Use an exact memory id returned by another memory tool."],
+    parameters: memoryParameters,
+    renderCall(args, theme) {
+      const params = operationalParams(args);
+      return callText("memory_delete", `${memoryTarget(params)}:${params.memoryId}`, theme);
+    },
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams);
+    },
+  });
 
   pi.registerTool({
     name: "memory_summary",

@@ -2,12 +2,14 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
   CloudflareMemoryOptions,
+  Memory,
   MemoryProfile,
   MemoryProvider,
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
 import type {
+  GetParams,
   IngestParams,
   ListParams,
   MemoryModule,
@@ -62,11 +64,11 @@ export const MAX_TOOL_QUERY_CHARACTERS = 1_024;
 export const MAX_TOOL_MESSAGE_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
 /**
- * Cap on how many memories one call may expand with full content.
+ * Cap on how many memories one call may read with full content.
  *
- * Recall and list share it. Every expansion is one extra read against the
- * service, and measured recall responses have never carried more than 30
- * candidates.
+ * Recall and list expansion and memory_get share it. Every full record is one
+ * read against the service, and measured recall responses have never carried
+ * more than 30 candidates.
  */
 export const MAX_TOOL_EXPAND = 30;
 
@@ -110,12 +112,11 @@ export const memoryToolMeta = {
   memory_list: {
     label: "List Memories",
     description:
-      "List a page of memory metadata: ids, summaries, types, sessions, timestamps. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for one id. Session ids appear here and nowhere else, so this is also how to find what memory_delete_session can remove.",
+      "List a page of memory metadata: ids, summaries, types, sessions, timestamps. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. Session ids appear here and nowhere else, so this is also how to find what memory_delete_session can remove.",
   },
   memory_get: {
-    label: "Get Memory",
-    description:
-      "Get one memory, including its content, by exact identifier. An identifier that does not exist comes back as a server error rather than a not-found result.",
+    label: "Get Memories",
+    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. An identifier that does not exist comes back as a server error rather than a not-found result.`,
   },
   memory_delete: {
     label: "Delete Memory",
@@ -175,6 +176,8 @@ export const memoryFieldDescriptions = {
   listSessionId: "Return only memories from this session.",
   memoryType: "Filter by the type the service assigned when the memory was written.",
   memoryId: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
+  memoryIds:
+    "Exact memory identifiers from memory_list, memory_remember, or memory_recall. Each unique id costs one read.",
   sessionToDelete: "Exact session identifier. Every memory carrying it is removed.",
   summarySessionId: "Summarize only this session instead of the whole profile.",
   namespacesPerPage: `Namespaces per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
@@ -287,6 +290,32 @@ function assertExpand(expand: number | undefined): void {
   }
 }
 
+type MemoryReading = { memory: Memory } | { error: unknown };
+
+/**
+ * Read each unique id once and settle per id instead of failing the batch.
+ *
+ * memory_get and the expand paths share this fan-out, so a read policy added
+ * here (dedup today, throttling tomorrow) covers both. The map keeps the ids in
+ * first-seen order.
+ */
+async function readMemories(
+  profile: MemoryProfile,
+  ids: readonly string[],
+): Promise<Map<string, MemoryReading>> {
+  const unique = [...new Set(ids)];
+  const get = requireCapability(profile, "get");
+  const readings = await Promise.all(
+    unique.map((id) =>
+      get(id).then(
+        (memory): [string, MemoryReading] => [id, { memory }],
+        (error: unknown): [string, MemoryReading] => [id, { error }],
+      ),
+    ),
+  );
+  return new Map(readings);
+}
+
 /**
  * Read the full content behind a set of memories.
  *
@@ -299,16 +328,13 @@ async function readContents(
   ids: readonly string[],
 ): Promise<Map<string, string | null>> {
   if (ids.length === 0) return new Map();
-  const get = requireCapability(profile, "get");
-  const contents = await Promise.all(
-    ids.map((id) =>
-      get(id).then(
-        (memory) => memory.content,
-        () => null,
-      ),
-    ),
+  const readings = await readMemories(profile, ids);
+  return new Map(
+    [...readings].map(([id, reading]): [string, string | null] => [
+      id,
+      "memory" in reading ? reading.memory.content : null,
+    ]),
   );
-  return new Map(ids.map((id, index) => [id, contents[index] ?? null]));
 }
 
 /** Read the full content behind the best-scoring recall candidates. */
@@ -389,6 +415,37 @@ function removedText(removed: RemovedCount): string {
 function mayMeanMissing(error: unknown): boolean {
   const status = (error as { statusCode?: unknown } | null)?.statusCode;
   return typeof status === "number" && (status === 404 || status >= 500);
+}
+
+/**
+ * Render one failed read, naming the missing-id ambiguity when it applies.
+ *
+ * Cloudflare answers an unknown id with a generic server error, so say so here,
+ * but only for failures that could actually mean the id is not there.
+ */
+function describeReadError(params: ProfileParams, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!mayMeanMissing(error)) return message;
+  return `${message} (an id that does not exist in ${memoryTarget(params)} fails this way too; confirm it with memory_list)`;
+}
+
+/** Restate a failure that could mean the addressed id is absent. */
+function explainMissing(params: ProfileParams, error: unknown): unknown {
+  if (!mayMeanMissing(error)) return error;
+  return new Error(describeReadError(params, error), { cause: error });
+}
+
+/**
+ * Check the id list bounds before any round-trip is paid.
+ *
+ * Schemas enforce them for tool callers, but the executors are exported, and an
+ * oversized list handed in directly would authorize more reads than the
+ * published cap.
+ */
+function assertMemoryIds(memoryIds: readonly string[]): void {
+  if (!Array.isArray(memoryIds) || memoryIds.length < 1 || memoryIds.length > MAX_TOOL_EXPAND) {
+    throw new Error(`Memory ids must be a list of 1 to ${MAX_TOOL_EXPAND} identifiers`);
+  }
 }
 
 export const memoryToolExecutors = {
@@ -480,19 +537,53 @@ export const memoryToolExecutors = {
     };
   },
 
-  async memory(params: MemoryParams, operation: "get" | "delete"): Promise<MemoryToolResult> {
+  /**
+   * Read every requested memory, keeping first-seen order and per-id failures.
+   *
+   * When every read fails the call itself fails: a result that is nothing but
+   * error entries would hide the failure from clients that only check isError.
+   */
+  async get(params: GetParams): Promise<MemoryToolResult> {
+    assertMemoryIds(params.memoryIds);
+    const profile = await getProfile(params);
+    const readings = await readMemories(profile, params.memoryIds);
+    const entries = [...readings.entries()];
+    const failed = entries.filter(
+      (entry): entry is [string, { error: unknown }] => "error" in entry[1],
+    );
+    if (failed.length === entries.length) {
+      const first = failed[0];
+      /** A single-id total failure keeps memory_delete's flat error shape instead of a one-entry listing. */
+      if (first && entries.length === 1) throw explainMissing(params, first[1].error);
+      throw new Error(
+        [
+          `Every read in ${memoryTarget(params)} failed:`,
+          ...failed.map(([id, { error }]) => `${id}: ${describeReadError(params, error)}`),
+        ].join("\n"),
+      );
+    }
+    const memories = entries.map(([id, reading]) =>
+      "memory" in reading
+        ? reading.memory
+        : { id, error: describeReadError(params, reading.error) },
+    );
+    const header =
+      failed.length === 0
+        ? ""
+        : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => id).join(", ")}.\n`;
+    return {
+      content: [{ type: "text", text: `${header}${json(memories)}` }],
+      details: { memories },
+    };
+  },
+
+  async deleteMemory(params: MemoryParams): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
     const result = await requireCapability(
       profile,
-      operation,
+      "delete",
     )(params.memoryId).catch((error: unknown) => {
-      // Cloudflare answers an unknown id with a generic server error, so say so here,
-      // but only for failures that could actually mean the id is absent.
-      if (!mayMeanMissing(error)) throw error;
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)} (an id that does not exist in ${memoryTarget(params)} fails this way too; confirm it with memory_list)`,
-        { cause: error },
-      );
+      throw explainMissing(params, error);
     });
     return {
       content: [{ type: "text", text: json(result) }],

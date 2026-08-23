@@ -24,6 +24,7 @@ import {
   memorySessionId,
 } from "../../shared/memory-scope.ts";
 import type {
+  GetParams,
   IngestParams,
   ListParams,
   MemoryParams,
@@ -58,6 +59,11 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       pattern: MEMORY_NAME_PATTERN,
     }),
   };
+  const memoryId = Type.String({
+    description: memoryFieldDescriptions.memoryId,
+    minLength: 1,
+    pattern: MEMORY_ID_PATTERN,
+  });
   const parameters = {
     namespaceParameters: Type.Object({ namespace: namespaceName }),
     namespaceListParameters: Type.Object({
@@ -189,13 +195,17 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
         }),
       ),
     }),
+    getParameters: Type.Object({
+      ...profileParameters,
+      memoryIds: Type.Array(memoryId, {
+        minItems: 1,
+        maxItems: MAX_TOOL_EXPAND,
+        description: memoryFieldDescriptions.memoryIds,
+      }),
+    }),
     memoryParameters: Type.Object({
       ...profileParameters,
-      memoryId: Type.String({
-        description: memoryFieldDescriptions.memoryId,
-        minLength: 1,
-        pattern: MEMORY_ID_PATTERN,
-      }),
+      memoryId,
     }),
     sessionParameters: Type.Object({
       ...profileParameters,
@@ -228,6 +238,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
     ingestParameters: Type.Omit(parameters.ingestParameters, ["namespace", "profile", "sessionId"]),
     recallParameters: Type.Omit(parameters.recallParameters, ["namespace", "profile"]),
     listParameters: Type.Omit(parameters.listParameters, ["namespace", "profile"]),
+    getParameters: Type.Omit(parameters.getParameters, ["namespace", "profile"]),
     memoryParameters: Type.Omit(parameters.memoryParameters, ["namespace", "profile"]),
     summaryParameters: Type.Omit(parameters.summaryParameters, ["namespace", "profile"]),
     sessionParameters: Type.Omit(parameters.sessionParameters, ["namespace", "profile"]),
@@ -251,6 +262,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ingestParameters,
     recallParameters,
     listParameters,
+    getParameters,
     memoryParameters,
     sessionParameters,
     summaryParameters,
@@ -375,27 +387,33 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  for (const definition of [
-    { name: "memory_get", operation: "get" as const },
-    { name: "memory_delete", operation: "delete" as const },
-  ] as const) {
-    pi.registerTool({
-      name: definition.name,
-      ...memoryToolMeta[definition.name],
-      approval: definition.operation === "get" ? "read" : "write",
-      parameters: memoryParameters,
-      renderCall(args, _options, theme) {
-        const params = operationalParams(args);
-        return callText(definition.name, `${memoryTarget(params)}:${params.memoryId}`, theme);
-      },
-      execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-        return memoryToolExecutors.memory(
-          operationalParams(params) as MemoryParams,
-          definition.operation,
-        );
-      },
-    });
-  }
+  pi.registerTool({
+    name: "memory_get",
+    ...memoryToolMeta.memory_get,
+    approval: "read",
+    parameters: getParameters,
+    renderCall(args, _options, theme) {
+      const params = operationalParams(args);
+      return callText("memory_get", `${memoryTarget(params)}:${params.memoryIds.join(",")}`, theme);
+    },
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.get(operationalParams(params) as GetParams);
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_delete",
+    ...memoryToolMeta.memory_delete,
+    approval: "write",
+    parameters: memoryParameters,
+    renderCall(args, _options, theme) {
+      const params = operationalParams(args);
+      return callText("memory_delete", `${memoryTarget(params)}:${params.memoryId}`, theme);
+    },
+    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams);
+    },
+  });
 
   pi.registerTool({
     name: "memory_summary",

@@ -88,6 +88,22 @@ function sharedShape(schema: unknown, prefix = ""): Record<string, FieldShape> {
     };
     if (value.properties) Object.assign(shape, sharedShape(value, `${path}.`));
     if (value.items?.properties) Object.assign(shape, sharedShape(value.items, `${path}[].`));
+    else if (value.items) {
+      /**
+       * Scalar array items carry their own bounds; skipping them would let an
+       * item-level pattern or length drift between the schema copies unnoticed.
+       */
+      const item = value.items;
+      const itemMax = item.maxLength ?? item.maximum;
+      const itemMin = item.minLength ?? item.minimum;
+      shape[`${path}[]`] = {
+        optional: false,
+        ...(itemMax === undefined ? {} : { max: itemMax }),
+        ...(itemMin === undefined ? {} : { min: itemMin }),
+        ...(item.pattern === undefined ? {} : { pattern: item.pattern }),
+        ...(item.description === undefined ? {} : { description: item.description }),
+      };
+    }
   }
   return shape;
 }
@@ -113,6 +129,17 @@ function ompShape(schema: unknown, prefix = ""): Record<string, FieldShape> {
     };
     if (value.props) Object.assign(shape, ompShape(value, `${path}.`));
     if (value.el?.props) Object.assign(shape, ompShape(value.el, `${path}[].`));
+    else if (value.el) {
+      /** Mirror sharedShape: scalar array items are compared as their own field. */
+      const item = value.el;
+      shape[`${path}[]`] = {
+        optional: false,
+        ...(item.max === undefined ? {} : { max: item.max }),
+        ...(item.min === undefined ? {} : { min: item.min }),
+        ...(item.k === "sub" ? { opaque: true } : {}),
+        ...(item.desc === undefined || item.descAuto === true ? {} : { description: item.desc }),
+      };
+    }
   }
   return shape;
 }
@@ -137,7 +164,7 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_ingest: sharedSchemas.ingestParameters,
   memory_recall: sharedSchemas.recallParameters,
   memory_list: sharedSchemas.listParameters,
-  memory_get: sharedSchemas.memoryParameters,
+  memory_get: sharedSchemas.getParameters,
   memory_delete: sharedSchemas.memoryParameters,
   memory_summary: sharedSchemas.summaryParameters,
   memory_delete_session: sharedSchemas.sessionParameters,
@@ -191,6 +218,14 @@ describe("tool schemas", () => {
         expect(ompField?.literals, `${name}.${field} accepted values`).toEqual(
           sharedField.literals,
         );
+        /**
+         * The IR hides a pattern's text behind a validation closure, so pattern
+         * equality is uncheckable; requiring the refinement to exist at least
+         * catches a pattern dropped from the OMP copy.
+         */
+        if (sharedField.pattern !== undefined) {
+          expect(ompField?.opaque, `${name}.${field} pattern-backed refinement`).toBe(true);
+        }
         // A pattern turns the OMP field into an opaque refinement that hides its bounds,
         // so opacity is only acceptable where the shared field declares a pattern.
         if (ompField?.opaque === true) {

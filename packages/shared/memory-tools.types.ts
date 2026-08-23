@@ -66,6 +66,10 @@ export interface ListParams extends ProfileParams {
   expand?: number;
 }
 
+export interface GetParams extends ProfileParams {
+  memoryIds: string[];
+}
+
 export interface MemoryParams extends ProfileParams {
   memoryId: string;
 }

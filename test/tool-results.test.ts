@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { memoryToolExecutors } from "../packages/shared/memory-tools.ts";
 
 interface StubResponse {
-  result: unknown;
+  result?: unknown;
   resultInfo?: Record<string, unknown>;
+  /** Answer with Cloudflare's failed envelope and this status instead of a success result. */
+  failure?: { status: number; message: string };
 }
 
 /**
@@ -22,6 +24,12 @@ function stubCloudflare(response: StubResponse | ((url: string) => StubResponse)
       const url = String(input);
       urls.push(url);
       const payload = typeof response === "function" ? response(url) : response;
+      if (payload.failure !== undefined) {
+        return Response.json(
+          { success: false, errors: [{ message: payload.failure.message }] },
+          { status: payload.failure.status },
+        );
+      }
       return Response.json({
         success: true,
         result: payload.result,
@@ -410,37 +418,107 @@ describe("delete resilience", () => {
   });
 
   it("keeps an authentication failure free of not-found guidance", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({ success: false, errors: [{ message: "Invalid token" }] }, { status: 401 }),
-      ),
-    );
+    stubCloudflare({ failure: { status: 401, message: "Invalid token" } });
 
     const error = await memoryToolExecutors
-      .memory({ namespace: "auth-fail", profile: "agent", memoryId: "mem-1" }, "get")
+      .get({ namespace: "auth-fail", profile: "agent", memoryIds: ["mem-1"] })
       .catch((cause: unknown) => cause);
 
     expect((error as Error).message).toBe("Invalid token");
   });
 
   it("explains that an unknown id fails the same way as a server error", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({ success: false, errors: [{ message: "internal" }] }, { status: 500 }),
-      ),
-    );
+    stubCloudflare({ failure: { status: 500, message: "internal" } });
 
     const error = await memoryToolExecutors
-      .memory({ namespace: "server-fail", profile: "agent", memoryId: "mem-1" }, "get")
+      .get({ namespace: "server-fail", profile: "agent", memoryIds: ["mem-1"] })
       .catch((cause: unknown) => cause);
 
     expect((error as Error).message).toContain("an id that does not exist in server-fail/agent");
+  });
+});
+
+describe("get result", () => {
+  it("reads several memories in one call, keeping request order", async () => {
+    const urls = stubCloudflare((url) => {
+      const id = url.split("/").at(-1) ?? "";
+      return { result: { ...memoryEntry(id, null), content: `content ${id}` } };
+    });
+
+    const result = await memoryToolExecutors.get({
+      namespace: "get-many",
+      profile: "agent",
+      memoryIds: ["mem-2", "mem-1"],
+    });
+
+    const memories = JSON.parse(textOf(result)) as Array<{ id: string; content: string }>;
+    expect(memories.map((memory) => memory.id)).toEqual(["mem-2", "mem-1"]);
+    expect(memories[0]?.content).toBe("content mem-2");
+    expect(urls).toHaveLength(2);
+  });
+
+  it("keeps one failed read from hiding the rest", async () => {
+    stubCloudflare((url) =>
+      url.endsWith("/mem-missing")
+        ? { failure: { status: 500, message: "internal" } }
+        : { result: { ...memoryEntry("mem-1", null), content: "content mem-1" } },
+    );
+
+    const result = await memoryToolExecutors.get({
+      namespace: "get-partial",
+      profile: "agent",
+      memoryIds: ["mem-1", "mem-missing"],
+    });
+
+    const [header, ...body] = textOf(result).split("\n");
+    expect(header).toBe("Read 1 of 2 memories; error entries for: mem-missing.");
+    const memories = JSON.parse(body.join("\n")) as Array<Record<string, unknown>>;
+    expect(memories[0]).toMatchObject({ id: "mem-1", content: "content mem-1" });
+    expect(memories[1]).toEqual({
+      id: "mem-missing",
+      error:
+        "internal (an id that does not exist in get-partial/agent fails this way too; confirm it with memory_list)",
+    });
+  });
+
+  it("reads duplicate ids once", async () => {
+    const urls = stubCloudflare((url) => {
+      const id = url.split("/").at(-1) ?? "";
+      return { result: { ...memoryEntry(id, null), content: `content ${id}` } };
+    });
+
+    const result = await memoryToolExecutors.get({
+      namespace: "get-dedup",
+      profile: "agent",
+      memoryIds: ["mem-1", "mem-1", "mem-2"],
+    });
+
+    const memories = JSON.parse(textOf(result)) as Array<{ id: string }>;
+    expect(memories.map((memory) => memory.id)).toEqual(["mem-1", "mem-2"]);
+    expect(urls).toHaveLength(2);
+  });
+
+  it("names every id when all reads fail", async () => {
+    stubCloudflare({ failure: { status: 500, message: "internal" } });
+
+    const error = await memoryToolExecutors
+      .get({ namespace: "get-all-fail", profile: "agent", memoryIds: ["mem-1", "mem-2"] })
+      .catch((cause: unknown) => cause);
+
+    const message = (error as Error).message;
+    expect(message).toContain("Every read in get-all-fail/agent failed:");
+    expect(message).toContain("mem-1: internal");
+    expect(message).toContain("mem-2: internal");
+  });
+
+  it("rejects an id list beyond the published read cap", async () => {
+    await expect(
+      memoryToolExecutors.get({
+        namespace: "get-cap",
+        profile: "agent",
+        memoryIds: Array.from({ length: 31 }, (_value, index) => `mem-${index}`),
+      }),
+    ).rejects.toThrow("Memory ids must be a list of 1 to 30 identifiers");
   });
 });
 

@@ -36,6 +36,11 @@ const profileParameters = {
     pattern: MEMORY_NAME_PATTERN,
   }),
 };
+const memoryId = Type.String({
+  description: memoryFieldDescriptions.memoryId,
+  minLength: 1,
+  pattern: MEMORY_ID_PATTERN,
+});
 
 export const namespaceParameters = Type.Object({ namespace: namespaceName });
 export const namespaceListParameters = Type.Object({
@@ -164,13 +169,17 @@ export const listParameters = Type.Object({
     }),
   ),
 });
+export const getParameters = Type.Object({
+  ...profileParameters,
+  memoryIds: Type.Array(memoryId, {
+    minItems: 1,
+    maxItems: MAX_TOOL_EXPAND,
+    description: memoryFieldDescriptions.memoryIds,
+  }),
+});
 export const memoryParameters = Type.Object({
   ...profileParameters,
-  memoryId: Type.String({
-    description: memoryFieldDescriptions.memoryId,
-    minLength: 1,
-    pattern: MEMORY_ID_PATTERN,
-  }),
+  memoryId,
 });
 export const sessionParameters = Type.Object({
   ...profileParameters,
@@ -200,6 +209,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
       ingestParameters,
       recallParameters,
       listParameters,
+      getParameters,
       memoryParameters,
       summaryParameters,
       sessionParameters,
@@ -211,6 +221,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
     ingestParameters: Type.Omit(ingestParameters, ["namespace", "profile", "sessionId"]),
     recallParameters: Type.Omit(recallParameters, ["namespace", "profile"]),
     listParameters: Type.Omit(listParameters, ["namespace", "profile"]),
+    getParameters: Type.Omit(getParameters, ["namespace", "profile"]),
     memoryParameters: Type.Omit(memoryParameters, ["namespace", "profile"]),
     summaryParameters: Type.Omit(summaryParameters, ["namespace", "profile"]),
     sessionParameters: Type.Omit(sessionParameters, ["namespace", "profile"]),
