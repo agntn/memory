@@ -412,13 +412,19 @@ export const memoryToolExecutors = {
   /**
    * Answer a recall query, expanding the best-scoring candidates on request.
    *
-   * The expand bound is checked before the recall round-trip is paid: schemas
-   * enforce it for tool callers, but the executors are exported, and a negative
-   * count handed in directly would silently slice candidates from the wrong end.
+   * The expand bounds are checked before the recall round-trip is paid: schemas
+   * enforce them for tool callers, but the executors are exported, and handed in
+   * directly a negative count would silently slice candidates from the wrong end
+   * while an oversized one would authorize more reads than the published cap.
    */
   async recall(params: RecallParams): Promise<MemoryToolResult> {
-    if (params.expand !== undefined && (!Number.isInteger(params.expand) || params.expand < 1)) {
-      throw new Error("Expand must be a positive integer");
+    if (
+      params.expand !== undefined &&
+      (!Number.isInteger(params.expand) ||
+        params.expand < 1 ||
+        params.expand > MAX_TOOL_RECALL_EXPAND)
+    ) {
+      throw new Error(`Expand must be an integer between 1 and ${MAX_TOOL_RECALL_EXPAND}`);
     }
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {

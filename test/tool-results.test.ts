@@ -138,17 +138,19 @@ describe("recall result", () => {
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
   });
 
-  it("rejects a non-positive expand before calling the service", async () => {
+  it("rejects an out-of-range expand before calling the service", async () => {
     const urls = stubCloudflare({ result: { count: 0, answer: "", candidates: [] } });
 
-    await expect(
-      memoryToolExecutors.recall({
-        namespace: "recall-expand-guard",
-        profile: "agent",
-        query: "build tooling",
-        expand: 0,
-      }),
-    ).rejects.toThrow("Expand must be a positive integer");
+    for (const expand of [0, 31]) {
+      await expect(
+        memoryToolExecutors.recall({
+          namespace: "recall-expand-guard",
+          profile: "agent",
+          query: "build tooling",
+          expand,
+        }),
+      ).rejects.toThrow("Expand must be an integer between 1 and 30");
+    }
     expect(urls).toHaveLength(0);
   });
 
