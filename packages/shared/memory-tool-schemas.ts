@@ -7,6 +7,7 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
+  MAX_TOOL_RECALL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
@@ -120,6 +121,14 @@ export const recallParameters = Type.Object({
   referenceDate: Type.Optional(
     Type.String({
       description: "ISO-8601 date the service treats as now when the query is time-relative.",
+    }),
+  ),
+  expand: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: MAX_TOOL_RECALL_EXPAND,
+      description:
+        "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
     }),
   ),
 });

@@ -4,6 +4,7 @@ import type {
   CloudflareMemoryOptions,
   MemoryProfile,
   MemoryProvider,
+  RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
 import type {
@@ -60,6 +61,13 @@ export const ISO_INSTANT_PATTERN =
 export const MAX_TOOL_QUERY_CHARACTERS = 1_024;
 export const MAX_TOOL_MESSAGE_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
+/**
+ * Cap on how many recall candidates one call may expand with full content.
+ *
+ * Every expansion is one extra read against the service, and measured recall
+ * responses have never carried more than 30 candidates.
+ */
+export const MAX_TOOL_RECALL_EXPAND = 30;
 
 /**
  * Names and descriptions shared by the Pi, OMP, and MCP tool surfaces.
@@ -96,7 +104,7 @@ export const memoryToolMeta = {
   memory_recall: {
     label: "Recall",
     description:
-      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold.",
+      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. Candidate summaries are capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get.",
   },
   memory_list: {
     label: "List Memories",
@@ -222,19 +230,60 @@ function paged<T extends { cursor?: string }>(result: T): Record<string, unknown
 }
 
 /**
+ * Read the full content behind the best-scoring recall candidates.
+ *
+ * Candidates carry a summary the service truncates, so a conclusion drawn from
+ * them alone misreads any memory longer than the cap. A read that fails maps to
+ * null: one missing record must not take down the answer recall already
+ * produced.
+ */
+async function expandCandidates(
+  profile: MemoryProfile,
+  candidates: readonly RecallCandidate[],
+  expand: number | undefined,
+): Promise<Map<string, string | null>> {
+  if (expand === undefined || candidates.length === 0) return new Map();
+  const get = requireCapability(profile, "get");
+  const top = candidates.toSorted((a, b) => b.score - a.score).slice(0, expand);
+  const contents = await Promise.all(
+    top.map((candidate) =>
+      get(candidate.id).then(
+        (memory) => memory.content,
+        () => null,
+      ),
+    ),
+  );
+  return new Map(top.map((candidate, index) => [candidate.id, contents[index] ?? null]));
+}
+
+/**
  * Render a recall answer together with the memories it was drawn from.
  *
  * The answer alone is a dead end: without ids a caller cannot inspect, correct,
  * or delete the memory behind a recalled claim.
  */
-function recallText(params: ProfileParams, result: RecallResult): string {
+function recallText(
+  params: ProfileParams,
+  result: RecallResult,
+  expanded: Map<string, string | null>,
+): string {
   const answer = result.answer || "No answer returned.";
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
   const candidates = result.candidates.map((candidate) =>
-    JSON.stringify({ ...candidate, namespace: params.namespace, profile: params.profile }),
+    JSON.stringify({
+      ...candidate,
+      namespace: params.namespace,
+      profile: params.profile,
+      ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
+    }),
   );
-  return `${header}\n\n${answer}\n\nCandidates (${candidates.length}), one JSON object per line:\n${candidates.join("\n")}`;
+  const failed = expanded.values().some((content) => content === null);
+  const expansion =
+    expanded.size === 0
+      ? ""
+      : `, full content on the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
+  return `${header}\n\n${answer}\n\nCandidates (${candidates.length}), one JSON object per line${expansion}:\n${candidates.join("\n")}`;
 }
 
 /** How much a cascade delete removed, or `undefined` when it could not be read. */
@@ -319,15 +368,26 @@ export const memoryToolExecutors = {
     };
   },
 
+  /**
+   * Answer a recall query, expanding the best-scoring candidates on request.
+   *
+   * The expand bound is checked before the recall round-trip is paid: schemas
+   * enforce it for tool callers, but the executors are exported, and a negative
+   * count handed in directly would silently slice candidates from the wrong end.
+   */
   async recall(params: RecallParams): Promise<MemoryToolResult> {
+    if (params.expand !== undefined && (!Number.isInteger(params.expand) || params.expand < 1)) {
+      throw new Error("Expand must be a positive integer");
+    }
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
       responseLength: params.responseLength,
       referenceDate: optionalString(params.referenceDate),
     });
+    const expanded = await expandCandidates(profile, result.candidates, params.expand);
     return {
-      content: [{ type: "text", text: recallText(params, result) }],
+      content: [{ type: "text", text: recallText(params, result, expanded) }],
       details: result as unknown as Record<string, unknown>,
     };
   },
