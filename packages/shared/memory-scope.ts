@@ -111,12 +111,16 @@ export function configuredPiMemoryScope(
   );
 }
 
-/** Inject a fixed scope after tool argument validation, so callers cannot select another profile. */
+/**
+ * Inject a fixed scope after tool argument validation, so callers cannot select
+ * another profile. Without a bound scope the params pass through unchanged and
+ * keep the namespace and profile the caller picked.
+ */
 export function applyMemoryScope<T extends object>(
   params: T,
-  scope: ProfileParams,
+  scope: ProfileParams | undefined,
 ): T & ProfileParams {
-  return { ...params, ...scope };
+  return scope ? { ...params, ...scope } : (params as T & ProfileParams);
 }
 
 /** Own write provenance in bound mode; preserve caller-owned sessions only in raw mode. */
@@ -125,9 +129,7 @@ export function applyMemoryWriteScope<T extends object>(
   scope: ProfileParams | undefined,
   harnessSessionId: string | undefined,
 ): T & ProfileParams & { sessionId?: string } {
-  const scoped: T & ProfileParams & { sessionId?: string } = scope
-    ? applyMemoryScope(params, scope)
-    : (params as T & ProfileParams & { sessionId?: string });
+  const scoped = applyMemoryScope(params, scope) as T & ProfileParams & { sessionId?: string };
   if (!scope && scoped.sessionId) return scoped;
   return { ...scoped, sessionId: harnessSessionId };
 }

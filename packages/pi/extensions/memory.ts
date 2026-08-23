@@ -51,9 +51,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   } = createOperationalMemoryToolSchemas(Boolean(operationalScope));
 
   function operationalParams<T extends object>(params: T): T & ProfileParams {
-    return operationalScope
-      ? applyMemoryScope(params, operationalScope)
-      : (params as T & ProfileParams);
+    return applyMemoryScope(params, operationalScope);
   }
 
   function operationalWriteParams<T extends object>(

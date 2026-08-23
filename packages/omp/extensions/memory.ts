@@ -261,9 +261,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
   const pi = omp;
 
   function operationalParams<T extends object>(params: T): T & ProfileParams {
-    return operationalScope
-      ? applyMemoryScope(params, operationalScope)
-      : (params as T & ProfileParams);
+    return applyMemoryScope(params, operationalScope);
   }
 
   function operationalWriteParams<T extends object>(
