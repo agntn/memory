@@ -138,6 +138,47 @@ export const memoryToolMeta = {
   },
 } as const;
 
+/**
+ * Field descriptions for the parameter schemas.
+ *
+ * Pi and MCP read them through `memory-tool-schemas.ts`; the OMP extension reads
+ * them directly, because it rebuilds its schemas with the host TypeBox but has
+ * no reason to retype the prose.
+ */
+export const memoryFieldDescriptions = {
+  namespace:
+    "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
+  profile:
+    "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; there is no profile listing.",
+  writeSessionId:
+    "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.",
+  cursor:
+    "Cursor copied from the previous response. A response without a cursor was the last page.",
+  rememberContent:
+    "Memory content to store. The service writes it verbatim, assigns the memory type itself, and publishes no size limit for this field.",
+  messageRole: "Who produced the message.",
+  messageContent: "Message text.",
+  messageTimestamp:
+    "When the message was sent, as an ISO-8601 instant with an explicit offset, for example 2026-08-17T10:00:00Z.",
+  messages: "Conversation messages in the order they were exchanged.",
+  recallQuery: "Natural-language recall query.",
+  thinkingLevel:
+    "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
+  responseLength: "Requested length of the prose answer. Defaults to medium.",
+  referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
+  expand:
+    "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
+  memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+  listSessionId: "Return only memories from this session.",
+  memoryType: "Filter by the type the service assigned when the memory was written.",
+  memoryId: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
+  sessionToDelete: "Exact session identifier. Every memory carrying it is removed.",
+  summarySessionId: "Summarize only this session instead of the whole profile.",
+  namespacesPerPage: `Namespaces per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+  sortField: "Sort field.",
+  sortDirection: "Sort direction.",
+} as const;
+
 function loadMemory(): Promise<MemoryModule> {
   if (!memoryModulePromise) {
     const sourceUrl = new URL("../../src/index.ts", import.meta.url);
