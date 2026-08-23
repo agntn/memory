@@ -62,12 +62,13 @@ export const MAX_TOOL_QUERY_CHARACTERS = 1_024;
 export const MAX_TOOL_MESSAGE_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
 /**
- * Cap on how many recall candidates one call may expand with full content.
+ * Cap on how many memories one call may expand with full content.
  *
- * Every expansion is one extra read against the service, and measured recall
- * responses have never carried more than 30 candidates.
+ * Recall and list share it. Every expansion is one extra read against the
+ * service, and measured recall responses have never carried more than 30
+ * candidates.
  */
-export const MAX_TOOL_RECALL_EXPAND = 30;
+export const MAX_TOOL_EXPAND = 30;
 
 /**
  * Names and descriptions shared by the Pi, OMP, and MCP tool surfaces.
@@ -109,7 +110,7 @@ export const memoryToolMeta = {
   memory_list: {
     label: "List Memories",
     description:
-      "List a page of memory metadata: ids, summaries, types, sessions, timestamps. Memory content is not included; read it with memory_get. Session ids appear here and nowhere else, so this is also how to find what memory_delete_session can remove.",
+      "List a page of memory metadata: ids, summaries, types, sessions, timestamps. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for one id. Session ids appear here and nowhere else, so this is also how to find what memory_delete_session can remove.",
   },
   memory_get: {
     label: "Get Memory",
@@ -168,6 +169,8 @@ export const memoryFieldDescriptions = {
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
   expand:
     "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
+  listExpand:
+    "How many memories from the top of the page to return with full content, one extra read each. The rest of the page keeps summaries only, and a read that fails shows content: null.",
   memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
   listSessionId: "Return only memories from this session.",
   memoryType: "Filter by the type the service assigned when the memory was written.",
@@ -271,30 +274,55 @@ function paged<T extends { cursor?: string }>(result: T): Record<string, unknown
 }
 
 /**
- * Read the full content behind the best-scoring recall candidates.
+ * Check the expand bounds before any round-trip is paid.
  *
- * Candidates carry a summary the service truncates, so a conclusion drawn from
- * them alone misreads any memory longer than the cap. A read that fails maps to
- * null: one missing record must not take down the answer recall already
- * produced.
+ * Schemas enforce them for tool callers, but the executors are exported, and
+ * handed in directly a negative count would silently slice from the wrong end
+ * while an oversized one would authorize more reads than the published cap.
  */
-async function expandCandidates(
+function assertExpand(expand: number | undefined): void {
+  if (expand === undefined) return;
+  if (!Number.isInteger(expand) || expand < 1 || expand > MAX_TOOL_EXPAND) {
+    throw new Error(`Expand must be an integer between 1 and ${MAX_TOOL_EXPAND}`);
+  }
+}
+
+/**
+ * Read the full content behind a set of memories.
+ *
+ * Summaries are capped by the service, so a conclusion drawn from them alone
+ * misreads any memory longer than the cap. A read that fails maps to null: one
+ * missing record must not take down the result it was meant to enrich.
+ */
+async function readContents(
   profile: MemoryProfile,
-  candidates: readonly RecallCandidate[],
-  expand: number | undefined,
+  ids: readonly string[],
 ): Promise<Map<string, string | null>> {
-  if (expand === undefined || candidates.length === 0) return new Map();
+  if (ids.length === 0) return new Map();
   const get = requireCapability(profile, "get");
-  const top = candidates.toSorted((a, b) => b.score - a.score).slice(0, expand);
   const contents = await Promise.all(
-    top.map((candidate) =>
-      get(candidate.id).then(
+    ids.map((id) =>
+      get(id).then(
         (memory) => memory.content,
         () => null,
       ),
     ),
   );
-  return new Map(top.map((candidate, index) => [candidate.id, contents[index] ?? null]));
+  return new Map(ids.map((id, index) => [id, contents[index] ?? null]));
+}
+
+/** Read the full content behind the best-scoring recall candidates. */
+function expandCandidates(
+  profile: MemoryProfile,
+  candidates: readonly RecallCandidate[],
+  expand: number | undefined,
+): Promise<Map<string, string | null>> {
+  if (expand === undefined) return Promise.resolve(new Map());
+  const top = candidates.toSorted((a, b) => b.score - a.score).slice(0, expand);
+  return readContents(
+    profile,
+    top.map((candidate) => candidate.id),
+  );
 }
 
 /**
@@ -409,23 +437,9 @@ export const memoryToolExecutors = {
     };
   },
 
-  /**
-   * Answer a recall query, expanding the best-scoring candidates on request.
-   *
-   * The expand bounds are checked before the recall round-trip is paid: schemas
-   * enforce them for tool callers, but the executors are exported, and handed in
-   * directly a negative count would silently slice candidates from the wrong end
-   * while an oversized one would authorize more reads than the published cap.
-   */
+  /** Answer a recall query, expanding the best-scoring candidates on request. */
   async recall(params: RecallParams): Promise<MemoryToolResult> {
-    if (
-      params.expand !== undefined &&
-      (!Number.isInteger(params.expand) ||
-        params.expand < 1 ||
-        params.expand > MAX_TOOL_RECALL_EXPAND)
-    ) {
-      throw new Error(`Expand must be an integer between 1 and ${MAX_TOOL_RECALL_EXPAND}`);
-    }
+    assertExpand(params.expand);
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
@@ -439,7 +453,9 @@ export const memoryToolExecutors = {
     };
   },
 
+  /** List a page of memories, expanding the first entries on request. */
   async list(params: ListParams): Promise<MemoryToolResult> {
+    assertExpand(params.expand);
     const profile = await getProfile(params);
     const result = await requireCapability(
       profile,
@@ -450,7 +466,14 @@ export const memoryToolExecutors = {
       sessionId: optionalString(params.sessionId),
       type: params.type,
     });
-    const page = paged(result);
+    const expanded = await readContents(
+      profile,
+      result.memories.slice(0, params.expand ?? 0).map((memory) => memory.id),
+    );
+    const memories = result.memories.map((memory) =>
+      expanded.has(memory.id) ? { ...memory, content: expanded.get(memory.id) ?? null } : memory,
+    );
+    const page = paged({ ...result, memories });
     return {
       content: [{ type: "text", text: json(page) }],
       details: page,
