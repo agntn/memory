@@ -8,7 +8,7 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
-  MAX_TOOL_RECALL_EXPAND,
+  MAX_TOOL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
@@ -149,7 +149,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       expand: Type.Optional(
         Type.Integer({
           minimum: 1,
-          maximum: MAX_TOOL_RECALL_EXPAND,
+          maximum: MAX_TOOL_EXPAND,
           description: memoryFieldDescriptions.expand,
         }),
       ),
@@ -180,6 +180,13 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
           ],
           { description: memoryFieldDescriptions.memoryType },
         ),
+      ),
+      expand: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TOOL_EXPAND,
+          description: memoryFieldDescriptions.listExpand,
+        }),
       ),
     }),
     memoryParameters: Type.Object({

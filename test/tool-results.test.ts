@@ -194,6 +194,74 @@ describe("recall result", () => {
   });
 });
 
+describe("list result", () => {
+  it("expands the first entries of the page with full content", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: [
+          memoryEntry("mem-1", null),
+          memoryEntry("mem-2", null),
+          memoryEntry("mem-3", null),
+        ],
+      };
+    });
+
+    const result = await memoryToolExecutors.list({
+      namespace: "list-expand",
+      profile: "agent",
+      expand: 2,
+    });
+
+    const page = JSON.parse(textOf(result)) as {
+      memories: Array<{ id: string; content?: string }>;
+    };
+    expect(page.memories.map((memory) => [memory.id, memory.content])).toEqual([
+      ["mem-1", "full content of mem-1"],
+      ["mem-2", "full content of mem-2"],
+      ["mem-3", undefined],
+    ]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
+  });
+
+  it("keeps the page when an expanded read fails", async () => {
+    stubCloudflare((url) => {
+      if (url.includes("/memories/")) throw new Error("record unavailable");
+      return { result: [memoryEntry("mem-gone", null)] };
+    });
+
+    const result = await memoryToolExecutors.list({
+      namespace: "list-expand-fail",
+      profile: "agent",
+      expand: 5,
+    });
+
+    const page = JSON.parse(textOf(result)) as {
+      memories: Array<{ id: string; content?: string | null }>;
+    };
+    expect(page.memories).toHaveLength(1);
+    expect(page.memories[0]).toMatchObject({ id: "mem-gone", content: null });
+  });
+
+  it("rejects an out-of-range expand before calling the service", async () => {
+    const urls = stubCloudflare({ result: [] });
+
+    for (const expand of [0, 31]) {
+      await expect(
+        memoryToolExecutors.list({
+          namespace: "list-expand-guard",
+          profile: "agent",
+          expand,
+        }),
+      ).rejects.toThrow("Expand must be an integer between 1 and 30");
+    }
+    expect(urls).toHaveLength(0);
+  });
+});
+
 describe("paged results", () => {
   it("marks the last page instead of omitting the cursor", async () => {
     stubCloudflare({ result: [] });

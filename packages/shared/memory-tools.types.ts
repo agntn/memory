@@ -63,6 +63,7 @@ export interface ListParams extends ProfileParams {
   cursor?: string;
   sessionId?: string;
   type?: MemoryType;
+  expand?: number;
 }
 
 export interface MemoryParams extends ProfileParams {
