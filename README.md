@@ -143,7 +143,7 @@ const server = createMcpServer();
 await server.connect(transport);
 ```
 
-An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the answer and then one JSON object per candidate memory, ids and scores included, because an answer you cannot trace back to a memory is a dead end. List results say `cursor` and `hasMore` instead of dropping the key on the last page. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing.
+An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the answer and then one JSON object per candidate memory, ids and scores included, because an answer you cannot trace back to a memory is a dead end. Candidate summaries are capped by the service, so recall takes an `expand` count that pulls the full content of the best-scoring candidates into the same response. List results say `cursor` and `hasMore` instead of dropping the key on the last page. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing.
 
 When Claude Code launches the MCP server, its injected `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` are hashed into a deterministic write `sessionId`. The readable key names the harness and project but does not expose the full path or conversation id. Other MCP hosts may still pass `sessionId` explicitly when running without a bound operational scope.
 

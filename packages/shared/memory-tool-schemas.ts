@@ -7,9 +7,11 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
+  MAX_TOOL_RECALL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
+  memoryFieldDescriptions,
 } from "./memory-tools.ts";
 
 /**
@@ -20,8 +22,7 @@ import {
  * its host TypeBox build rather than this one.
  */
 const namespaceName = Type.String({
-  description:
-    "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
+  description: memoryFieldDescriptions.namespace,
   minLength: 1,
   maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
   pattern: MEMORY_NAME_PATTERN,
@@ -29,17 +30,12 @@ const namespaceName = Type.String({
 const profileParameters = {
   namespace: namespaceName,
   profile: Type.String({
-    description:
-      "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; there is no profile listing.",
+    description: memoryFieldDescriptions.profile,
     minLength: 1,
     maxLength: MAX_TOOL_PROFILE_CHARACTERS,
     pattern: MEMORY_NAME_PATTERN,
   }),
 };
-const sessionIdDescription =
-  "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.";
-const cursorDescription =
-  "Cursor copied from the previous response. A response without a cursor was the last page.";
 
 export const namespaceParameters = Type.Object({ namespace: namespaceName });
 export const namespaceListParameters = Type.Object({
@@ -47,26 +43,32 @@ export const namespaceListParameters = Type.Object({
     Type.Integer({
       minimum: 1,
       maximum: MAX_TOOL_LIST_LIMIT,
-      description: `Namespaces per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+      description: memoryFieldDescriptions.namespacesPerPage,
     }),
   ),
-  cursor: Type.Optional(Type.String({ description: cursorDescription })),
+  cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
   order: Type.Optional(
-    Type.Union([Type.Literal("id"), Type.Literal("name")], { description: "Sort field." }),
+    Type.Union([Type.Literal("id"), Type.Literal("name")], {
+      description: memoryFieldDescriptions.sortField,
+    }),
   ),
   direction: Type.Optional(
-    Type.Union([Type.Literal("asc"), Type.Literal("desc")], { description: "Sort direction." }),
+    Type.Union([Type.Literal("asc"), Type.Literal("desc")], {
+      description: memoryFieldDescriptions.sortDirection,
+    }),
   ),
 });
 export const rememberParameters = Type.Object({
   ...profileParameters,
   content: Type.String({
-    description:
-      "Memory content to store. The service writes it verbatim, assigns the memory type itself, and publishes no size limit for this field.",
+    description: memoryFieldDescriptions.rememberContent,
     minLength: 1,
   }),
   sessionId: Type.Optional(
-    Type.String({ description: sessionIdDescription, maxLength: MAX_TOOL_SESSION_ID_CHARACTERS }),
+    Type.String({
+      description: memoryFieldDescriptions.writeSessionId,
+      maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
+    }),
   ),
 });
 export const ingestParameters = Type.Object({
@@ -74,17 +76,16 @@ export const ingestParameters = Type.Object({
   messages: Type.Array(
     Type.Object({
       role: Type.Union([Type.Literal("system"), Type.Literal("user"), Type.Literal("assistant")], {
-        description: "Who produced the message.",
+        description: memoryFieldDescriptions.messageRole,
       }),
       content: Type.String({
-        description: "Message text.",
+        description: memoryFieldDescriptions.messageContent,
         minLength: 1,
         maxLength: MAX_TOOL_MESSAGE_CHARACTERS,
       }),
       timestamp: Type.Optional(
         Type.String({
-          description:
-            "When the message was sent, as an ISO-8601 instant with an explicit offset, for example 2026-08-17T10:00:00Z.",
+          description: memoryFieldDescriptions.messageTimestamp,
           pattern: ISO_INSTANT_PATTERN,
         }),
       ),
@@ -92,34 +93,39 @@ export const ingestParameters = Type.Object({
     {
       minItems: 1,
       maxItems: MAX_TOOL_INGEST_MESSAGES,
-      description: "Conversation messages in the order they were exchanged.",
+      description: memoryFieldDescriptions.messages,
     },
   ),
   sessionId: Type.Optional(
-    Type.String({ description: sessionIdDescription, maxLength: MAX_TOOL_SESSION_ID_CHARACTERS }),
+    Type.String({
+      description: memoryFieldDescriptions.writeSessionId,
+      maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
+    }),
   ),
 });
 export const recallParameters = Type.Object({
   ...profileParameters,
   query: Type.String({
-    description: "Natural-language recall query.",
+    description: memoryFieldDescriptions.recallQuery,
     minLength: 1,
     maxLength: MAX_TOOL_QUERY_CHARACTERS,
   }),
   thinkingLevel: Type.Optional(
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], {
-      description:
-        "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
+      description: memoryFieldDescriptions.thinkingLevel,
     }),
   ),
   responseLength: Type.Optional(
     Type.Union([Type.Literal("short"), Type.Literal("medium"), Type.Literal("long")], {
-      description: "Requested length of the prose answer. Defaults to medium.",
+      description: memoryFieldDescriptions.responseLength,
     }),
   ),
-  referenceDate: Type.Optional(
-    Type.String({
-      description: "ISO-8601 date the service treats as now when the query is time-relative.",
+  referenceDate: Type.Optional(Type.String({ description: memoryFieldDescriptions.referenceDate })),
+  expand: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: MAX_TOOL_RECALL_EXPAND,
+      description: memoryFieldDescriptions.expand,
     }),
   ),
 });
@@ -129,13 +135,13 @@ export const listParameters = Type.Object({
     Type.Integer({
       minimum: 1,
       maximum: MAX_TOOL_LIST_LIMIT,
-      description: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+      description: memoryFieldDescriptions.memoriesPerPage,
     }),
   ),
-  cursor: Type.Optional(Type.String({ description: cursorDescription })),
+  cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
   sessionId: Type.Optional(
     Type.String({
-      description: "Return only memories from this session.",
+      description: memoryFieldDescriptions.listSessionId,
       maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
     }),
   ),
@@ -147,14 +153,14 @@ export const listParameters = Type.Object({
         Type.Literal("instruction"),
         Type.Literal("task"),
       ],
-      { description: "Filter by the type the service assigned when the memory was written." },
+      { description: memoryFieldDescriptions.memoryType },
     ),
   ),
 });
 export const memoryParameters = Type.Object({
   ...profileParameters,
   memoryId: Type.String({
-    description: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
+    description: memoryFieldDescriptions.memoryId,
     minLength: 1,
     pattern: MEMORY_ID_PATTERN,
   }),
@@ -162,7 +168,7 @@ export const memoryParameters = Type.Object({
 export const sessionParameters = Type.Object({
   ...profileParameters,
   sessionId: Type.String({
-    description: "Exact session identifier. Every memory carrying it is removed.",
+    description: memoryFieldDescriptions.sessionToDelete,
     minLength: 1,
     maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
     pattern: MEMORY_ID_PATTERN,
@@ -172,7 +178,7 @@ export const summaryParameters = Type.Object({
   ...profileParameters,
   sessionId: Type.Optional(
     Type.String({
-      description: "Summarize only this session instead of the whole profile.",
+      description: memoryFieldDescriptions.summarySessionId,
       maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
     }),
   ),

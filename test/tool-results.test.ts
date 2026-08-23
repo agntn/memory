@@ -96,6 +96,91 @@ describe("recall result", () => {
     ]);
   });
 
+  it("expands the best-scoring candidates with full content", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 3,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [
+            { id: "mem-low", summary: "truncated", sessionId: null, score: 0.13 },
+            { id: "mem-top", summary: "truncated", sessionId: null, score: 0.82 },
+            { id: "mem-mid", summary: "truncated", sessionId: null, score: 0.41 },
+          ],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-expand",
+      profile: "agent",
+      query: "build tooling",
+      expand: 2,
+    });
+
+    const text = textOf(result);
+    expect(text).toContain(
+      "Candidates (3), one JSON object per line, full content on the 2 best-scoring:",
+    );
+    const candidates = text
+      .split("\n")
+      .slice(-3)
+      .map((line) => JSON.parse(line) as { id: string; content?: string });
+    expect(candidates.map((candidate) => [candidate.id, candidate.content])).toEqual([
+      ["mem-low", undefined],
+      ["mem-top", "full content of mem-top"],
+      ["mem-mid", "full content of mem-mid"],
+    ]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
+  });
+
+  it("rejects an out-of-range expand before calling the service", async () => {
+    const urls = stubCloudflare({ result: { count: 0, answer: "", candidates: [] } });
+
+    for (const expand of [0, 31]) {
+      await expect(
+        memoryToolExecutors.recall({
+          namespace: "recall-expand-guard",
+          profile: "agent",
+          query: "build tooling",
+          expand,
+        }),
+      ).rejects.toThrow("Expand must be an integer between 1 and 30");
+    }
+    expect(urls).toHaveLength(0);
+  });
+
+  it("keeps the recall answer when an expanded read fails", async () => {
+    stubCloudflare((url) => {
+      if (url.includes("/memories/")) throw new Error("record unavailable");
+      return {
+        result: {
+          count: 1,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [{ id: "mem-gone", summary: "truncated", sessionId: null, score: 0.9 }],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-expand-fail",
+      profile: "agent",
+      query: "build tooling",
+      expand: 5,
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("full content on the 1 best-scoring (null where the read failed):");
+    expect(JSON.parse(text.split("\n").at(-1) ?? "{}")).toMatchObject({
+      id: "mem-gone",
+      content: null,
+    });
+  });
+
   it("returns the answer alone when nothing matched", async () => {
     stubCloudflare({ result: { count: 0, answer: "Nothing stored about that.", candidates: [] } });
 

@@ -8,9 +8,11 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
+  MAX_TOOL_RECALL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
+  memoryFieldDescriptions,
   memoryTarget,
   memoryToolExecutors,
   memoryToolMeta,
@@ -42,8 +44,7 @@ import type {
  */
 function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean) {
   const namespaceName = Type.String({
-    description:
-      "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
+    description: memoryFieldDescriptions.namespace,
     minLength: 1,
     maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
     pattern: MEMORY_NAME_PATTERN,
@@ -51,17 +52,12 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
   const profileParameters = {
     namespace: namespaceName,
     profile: Type.String({
-      description:
-        "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; there is no profile listing.",
+      description: memoryFieldDescriptions.profile,
       minLength: 1,
       maxLength: MAX_TOOL_PROFILE_CHARACTERS,
       pattern: MEMORY_NAME_PATTERN,
     }),
   };
-  const sessionIdDescription =
-    "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.";
-  const cursorDescription =
-    "Cursor copied from the previous response. A response without a cursor was the last page.";
   const parameters = {
     namespaceParameters: Type.Object({ namespace: namespaceName }),
     namespaceListParameters: Type.Object({
@@ -69,29 +65,30 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
         Type.Integer({
           minimum: 1,
           maximum: MAX_TOOL_LIST_LIMIT,
-          description: `Namespaces per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+          description: memoryFieldDescriptions.namespacesPerPage,
         }),
       ),
-      cursor: Type.Optional(Type.String({ description: cursorDescription })),
+      cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
       order: Type.Optional(
-        Type.Union([Type.Literal("id"), Type.Literal("name")], { description: "Sort field." }),
+        Type.Union([Type.Literal("id"), Type.Literal("name")], {
+          description: memoryFieldDescriptions.sortField,
+        }),
       ),
       direction: Type.Optional(
         Type.Union([Type.Literal("asc"), Type.Literal("desc")], {
-          description: "Sort direction.",
+          description: memoryFieldDescriptions.sortDirection,
         }),
       ),
     }),
     rememberParameters: Type.Object({
       ...profileParameters,
       content: Type.String({
-        description:
-          "Memory content to store. The service writes it verbatim, assigns the memory type itself, and publishes no size limit for this field.",
+        description: memoryFieldDescriptions.rememberContent,
         minLength: 1,
       }),
       sessionId: Type.Optional(
         Type.String({
-          description: sessionIdDescription,
+          description: memoryFieldDescriptions.writeSessionId,
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
@@ -102,17 +99,16 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
         Type.Object({
           role: Type.Union(
             [Type.Literal("system"), Type.Literal("user"), Type.Literal("assistant")],
-            { description: "Who produced the message." },
+            { description: memoryFieldDescriptions.messageRole },
           ),
           content: Type.String({
-            description: "Message text.",
+            description: memoryFieldDescriptions.messageContent,
             minLength: 1,
             maxLength: MAX_TOOL_MESSAGE_CHARACTERS,
           }),
           timestamp: Type.Optional(
             Type.String({
-              description:
-                "When the message was sent, as an ISO-8601 instant with an explicit offset, for example 2026-08-17T10:00:00Z.",
+              description: memoryFieldDescriptions.messageTimestamp,
               pattern: ISO_INSTANT_PATTERN,
             }),
           ),
@@ -120,12 +116,12 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
         {
           minItems: 1,
           maxItems: MAX_TOOL_INGEST_MESSAGES,
-          description: "Conversation messages in the order they were exchanged.",
+          description: memoryFieldDescriptions.messages,
         },
       ),
       sessionId: Type.Optional(
         Type.String({
-          description: sessionIdDescription,
+          description: memoryFieldDescriptions.writeSessionId,
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
@@ -133,24 +129,28 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
     recallParameters: Type.Object({
       ...profileParameters,
       query: Type.String({
-        description: "Natural-language recall query.",
+        description: memoryFieldDescriptions.recallQuery,
         minLength: 1,
         maxLength: MAX_TOOL_QUERY_CHARACTERS,
       }),
       thinkingLevel: Type.Optional(
         Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], {
-          description:
-            "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
+          description: memoryFieldDescriptions.thinkingLevel,
         }),
       ),
       responseLength: Type.Optional(
         Type.Union([Type.Literal("short"), Type.Literal("medium"), Type.Literal("long")], {
-          description: "Requested length of the prose answer. Defaults to medium.",
+          description: memoryFieldDescriptions.responseLength,
         }),
       ),
       referenceDate: Type.Optional(
-        Type.String({
-          description: "ISO-8601 date the service treats as now when the query is time-relative.",
+        Type.String({ description: memoryFieldDescriptions.referenceDate }),
+      ),
+      expand: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TOOL_RECALL_EXPAND,
+          description: memoryFieldDescriptions.expand,
         }),
       ),
     }),
@@ -160,13 +160,13 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
         Type.Integer({
           minimum: 1,
           maximum: MAX_TOOL_LIST_LIMIT,
-          description: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+          description: memoryFieldDescriptions.memoriesPerPage,
         }),
       ),
-      cursor: Type.Optional(Type.String({ description: cursorDescription })),
+      cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
       sessionId: Type.Optional(
         Type.String({
-          description: "Return only memories from this session.",
+          description: memoryFieldDescriptions.listSessionId,
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
@@ -178,14 +178,14 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
             Type.Literal("instruction"),
             Type.Literal("task"),
           ],
-          { description: "Filter by the type the service assigned when the memory was written." },
+          { description: memoryFieldDescriptions.memoryType },
         ),
       ),
     }),
     memoryParameters: Type.Object({
       ...profileParameters,
       memoryId: Type.String({
-        description: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
+        description: memoryFieldDescriptions.memoryId,
         minLength: 1,
         pattern: MEMORY_ID_PATTERN,
       }),
@@ -193,7 +193,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
     sessionParameters: Type.Object({
       ...profileParameters,
       sessionId: Type.String({
-        description: "Exact session identifier. Every memory carrying it is removed.",
+        description: memoryFieldDescriptions.sessionToDelete,
         minLength: 1,
         maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         pattern: MEMORY_ID_PATTERN,
@@ -203,7 +203,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       ...profileParameters,
       sessionId: Type.Optional(
         Type.String({
-          description: "Summarize only this session instead of the whole profile.",
+          description: memoryFieldDescriptions.summarySessionId,
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
@@ -252,9 +252,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
   const pi = omp;
 
   function operationalParams<T extends object>(params: T): T & ProfileParams {
-    return operationalScope
-      ? applyMemoryScope(params, operationalScope)
-      : (params as T & ProfileParams);
+    return applyMemoryScope(params, operationalScope);
   }
 
   function operationalWriteParams<T extends object>(

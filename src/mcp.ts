@@ -69,9 +69,7 @@ function createTools(): MemoryToolDefinition[] {
   const operationalSchemas = createOperationalMemoryToolSchemas(Boolean(operationalScope));
 
   function operationalParams<T extends object>(args: T): T & ProfileParams {
-    return operationalScope
-      ? applyMemoryScope(args, operationalScope)
-      : (args as T & ProfileParams);
+    return applyMemoryScope(args, operationalScope);
   }
 
   function operationalWriteParams<T extends object>(

@@ -55,6 +55,7 @@ export interface RecallParams extends ProfileParams {
   thinkingLevel?: ThinkingLevel;
   responseLength?: ResponseLength;
   referenceDate?: string;
+  expand?: number;
 }
 
 export interface ListParams extends ProfileParams {
