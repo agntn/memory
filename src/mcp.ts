@@ -21,6 +21,7 @@ import {
 } from "../packages/shared/memory-scope.ts";
 import { memoryToolExecutors, memoryToolMeta } from "../packages/shared/memory-tools.ts";
 import type {
+  GetParams,
   IngestParams,
   ListParams,
   MemoryParams,
@@ -130,17 +131,16 @@ function createTools(): MemoryToolDefinition[] {
     },
     {
       name: "memory_get",
-      inputSchema: operationalSchemas.memoryParameters,
+      inputSchema: operationalSchemas.getParameters,
       annotations: readAnnotations,
-      execute: (args) =>
-        memoryToolExecutors.memory(operationalParams(args as object) as MemoryParams, "get"),
+      execute: (args) => memoryToolExecutors.get(operationalParams(args as object) as GetParams),
     },
     {
       name: "memory_delete",
       inputSchema: operationalSchemas.memoryParameters,
       annotations: destructiveAnnotations,
       execute: (args) =>
-        memoryToolExecutors.memory(operationalParams(args as object) as MemoryParams, "delete"),
+        memoryToolExecutors.deleteMemory(operationalParams(args as object) as MemoryParams),
     },
     {
       name: "memory_summary",

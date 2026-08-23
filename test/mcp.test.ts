@@ -202,6 +202,20 @@ describe("memory MCP server", () => {
     ]);
   });
 
+  it("rejects a get identifier that would escape its path segment", async () => {
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_get",
+      arguments: { namespace: "path-escape", profile: "agent", memoryIds: [".."] },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      { type: "text", text: expect.stringContaining("Invalid arguments at /memoryIds/0") },
+    ]);
+  });
+
   it("rejects an ingest timestamp without a time zone", async () => {
     const client = await connectTestClient();
 
