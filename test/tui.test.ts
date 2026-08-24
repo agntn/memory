@@ -232,7 +232,8 @@ describe("result rendering", () => {
   });
 
   it("cuts a long line down in the preview and shows it whole once expanded", () => {
-    const memory = `{"content":"${"z".repeat(900)}"}`;
+    /** Longer than the sanitizer's own cap, or the expanded half of this proves nothing. */
+    const memory = `{"content":"${"z".repeat(3000)}"}`;
     const collapsed = renderToolResult({ content: [{ text: memory }] }, false, {}, plain);
     const opened = renderToolResult(
       { content: [{ text: memory }] },
