@@ -381,6 +381,13 @@ function parseRecallCandidate(value: unknown): RecallCandidate {
   };
 }
 
+/**
+ * Read a recall response, whose answer the service may leave out.
+ *
+ * Only `count` and `candidates` are promised. The answer is documented as
+ * omitted when synthesis is skipped, and requiring it would throw away the
+ * candidates that came with it.
+ */
 function parseRecallResult(value: unknown): RecallResult {
   if (
     !isUnknownRecord(value) ||
@@ -392,7 +399,7 @@ function parseRecallResult(value: unknown): RecallResult {
   }
   return {
     count: value.count,
-    answer: parseString(value.answer, "recall answer"),
+    ...(value.answer === undefined ? {} : { answer: parseString(value.answer, "recall answer") }),
     candidates: value.candidates.map(parseRecallCandidate),
   };
 }
@@ -407,8 +414,18 @@ function parseSummary(value: unknown): SummaryResult {
   return { summary: parseString(value.summary, "summary") };
 }
 
-function parseNull(value: unknown): null {
-  if (value !== null) throw responseError("Invalid Cloudflare response: expected null result");
+/**
+ * Read the result of a call that carries no data back.
+ *
+ * Ingest and the deletions answer with a nullable object holding no fields, so
+ * `null` and an empty object say the same thing. Accepting only `null` would
+ * report a deletion that already happened as a failed one, and the caller has
+ * nothing left to undo.
+ */
+function parseEmpty(value: unknown): null {
+  if (value !== null && !isUnknownRecord(value)) {
+    throw responseError("Invalid Cloudflare response: expected an empty result");
+  }
   return null;
 }
 
@@ -601,7 +618,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   ): Promise<void> {
     const collected = collectMessages(messages);
     assertSessionId(options.sessionId);
-    await this.client.request("/ingest", parseNull, {
+    await this.client.request("/ingest", parseEmpty, {
       method: "POST",
       body: JSON.stringify({ messages: collected, ...withoutSignal(options) }),
       signal: options.signal,
@@ -669,7 +686,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
 
   override async deleteSession(sessionId: string, options: AbortOptions = {}): Promise<void> {
     assertString(sessionId, "Session ID", MAX_SESSION_ID_CHARACTERS);
-    await this.client.request(`/sessions/${encodePath(sessionId)}`, parseNull, {
+    await this.client.request(`/sessions/${encodePath(sessionId)}`, parseEmpty, {
       method: "DELETE",
       signal: options.signal,
     });
@@ -734,7 +751,7 @@ export class CloudflareNamespaceClient {
   /** Permanently deletes an Agent Memory namespace and all of its contents. */
   async delete(name: string, options: AbortOptions = {}): Promise<void> {
     assertNamespaceName(name);
-    await this.client.request(`/${encodePath(name)}`, parseNull, {
+    await this.client.request(`/${encodePath(name)}`, parseEmpty, {
       method: "DELETE",
       signal: options.signal,
     });
@@ -790,7 +807,7 @@ export class CloudflareMemoryProvider extends MemoryProvider {
     }
     await new CloudflareHttpClient(options, profilePath(options.namespace, profileName)).request(
       "",
-      parseNull,
+      parseEmpty,
       {
         method: "DELETE",
         signal: abort.signal,

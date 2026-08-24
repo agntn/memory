@@ -54,7 +54,8 @@ export interface RecallCandidate {
 }
 export interface RecallResult {
   count: number;
-  answer: string;
+  /** Synthesized prose answer. Absent when the service skips synthesis. */
+  answer?: string;
   candidates: RecallCandidate[];
 }
 export interface ListOptions extends AbortOptions {
