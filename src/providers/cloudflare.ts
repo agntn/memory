@@ -106,8 +106,10 @@ const MAX_PROFILE_NAME_CHARACTERS = 100;
 const MAX_NAMESPACE_NAME_CHARACTERS = 32;
 const NAMESPACE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_BINDING_LIST_LIMIT = 500;
-// The limits page documents 1000, but the API schema and the service both cap per_page at 500.
+/** The memories endpoint answers `per_page=501` with 400 "per_page must be at most 500". */
 const MAX_HTTP_LIST_LIMIT = 500;
+/** The namespaces endpoint takes twice that, and answers 1001 with 400. The two caps are separate. */
+const MAX_NAMESPACE_LIST_LIMIT = 1000;
 
 /** Input limits this provider enforces, so tool schemas can publish the same bounds. */
 export const cloudflareMemoryLimits = Object.freeze({
@@ -119,7 +121,10 @@ export const cloudflareMemoryLimits = Object.freeze({
   namespaceNameCharacters: MAX_NAMESPACE_NAME_CHARACTERS,
   /** Namespaces and profiles share one charset rule. */
   namePattern: NAMESPACE_NAME_PATTERN.source,
+  /** Page size for a listing of memories. */
   httpListLimit: MAX_HTTP_LIST_LIMIT,
+  /** Page size for a listing of namespaces, which the service caps higher. */
+  namespaceListLimit: MAX_NAMESPACE_LIST_LIMIT,
 });
 
 const capabilities: Readonly<MemoryCapabilities> = Object.freeze({
@@ -212,7 +217,7 @@ function assertAccountOptions(options: CloudflareAccountOptions): void {
 }
 
 function assertNamespaceListOptions(options: CloudflareNamespaceListOptions): void {
-  assertListLimit(options.limit, MAX_HTTP_LIST_LIMIT);
+  assertListLimit(options.limit, MAX_NAMESPACE_LIST_LIMIT);
   if (options.cursor !== undefined) assertString(options.cursor, "Namespace cursor");
   if (options.order !== undefined && options.order !== "id" && options.order !== "name") {
     throw new MemoryInputError("Namespace order must be id or name", { provider: "cloudflare" });
