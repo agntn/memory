@@ -258,6 +258,7 @@ function resultLine(result: RenderedToolResult, options: RenderOptions, theme: S
 }
 
 export default function memoryExtension(omp: ExtensionAPI) {
+  omp.setLabel("Memory");
   const operationalScope = configuredMemoryScope();
   const {
     namespaceParameters,

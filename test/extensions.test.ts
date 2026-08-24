@@ -250,6 +250,18 @@ describe("memory extensions", () => {
     );
   });
 
+  it("gives the OMP extension a display label", () => {
+    const labels: string[] = [];
+
+    ompMemoryExtension({
+      typebox: OmpTypebox,
+      setLabel: (label: string) => labels.push(label),
+      registerTool() {},
+    } as unknown as OmpExtensionAPI);
+
+    expect(labels).toEqual(["Memory"]);
+  });
+
   it("streams a progress line before a recall answers", async () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
@@ -362,6 +374,7 @@ function ompTools(): RegisteredTool[] {
   const tools: RegisteredTool[] = [];
   ompMemoryExtension({
     typebox: OmpTypebox,
+    setLabel() {},
     registerTool(tool: RegisteredTool) {
       tools.push(tool);
     },

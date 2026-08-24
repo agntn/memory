@@ -148,6 +148,7 @@ function ompToolParameters(): Map<string, unknown> {
   const parameters = new Map<string, unknown>();
   ompMemoryExtension({
     typebox: OmpTypebox,
+    setLabel() {},
     registerTool(tool: { name: string; parameters: unknown }) {
       parameters.set(tool.name, tool.parameters);
     },

@@ -139,7 +139,7 @@ try {
 
   const ompTools = await registerPacked(
     path.join(packageRoot, "packages/omp/extensions/memory.ts"),
-    { typebox: OmpTypeBox },
+    { typebox: OmpTypeBox, setLabel() {} },
   );
   const ctx = { cwd: root, sessionManager: { getSessionId: () => "packed-conversation" } };
   const remembered = await ompTools
