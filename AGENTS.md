@@ -12,6 +12,14 @@
 - Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
 - Pi and MCP share the schemas in `packages/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
 
+## Terminal rendering
+
+- Both wrappers render through `packages/shared/tui.ts`, so a call reads the same in either harness. Only the adapter around it differs.
+- The two harnesses order the renderer arguments differently: Pi passes `(args, theme, context)`, OMP passes `(args, options, theme)`. Verify the order in the installed runtime's declarations, never in the dev dependency.
+- Pi keeps the failure flag out of the result object and reports it in the render context. OMP puts it in the result. A renderer that reads only `result.isError` marks a failed Pi call as done.
+- Both harnesses print the call line and the result line in one container, so the result line carries no tool name.
+- Model arguments and stored memory text cross the terminal trust boundary. Everything a renderer prints goes through the sanitizer first.
+
 ## Tool results
 
 - A result is text and nothing else. MCP clients never see `details`, so anything the caller needs has to be in the text.
