@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
+  AbortOptions,
   CloudflareMemoryOptions,
   Memory,
   MemoryProfile,
@@ -302,12 +303,13 @@ type MemoryReading = { memory: Memory } | { error: unknown };
 async function readMemories(
   profile: MemoryProfile,
   ids: readonly string[],
+  options: AbortOptions = {},
 ): Promise<Map<string, MemoryReading>> {
   const unique = [...new Set(ids)];
   const get = requireCapability(profile, "get");
   const readings = await Promise.all(
     unique.map((id) =>
-      get(id).then(
+      get(id, options).then(
         (memory): [string, MemoryReading] => [id, { memory }],
         (error: unknown): [string, MemoryReading] => [id, { error }],
       ),
@@ -326,9 +328,10 @@ async function readMemories(
 async function readContents(
   profile: MemoryProfile,
   ids: readonly string[],
+  options: AbortOptions = {},
 ): Promise<Map<string, string | null>> {
   if (ids.length === 0) return new Map();
-  const readings = await readMemories(profile, ids);
+  const readings = await readMemories(profile, ids, options);
   return new Map(
     [...readings].map(([id, reading]): [string, string | null] => [
       id,
@@ -342,12 +345,14 @@ function expandCandidates(
   profile: MemoryProfile,
   candidates: readonly RecallCandidate[],
   expand: number | undefined,
+  options: AbortOptions = {},
 ): Promise<Map<string, string | null>> {
   if (expand === undefined) return Promise.resolve(new Map());
   const top = candidates.toSorted((a, b) => b.score - a.score).slice(0, expand);
   return readContents(
     profile,
     top.map((candidate) => candidate.id),
+    options,
   );
 }
 
@@ -392,11 +397,16 @@ type RemovedCount = { count: number; atLeast: boolean } | undefined;
  * successful removal. One page is enough to make that distinction, and a failed
  * read must never stop the delete the caller actually asked for.
  */
-async function countMemories(profile: MemoryProfile, sessionId?: string): Promise<RemovedCount> {
+async function countMemories(
+  profile: MemoryProfile,
+  options: AbortOptions = {},
+  sessionId?: string,
+): Promise<RemovedCount> {
   if (typeof profile.list !== "function") return undefined;
   try {
     const page = await profile.list({
       limit: MAX_TOOL_LIST_LIMIT,
+      ...options,
       ...(sessionId === undefined ? {} : { sessionId }),
     });
     return { count: page.memories.length, atLeast: page.cursor !== undefined };
@@ -449,19 +459,19 @@ function assertMemoryIds(memoryIds: readonly string[]): void {
 }
 
 export const memoryToolExecutors = {
-  async remember(params: RememberParams): Promise<MemoryToolResult> {
+  async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
-    const memory = await requireCapability(
-      profile,
-      "remember",
-    )({ content: params.content, sessionId: optionalString(params.sessionId) });
+    const memory = await requireCapability(profile, "remember")(
+      { content: params.content, sessionId: optionalString(params.sessionId) },
+      options,
+    );
     return {
       content: [{ type: "text", text: json(memory) }],
       details: memory as unknown as Record<string, unknown>,
     };
   },
 
-  async ingest(params: IngestParams): Promise<MemoryToolResult> {
+  async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
     // Copy the modelled fields only: anything else the caller attached would be
     // posted upstream under the account token without appearing in the schema.
@@ -475,6 +485,7 @@ export const memoryToolExecutors = {
     });
     await requireCapability(profile, "ingest")(messages, {
       sessionId: optionalString(params.sessionId),
+      ...options,
     });
     const sessionId = optionalString(params.sessionId);
     const session = sessionId === undefined ? "" : ` in session ${sessionId}`;
@@ -495,15 +506,16 @@ export const memoryToolExecutors = {
   },
 
   /** Answer a recall query, expanding the best-scoring candidates on request. */
-  async recall(params: RecallParams): Promise<MemoryToolResult> {
+  async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     assertExpand(params.expand);
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
       responseLength: params.responseLength,
       referenceDate: optionalString(params.referenceDate),
+      ...options,
     });
-    const expanded = await expandCandidates(profile, result.candidates, params.expand);
+    const expanded = await expandCandidates(profile, result.candidates, params.expand, options);
     return {
       content: [{ type: "text", text: recallText(params, result, expanded) }],
       details: result as unknown as Record<string, unknown>,
@@ -511,7 +523,7 @@ export const memoryToolExecutors = {
   },
 
   /** List a page of memories, expanding the first entries on request. */
-  async list(params: ListParams): Promise<MemoryToolResult> {
+  async list(params: ListParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     assertExpand(params.expand);
     const profile = await getProfile(params);
     const result = await requireCapability(
@@ -522,10 +534,12 @@ export const memoryToolExecutors = {
       cursor: optionalString(params.cursor),
       sessionId: optionalString(params.sessionId),
       type: params.type,
+      ...options,
     });
     const expanded = await readContents(
       profile,
       result.memories.slice(0, params.expand ?? 0).map((memory) => memory.id),
+      options,
     );
     const memories = result.memories.map((memory) =>
       expanded.has(memory.id) ? { ...memory, content: expanded.get(memory.id) ?? null } : memory,
@@ -543,10 +557,10 @@ export const memoryToolExecutors = {
    * When every read fails the call itself fails: a result that is nothing but
    * error entries would hide the failure from clients that only check isError.
    */
-  async get(params: GetParams): Promise<MemoryToolResult> {
+  async get(params: GetParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     assertMemoryIds(params.memoryIds);
     const profile = await getProfile(params);
-    const readings = await readMemories(profile, params.memoryIds);
+    const readings = await readMemories(profile, params.memoryIds, options);
     const entries = [...readings.entries()];
     const failed = entries.filter(
       (entry): entry is [string, { error: unknown }] => "error" in entry[1],
@@ -577,27 +591,27 @@ export const memoryToolExecutors = {
     };
   },
 
-  async deleteMemory(params: MemoryParams): Promise<MemoryToolResult> {
+  async deleteMemory(params: MemoryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
-    const result = await requireCapability(
-      profile,
-      "delete",
-    )(params.memoryId).catch((error: unknown) => {
-      throw explainMissing(params, error);
-    });
+    const result = await requireCapability(profile, "delete")(params.memoryId, options).catch(
+      (error: unknown) => {
+        throw explainMissing(params, error);
+      },
+    );
     return {
       content: [{ type: "text", text: json(result) }],
       details: result as unknown as Record<string, unknown>,
     };
   },
 
-  async summary(params: SummaryParams): Promise<MemoryToolResult> {
+  async summary(params: SummaryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
     const result = await requireCapability(
       profile,
       "getSummary",
     )({
       sessionId: optionalString(params.sessionId),
+      ...options,
     });
     const sessionId = optionalString(params.sessionId);
     const scope =
@@ -610,10 +624,13 @@ export const memoryToolExecutors = {
     };
   },
 
-  async deleteSession(params: SessionParams): Promise<MemoryToolResult> {
+  async deleteSession(
+    params: SessionParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
-    const removed = await countMemories(profile, params.sessionId);
-    await requireCapability(profile, "deleteSession")(params.sessionId);
+    const removed = await countMemories(profile, options, params.sessionId);
+    await requireCapability(profile, "deleteSession")(params.sessionId, options);
     const text =
       removed?.count === 0 && !removed.atLeast
         ? `No memory in ${memoryTarget(params)} carried session ${params.sessionId}; nothing was removed. Check the session id against memory_list.`
@@ -630,13 +647,16 @@ export const memoryToolExecutors = {
     };
   },
 
-  async deleteProfile(params: ProfileParams): Promise<MemoryToolResult> {
+  async deleteProfile(
+    params: ProfileParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
     const provider = await getProvider(params.namespace);
     if (!provider.deleteProfile) {
       throw new Error("Memory provider does not support deleteProfile");
     }
-    const removed = await countMemories(await getProfile(params));
-    await provider.deleteProfile(params.profile);
+    const removed = await countMemories(await getProfile(params), options);
+    await provider.deleteProfile(params.profile, options);
     const text =
       removed?.count === 0 && !removed.atLeast
         ? `Deleted profile ${memoryTarget(params)}, which held no memories. A profile name that was never written to reports the same result.`
@@ -652,7 +672,10 @@ export const memoryToolExecutors = {
     };
   },
 
-  async listNamespaces(params: NamespaceListParams): Promise<MemoryToolResult> {
+  async listNamespaces(
+    params: NamespaceListParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
     const result = await (
       await getNamespaceClient()
     ).list({
@@ -660,6 +683,7 @@ export const memoryToolExecutors = {
       cursor: optionalString(params.cursor),
       order: params.order,
       direction: params.direction,
+      ...options,
     });
     const page = paged(result);
     return {
@@ -668,16 +692,22 @@ export const memoryToolExecutors = {
     };
   },
 
-  async createNamespace(params: NamespaceParams): Promise<MemoryToolResult> {
-    const namespace = await (await getNamespaceClient()).create(params.namespace);
+  async createNamespace(
+    params: NamespaceParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    const namespace = await (await getNamespaceClient()).create(params.namespace, options);
     return {
       content: [{ type: "text", text: json(namespace) }],
       details: namespace as unknown as Record<string, unknown>,
     };
   },
 
-  async deleteNamespace(params: NamespaceParams): Promise<MemoryToolResult> {
-    await (await getNamespaceClient()).delete(params.namespace);
+  async deleteNamespace(
+    params: NamespaceParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    await (await getNamespaceClient()).delete(params.namespace, options);
     return {
       content: [
         {

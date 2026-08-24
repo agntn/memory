@@ -1,4 +1,10 @@
-import type { MemoryProvider, MemoryType, ResponseLength, ThinkingLevel } from "@agntn/memory";
+import type {
+  AbortOptions,
+  MemoryProvider,
+  MemoryType,
+  ResponseLength,
+  ThinkingLevel,
+} from "@agntn/memory";
 
 export interface NamespaceResult {
   id: string;
@@ -11,12 +17,12 @@ export interface MemoryModule {
   registerAll(): void;
   create<TOptions>(name: string, options: TOptions): MemoryProvider;
   CloudflareNamespaceClient: new (options: { accountId: string; apiToken: string }) => {
-    list(options?: NamespaceListParams): Promise<{
+    list(options?: NamespaceListParams & AbortOptions): Promise<{
       namespaces: NamespaceResult[];
       cursor?: string;
     }>;
-    create(name: string): Promise<NamespaceResult>;
-    delete(name: string): Promise<void>;
+    create(name: string, options?: AbortOptions): Promise<NamespaceResult>;
+    delete(name: string, options?: AbortOptions): Promise<void>;
   };
 }
 

@@ -303,8 +303,12 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: namespaceListParameters,
     renderCall: callRenderer(memoryToolMeta.memory_namespace_list.label, false),
     renderResult: resultLine,
-    execute(_id, params: NamespaceListParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.listNamespaces(params);
+    execute(
+      _id,
+      params: NamespaceListParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.listNamespaces(params, { signal });
     },
   });
 
@@ -315,8 +319,12 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: namespaceParameters,
     renderCall: callRenderer(memoryToolMeta.memory_namespace_create.label, false),
     renderResult: resultLine,
-    execute(_id, params: NamespaceParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.createNamespace(params);
+    execute(
+      _id,
+      params: NamespaceParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.createNamespace(params, { signal });
     },
   });
 
@@ -327,8 +335,12 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: namespaceParameters,
     renderCall: callRenderer(memoryToolMeta.memory_namespace_delete.label, false),
     renderResult: resultLine,
-    execute(_id, params: NamespaceParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.deleteNamespace(params);
+    execute(
+      _id,
+      params: NamespaceParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteNamespace(params, { signal });
     },
   });
 
@@ -342,11 +354,13 @@ export default function memoryExtension(omp: ExtensionAPI) {
     execute(
       _id,
       params,
-      _signal,
+      signal,
       _onUpdate,
       ctx,
     ): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams);
+      return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams, {
+        signal,
+      });
     },
   });
 
@@ -360,11 +374,13 @@ export default function memoryExtension(omp: ExtensionAPI) {
     execute(
       _id,
       params,
-      _signal,
+      signal,
       _onUpdate,
       ctx,
     ): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.ingest(operationalWriteParams(params, ctx) as IngestParams);
+      return memoryToolExecutors.ingest(operationalWriteParams(params, ctx) as IngestParams, {
+        signal,
+      });
     },
   });
 
@@ -375,8 +391,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: recallParameters,
     renderCall: callRenderer(memoryToolMeta.memory_recall.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.recall(operationalParams(params) as RecallParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.recall(operationalParams(params) as RecallParams, { signal });
     },
   });
 
@@ -387,8 +403,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: listParameters,
     renderCall: callRenderer(memoryToolMeta.memory_list.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.list(operationalParams(params) as ListParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.list(operationalParams(params) as ListParams, { signal });
     },
   });
 
@@ -399,8 +415,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: getParameters,
     renderCall: callRenderer(memoryToolMeta.memory_get.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.get(operationalParams(params) as GetParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.get(operationalParams(params) as GetParams, { signal });
     },
   });
 
@@ -411,8 +427,10 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: memoryParameters,
     renderCall: callRenderer(memoryToolMeta.memory_delete.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams, {
+        signal,
+      });
     },
   });
 
@@ -423,8 +441,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: summaryParameters,
     renderCall: callRenderer(memoryToolMeta.memory_summary.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.summary(operationalParams(params) as SummaryParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.summary(operationalParams(params) as SummaryParams, { signal });
     },
   });
 
@@ -435,8 +453,10 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: sessionParameters,
     renderCall: callRenderer(memoryToolMeta.memory_delete_session.label),
     renderResult: resultLine,
-    execute(_id, params): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams);
+    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams, {
+        signal,
+      });
     },
   });
 
@@ -447,8 +467,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: profileOnlyParameters,
     renderCall: callRenderer(memoryToolMeta.memory_delete_profile.label, false),
     renderResult: resultLine,
-    execute(_id, params: ProfileParams): Promise<AgentToolResult<Record<string, unknown>>> {
-      return memoryToolExecutors.deleteProfile(params);
+    execute(_id, params: ProfileParams, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.deleteProfile(params, { signal });
     },
   });
 }

@@ -7,6 +7,7 @@
 - `MemoryProvider` owns namespaces and the profile lifecycle.
 - `MemoryProfile` owns memory operations inside one isolated profile.
 - A provider exposes only what its API actually supports. No optimistic capabilities.
+- Every operation takes an `AbortSignal`. A transport that cannot interrupt itself checks the signal at the call boundary, and a signal never reaches a request body.
 - Local harness sources and remote API providers stay separate concerns.
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
 - Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.

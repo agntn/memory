@@ -7,6 +7,7 @@ import {
 } from "../errors.ts";
 import { isUnknownRecord } from "../type-guards.ts";
 import type {
+  AbortOptions,
   Memory,
   MemoryCapabilities,
   RecallCandidate,
@@ -192,8 +193,9 @@ export class MnemopiMemoryProfile extends MemoryProfile {
    *
    * A supplied session ID must match the fixed session of the client.
    */
-  override async remember(input: RememberInput): Promise<Memory> {
+  override async remember(input: RememberInput, options: AbortOptions = {}): Promise<Memory> {
     try {
+      options.signal?.throwIfAborted();
       if (input.sessionId != null && input.sessionId !== this.client.sessionId) {
         throw new MemoryInputError(
           `Mnemopi profile uses session ${this.client.sessionId}, not ${input.sessionId}`,
@@ -229,11 +231,13 @@ export class MnemopiMemoryProfile extends MemoryProfile {
           provider: PROVIDER_NAME,
         });
       }
+      options.signal?.throwIfAborted();
       const results = await this.client.recall(
         query,
         5,
         referenceDate === undefined ? undefined : { query_time: referenceDate.toISOString() },
       );
+      options.signal?.throwIfAborted();
       const candidates = results.map(parseCandidate);
       return {
         count: candidates.length,
@@ -246,8 +250,9 @@ export class MnemopiMemoryProfile extends MemoryProfile {
   }
 
   /** Resolves a working, episodic, or fact record by ID within this bank's visibility. */
-  override async get(memoryId: string): Promise<Memory> {
+  override async get(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     try {
+      options.signal?.throwIfAborted();
       const memory = this.client.get(memoryId);
       if (memory === null) {
         throw new MemoryNotFoundError(`Mnemopi memory not found: ${memoryId}`, 404, {

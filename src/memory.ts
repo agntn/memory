@@ -1,4 +1,5 @@
 import type {
+  AbortOptions,
   IngestOptions,
   ListOptions,
   ListResult,
@@ -17,12 +18,12 @@ export abstract class MemoryProfile {}
 
 export interface MemoryProfile {
   ingest?(messages: Iterable<MemoryMessage>, options?: IngestOptions): Promise<void>;
-  remember?(memory: RememberInput): Promise<Memory>;
+  remember?(memory: RememberInput, options?: AbortOptions): Promise<Memory>;
   recall?(query: string, options?: RecallOptions): Promise<RecallResult>;
   list?(options?: ListOptions): Promise<ListResult>;
-  get?(memoryId: string): Promise<Memory>;
-  delete?(memoryId: string): Promise<Memory>;
-  deleteSession?(sessionId: string): Promise<void>;
+  get?(memoryId: string, options?: AbortOptions): Promise<Memory>;
+  delete?(memoryId: string, options?: AbortOptions): Promise<Memory>;
+  deleteSession?(sessionId: string, options?: AbortOptions): Promise<void>;
   getSummary?(options?: SummaryOptions): Promise<SummaryResult>;
 }
 
@@ -34,9 +35,9 @@ export abstract class MemoryProvider {
 }
 
 export interface MemoryProvider {
-  deleteProfile?(profileName: string): Promise<void>;
+  deleteProfile?(profileName: string, options?: AbortOptions): Promise<void>;
   /** Enumerates profile names when the provider supports discovery. */
-  listProfiles?(): Promise<string[]>;
+  listProfiles?(options?: AbortOptions): Promise<string[]>;
   /** Releases resources owned by the provider. */
   close?(): Promise<void>;
 }

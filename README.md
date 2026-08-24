@@ -76,6 +76,17 @@ await provider.close();
 
 `@oh-my-pi/pi-mnemopi` goes in the Bun app that builds the clients, not here. One memory profile is one Mnemopi bank, and a `sessionId` you pass has to match the client's fixed session.
 
+## Cancellation
+
+Every read and write takes an `AbortSignal`, so a call that nobody is waiting for stops instead of running to completion on your Cloudflare bill:
+
+```ts
+const controller = new AbortController();
+const page = await profile.list({ limit: 20, signal: controller.signal });
+```
+
+Over HTTP the signal goes straight to `fetch` and kills the request in flight. A Workers binding and the Mnemopi client run in process and cannot be interrupted once they start, so there the signal decides whether the call happens at all. Pi, OMP and MCP already pass their own signal down, so an interrupted turn no longer leaves a recall running.
+
 ## Pi and OMP extensions
 
 Pi and OMP each get a native extension with all twelve tools. They talk to Cloudflare over HTTP, so the host needs credentials:

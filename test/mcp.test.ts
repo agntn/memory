@@ -58,6 +58,28 @@ describe("memory MCP server", () => {
     ).toBe(true);
   });
 
+  it("gives the outbound request the caller's cancellation signal", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        signals.push(init?.signal);
+        return Response.json({ success: true, result: { summary: "nothing yet" } });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_summary",
+      arguments: { namespace: "default", profile: "oritwoen" },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
   it("binds operational tools to configured scope and harness session", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");

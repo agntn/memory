@@ -131,10 +131,11 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
+    const { signal } = new AbortController();
     await remember!.execute(
       "call-1",
       { content: "canonical", sessionId: "model-selected-session" },
-      undefined,
+      signal,
       undefined,
       {
         cwd: "/workspace/movie-enigma",
@@ -142,12 +143,15 @@ describe("memory extensions", () => {
       },
     );
 
-    expect(execute).toHaveBeenCalledWith({
-      namespace: "default",
-      profile: "oritwoen",
-      content: "canonical",
-      sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
-    });
+    expect(execute).toHaveBeenCalledWith(
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        content: "canonical",
+        sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+      },
+      { signal },
+    );
   });
 
   it("binds Pi operational tools from its agent-local scope file", async () => {
@@ -171,17 +175,21 @@ describe("memory extensions", () => {
         .spyOn(memoryToolExecutors, "remember")
         .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
-      await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
+      const { signal } = new AbortController();
+      await remember!.execute("call-1", { content: "canonical" }, signal, undefined, {
         cwd: "/workspace/movie-enigma",
         sessionManager: { getSessionId: () => "pi-session-file" },
       });
 
-      expect(execute).toHaveBeenCalledWith({
-        namespace: "default",
-        profile: "oritwoen",
-        content: "canonical",
-        sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
-      });
+      expect(execute).toHaveBeenCalledWith(
+        {
+          namespace: "default",
+          profile: "oritwoen",
+          content: "canonical",
+          sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+        },
+        { signal },
+      );
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
@@ -219,10 +227,11 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
+    const { signal } = new AbortController();
     await remember!.execute(
       "call-1",
       { content: "canonical", sessionId: "model-selected-session" },
-      undefined,
+      signal,
       undefined,
       {
         cwd: "/workspace/movie-enigma",
@@ -230,12 +239,15 @@ describe("memory extensions", () => {
       },
     );
 
-    expect(execute).toHaveBeenCalledWith({
-      namespace: "default",
-      profile: "oritwoen",
-      content: "canonical",
-      sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
-    });
+    expect(execute).toHaveBeenCalledWith(
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        content: "canonical",
+        sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
+      },
+      { signal },
+    );
   });
 
   it("selects the Cloudflare namespace independently for every tool call", async () => {
