@@ -316,6 +316,29 @@ describe("CloudflareNamespaceClient", () => {
     expect(fetcher.mock.calls[1]?.[1]?.body).toBe('{"name":"test-namespace"}');
   });
 
+  it("pages namespaces up to the cap the namespaces endpoint publishes", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse([]));
+    const client = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+
+    expect(cloudflareMemoryLimits.namespaceListLimit).toBeGreaterThan(
+      cloudflareMemoryLimits.httpListLimit,
+    );
+    await expect(
+      client.list({ limit: cloudflareMemoryLimits.httpListLimit + 1 }),
+    ).resolves.toMatchObject({ namespaces: [] });
+    await expect(
+      client.list({ limit: cloudflareMemoryLimits.namespaceListLimit }),
+    ).resolves.toMatchObject({ namespaces: [] });
+    await expect(
+      client.list({ limit: cloudflareMemoryLimits.namespaceListLimit + 1 }),
+    ).rejects.toBeInstanceOf(MemoryInputError);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects namespace names that Cloudflare does not accept", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new CloudflareNamespaceClient({

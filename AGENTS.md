@@ -26,7 +26,7 @@
 
 - A result is text and nothing else. MCP clients never see `details`, so anything the caller needs has to be in the text.
 - Say what the caller cannot control: the service assigns memory types, extraction is asynchronous, cascade deletes report nothing on their own.
-- Only verified service rules go in descriptions and schemas. Verified so far: namespaces and profiles take lowercase letters, numbers and internal hyphens; `per_page` caps at 500; an unknown memory id returns a server error, not a 404; deleting a session that holds nothing still succeeds.
+- Only verified service rules go in descriptions and schemas. Verified so far: namespaces and profiles take lowercase letters, numbers and internal hyphens; `per_page` caps at 500 on memories and 1000 on namespaces, so the two listings do not share a bound; an unknown memory id returns a server error, not a 404; deleting a session that holds nothing still succeeds.
 - Identifiers go into URL paths, so `.` and `..` are rejected. `encodeURIComponent` leaves dots alone and one dot segment moves a memory delete up to the profile endpoint.
 
 ## Cloudflare
