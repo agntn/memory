@@ -80,8 +80,13 @@ const CALL_META_KEYS = [
   "direction",
 ] as const;
 
-/** Result fields naming what the service assigned, most specific first. */
-const RESULT_NAME_KEYS = ["id", "name"] as const;
+/**
+ * Result fields naming what the service assigned.
+ *
+ * A namespace comes back with both, and every other tool addresses it by name,
+ * so the name is the half worth showing.
+ */
+const RESULT_NAME_KEYS = ["name", "id"] as const;
 
 /** Result fields worth restating next to the name. */
 const RESULT_FACT_KEYS = ["type", "sessionId"] as const;
@@ -94,7 +99,6 @@ const RESULT_COUNT_KEYS = ["count", "messageCount", "memories", "namespaces"] as
 
 const SUBJECT_WIDTH = 72;
 const META_WIDTH = 40;
-const META_LIMIT = 5;
 /**
  * Pi's own fallback preview shows ten lines. Matching it keeps the depth
  * familiar when a memory tool renders next to a built-in one.
@@ -132,19 +136,6 @@ function clip(text: string, max: number): string {
 }
 
 /**
- * Collapse whitespace and cut to `max`, keeping a trailing ellipsis.
- *
- * The slice up front is safe because collapsing runs first: a value loses at
- * most three of every four characters, so nothing past that could still reach
- * the visible `max`.
- */
-function truncate(text: string, max: number): string {
-  const bounded = text.length > max * 4 ? text.slice(0, max * 4) : text;
-  const single = bounded.replace(/\s+/g, " ").trim();
-  return single.length <= max ? single : `${cutAt(single, max - 1)}…`;
-}
-
-/**
  * One half of a surrogate pair, standing on its own.
  *
  * Model arguments arrive as decoded JSON, which can carry an unpaired code
@@ -160,21 +151,23 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
  */
 function stripControlBytes(value: unknown): string {
   const text = String(value);
-  const bounded = clip(text, LINE_WIDTH_CAP);
-  // oxlint-disable-next-line no-control-regex -- matching control bytes is the point
-  return stripVTControlCharacters(bounded)
+  const long = text.length > LINE_WIDTH_CAP;
+  const bounded = long ? cutAt(text, LINE_WIDTH_CAP) : text;
+  /* oxlint-disable-next-line no-control-regex */
+  const clean = stripVTControlCharacters(bounded)
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
     .replace(LONE_SURROGATE, " ");
+  return long ? `${clean}…` : clean;
 }
 
 /** Sanitize a value for one status field: no control bytes, one line. */
 export function sanitizeTerminalText(value: unknown): string {
-  return stripControlBytes(value).replace(/ +/g, " ").trim();
+  return stripControlBytes(value).replace(/\s+/g, " ").trim();
 }
 
 /** Sanitize a value and fit it into one status field. */
 function field(value: unknown, max: number): string {
-  return truncate(sanitizeTerminalText(value), max);
+  return clip(sanitizeTerminalText(value), max);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -264,22 +257,8 @@ export function describeToolCall(
     spinnerFrame: options?.spinnerFrame,
     title: label,
     description: subject ?? (target === undefined ? undefined : field(target, SUBJECT_WIDTH)),
-    meta: meta.length > 0 ? meta.slice(0, META_LIMIT) : undefined,
+    meta: meta.length > 0 ? meta : undefined,
   };
-}
-
-/**
- * State how many memories a delete took with it.
- *
- * The service reports no count of its own, so the tool counts first and says
- * `null` when even that was not possible. A cascade of unknown size is worth
- * saying out loud, and zero removed is a fact, not an empty result.
- */
-function removedMeta(details: Record<string, unknown>): string | undefined {
-  if (!("removedMemories" in details)) return undefined;
-  const removed = details.removedMemories;
-  if (typeof removed !== "number") return "removed an unknown number";
-  return details.removedAtLeast === true ? `removed at least ${removed}` : `removed ${removed}`;
 }
 
 /**
@@ -321,13 +300,11 @@ export function describeToolResult(result: RenderedToolResult, isError: boolean)
     else if (Array.isArray(value)) meta.push(`${key} ${value.length}`);
   }
 
-  const removed = removedMeta(details);
-  if (removed !== undefined) meta.push(removed);
   if (details.hasMore === true) meta.push("more pages");
 
   return {
     icon: "done",
-    meta: meta.length > 0 ? meta.slice(0, META_LIMIT) : undefined,
+    meta: meta.length > 0 ? meta : undefined,
   };
 }
 
@@ -384,7 +361,8 @@ function takeLines(body: string, from: number, max: number): { lines: string[]; 
  *
  * On a failure the header already carries the first line, so the body starts
  * below it. The exception is a line the header had to cut short, which the body
- * still owes the reader in full.
+ * still owes the reader in full. The header prints the sanitized line, so its
+ * length is the one that decides which case this is.
  */
 export function renderToolResult(
   result: RenderedToolResult,
@@ -398,7 +376,6 @@ export function renderToolResult(
   if (body.length === 0) return header;
 
   const first = isError ? firstLine(body) : "";
-  // The header shows the sanitized line, so its length decides what it fit.
   const from =
     isError && sanitizeTerminalText(first).length <= SUBJECT_WIDTH ? first.length + 1 : 0;
   if (from > body.length) return header;

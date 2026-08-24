@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { painted } from "./extensions.types.ts";
 import {
   describeToolCall,
   describeToolResult,
@@ -11,12 +12,6 @@ const ESC = String.fromCharCode(27);
 const NUL = String.fromCharCode(0);
 const BEL = String.fromCharCode(7);
 const C1 = String.fromCharCode(155);
-
-/** A theme that marks every color, so a test can see what got painted. */
-const painted = {
-  fg: (color: string, text: string) => `<${color}>${text}`,
-  bold: (text: string) => `<b>${text}`,
-};
 
 /** Both theme methods are optional, so a bare object has to render too. */
 const plain = {};
@@ -122,15 +117,31 @@ describe("result lines", () => {
     expect(line.meta).toEqual(["memories 2", "more pages"]);
   });
 
-  it("reports a cascade delete, including the counts it could not get", () => {
-    const removed = (details: Record<string, unknown>) =>
-      describeToolResult({ content: [], details }, false).meta;
+  it("leaves the delete count to the sentence the tool already wrote", () => {
+    const line = describeToolResult(
+      {
+        content: [{ text: "Deleted session s1 in default/oritwoen, holding 3 memories." }],
+        details: {
+          namespace: "default",
+          profile: "oritwoen",
+          sessionId: "s1",
+          removedMemories: 3,
+          removedAtLeast: false,
+        },
+      },
+      false,
+    );
 
-    expect(removed({ removedMemories: 0, removedAtLeast: false })).toEqual(["removed 0"]);
-    expect(removed({ removedMemories: 5, removedAtLeast: true })).toEqual(["removed at least 5"]);
-    expect(removed({ removedMemories: null, removedAtLeast: null })).toEqual([
-      "removed an unknown number",
-    ]);
+    expect(line.meta).toEqual(["sessionId=s1"]);
+  });
+
+  it("names a namespace the way every other tool addresses it", () => {
+    const line = describeToolResult(
+      { content: [], details: { id: "8f2b1c", name: "scratch" } },
+      false,
+    );
+
+    expect(line.meta).toEqual(["scratch"]);
   });
 
   it("puts the failure first and keeps the tool name out of the line", () => {

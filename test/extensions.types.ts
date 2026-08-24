@@ -1,3 +1,9 @@
+/** A theme that marks every color, so a test can see what got painted. */
+export const painted = {
+  fg: (color: string, text: string) => `<${color}>${text}`,
+  bold: (text: string) => `<b>${text}`,
+};
+
 /** What a renderer returns: the mocked Text component keeps its string. */
 export interface RenderedText {
   text: string;
