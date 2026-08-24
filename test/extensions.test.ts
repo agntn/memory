@@ -8,7 +8,7 @@ import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import piMemoryExtension from "../packages/pi/extensions/memory.ts";
 import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
 import { painted, type RegisteredTool } from "./extensions.types.ts";
-import { memoryToolExecutors } from "../packages/shared/memory-tools.ts";
+import { memoryToolExecutors, memoryToolProgress } from "../packages/shared/memory-tools.ts";
 
 /**
  * Keep the rendered string so a test can read what the harness would print.
@@ -131,10 +131,11 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
+    const { signal } = new AbortController();
     await remember!.execute(
       "call-1",
       { content: "canonical", sessionId: "model-selected-session" },
-      undefined,
+      signal,
       undefined,
       {
         cwd: "/workspace/movie-enigma",
@@ -142,12 +143,15 @@ describe("memory extensions", () => {
       },
     );
 
-    expect(execute).toHaveBeenCalledWith({
-      namespace: "default",
-      profile: "oritwoen",
-      content: "canonical",
-      sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
-    });
+    expect(execute).toHaveBeenCalledWith(
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        content: "canonical",
+        sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+      },
+      { signal },
+    );
   });
 
   it("binds Pi operational tools from its agent-local scope file", async () => {
@@ -171,17 +175,21 @@ describe("memory extensions", () => {
         .spyOn(memoryToolExecutors, "remember")
         .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
-      await remember!.execute("call-1", { content: "canonical" }, undefined, undefined, {
+      const { signal } = new AbortController();
+      await remember!.execute("call-1", { content: "canonical" }, signal, undefined, {
         cwd: "/workspace/movie-enigma",
         sessionManager: { getSessionId: () => "pi-session-file" },
       });
 
-      expect(execute).toHaveBeenCalledWith({
-        namespace: "default",
-        profile: "oritwoen",
-        content: "canonical",
-        sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
-      });
+      expect(execute).toHaveBeenCalledWith(
+        {
+          namespace: "default",
+          profile: "oritwoen",
+          content: "canonical",
+          sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
+        },
+        { signal },
+      );
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
@@ -219,10 +227,11 @@ describe("memory extensions", () => {
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
+    const { signal } = new AbortController();
     await remember!.execute(
       "call-1",
       { content: "canonical", sessionId: "model-selected-session" },
-      undefined,
+      signal,
       undefined,
       {
         cwd: "/workspace/movie-enigma",
@@ -230,12 +239,50 @@ describe("memory extensions", () => {
       },
     );
 
-    expect(execute).toHaveBeenCalledWith({
-      namespace: "default",
-      profile: "oritwoen",
-      content: "canonical",
-      sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
+    expect(execute).toHaveBeenCalledWith(
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        content: "canonical",
+        sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
+      },
+      { signal },
+    );
+  });
+
+  it("gives the OMP extension a display label", () => {
+    const labels: string[] = [];
+
+    ompMemoryExtension({
+      typebox: OmpTypebox,
+      setLabel: (label: string) => labels.push(label),
+      registerTool() {},
+    } as unknown as OmpExtensionAPI);
+
+    expect(labels).toEqual(["Memory"]);
+  });
+
+  it("streams a progress line before a recall answers", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const recall = ompTools().find((tool) => tool.name === "memory_recall") as
+      | (RegisteredTool & {
+          execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+        })
+      | undefined;
+    expect(recall).toBeDefined();
+    vi.spyOn(memoryToolExecutors, "recall").mockResolvedValue({
+      content: [{ type: "text", text: "recalled" }],
+      details: {},
     });
+    const updates: Array<AgentToolResult<Record<string, unknown>>> = [];
+
+    await recall!.execute("call-1", { query: "what do we know" }, undefined, (update: unknown) => {
+      updates.push(update as AgentToolResult<Record<string, unknown>>);
+    });
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.content[0]).toMatchObject({ text: memoryToolProgress.memory_recall });
   });
 
   it("selects the Cloudflare namespace independently for every tool call", async () => {
@@ -327,6 +374,7 @@ function ompTools(): RegisteredTool[] {
   const tools: RegisteredTool[] = [];
   ompMemoryExtension({
     typebox: OmpTypebox,
+    setLabel() {},
     registerTool(tool: RegisteredTool) {
       tools.push(tool);
     },

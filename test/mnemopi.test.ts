@@ -77,6 +77,19 @@ describe("Mnemopi memory provider", () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
+  it("refuses a bank listing the caller already cancelled", async () => {
+    const listProfiles = vi.fn(async () => ["default"]);
+    const provider = create<MnemopiMemoryOptions>("mnemopi", {
+      createClient: (profileName) => createFakeClient(profileName),
+      listProfiles,
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(provider.listProfiles?.({ signal: controller.signal })).rejects.toThrow();
+    expect(listProfiles).not.toHaveBeenCalled();
+  });
+
   it("maps remember, get, and recall to the unified contract", async () => {
     const provider = create<MnemopiMemoryOptions>("mnemopi", {
       listProfiles: () => [],

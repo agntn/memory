@@ -21,14 +21,27 @@ export interface MemoryMessage {
   timestamp?: Date;
 }
 
-export interface IngestOptions {
+/**
+ * Cancellation for a single call.
+ *
+ * The HTTP transport hands the signal to `fetch`, so aborting stops the request
+ * while it is still in flight. A Cloudflare binding and the Mnemopi client run
+ * in process and cannot be interrupted once they start, so there the signal is
+ * checked at the call boundary and the call rejects instead of returning a
+ * result nobody is waiting for.
+ */
+export interface AbortOptions {
+  signal?: AbortSignal;
+}
+
+export interface IngestOptions extends AbortOptions {
   sessionId?: string | null;
 }
 export interface RememberInput {
   content: string;
   sessionId?: string | null;
 }
-export interface RecallOptions {
+export interface RecallOptions extends AbortOptions {
   thinkingLevel?: ThinkingLevel;
   responseLength?: ResponseLength;
   referenceDate?: Date | string;
@@ -44,7 +57,7 @@ export interface RecallResult {
   answer: string;
   candidates: RecallCandidate[];
 }
-export interface ListOptions {
+export interface ListOptions extends AbortOptions {
   limit?: number;
   cursor?: string;
   sessionId?: string;
@@ -54,7 +67,7 @@ export interface ListResult {
   memories: MemoryListEntry[];
   cursor?: string;
 }
-export interface SummaryOptions {
+export interface SummaryOptions extends AbortOptions {
   sessionId?: string | null;
 }
 export interface SummaryResult {

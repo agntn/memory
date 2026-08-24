@@ -9,6 +9,7 @@ import {
 import { MemoryProfile, MemoryProvider } from "../memory.ts";
 import { isUnknownRecord } from "../type-guards.ts";
 import type {
+  AbortOptions,
   IngestOptions,
   ListOptions,
   ListResult,
@@ -25,15 +26,24 @@ import type {
   SummaryResult,
 } from "../types.ts";
 
+/** Options as a binding sees them, with the adapter's cancellation removed. */
+type BindingOptions<T extends AbortOptions> = Omit<T, "signal">;
+
+/**
+ * The Workers binding as Cloudflare exposes it.
+ *
+ * None of these calls take a signal, so the adapter strips cancellation before
+ * delegating and decides on its own whether the call starts.
+ */
 export interface AgentMemoryProfileBinding {
-  ingest(messages: Iterable<MemoryMessage>, options?: IngestOptions): Promise<void>;
+  ingest(messages: Iterable<MemoryMessage>, options?: BindingOptions<IngestOptions>): Promise<void>;
   remember(memory: RememberInput): Promise<Memory>;
-  recall(query: string, options?: RecallOptions): Promise<RecallResult>;
-  list(options?: ListOptions): Promise<ListResult>;
+  recall(query: string, options?: BindingOptions<RecallOptions>): Promise<RecallResult>;
+  list(options?: BindingOptions<ListOptions>): Promise<ListResult>;
   get(memoryId: string): Promise<Memory>;
   delete(memoryId: string): Promise<Memory>;
   deleteSession(sessionId: string): Promise<void>;
-  getSummary(options?: SummaryOptions): Promise<SummaryResult>;
+  getSummary(options?: BindingOptions<SummaryOptions>): Promise<SummaryResult>;
 }
 
 export interface AgentMemoryNamespaceBinding {
@@ -43,12 +53,12 @@ export interface AgentMemoryNamespaceBinding {
 
 export interface CloudflareMemoryProfile extends MemoryProfile {
   ingest(messages: Iterable<MemoryMessage>, options?: IngestOptions): Promise<void>;
-  remember(memory: RememberInput): Promise<Memory>;
+  remember(memory: RememberInput, options?: AbortOptions): Promise<Memory>;
   recall(query: string, options?: RecallOptions): Promise<RecallResult>;
   list(options?: ListOptions): Promise<ListResult>;
-  get(memoryId: string): Promise<Memory>;
-  delete(memoryId: string): Promise<Memory>;
-  deleteSession(sessionId: string): Promise<void>;
+  get(memoryId: string, options?: AbortOptions): Promise<Memory>;
+  delete(memoryId: string, options?: AbortOptions): Promise<Memory>;
+  deleteSession(sessionId: string, options?: AbortOptions): Promise<void>;
   getSummary(options?: SummaryOptions): Promise<SummaryResult>;
 }
 
@@ -73,7 +83,7 @@ export interface CloudflareNamespace {
   updatedAt: Date;
 }
 
-export interface CloudflareNamespaceListOptions {
+export interface CloudflareNamespaceListOptions extends AbortOptions {
   limit?: number;
   cursor?: string;
   order?: "id" | "name";
@@ -124,6 +134,18 @@ const capabilities: Readonly<MemoryCapabilities> = Object.freeze({
   deleteProfile: true,
   listProfiles: false,
 });
+
+/**
+ * Drop cancellation from the options a call forwards.
+ *
+ * A binding gets the rest as its own options, and an HTTP body gets them as
+ * JSON. Neither may carry an `AbortSignal`: the binding has no use for one and
+ * `JSON.stringify` would post it upstream as an empty object.
+ */
+function withoutSignal<T extends AbortOptions>(options: T): BindingOptions<T> {
+  const { signal: _signal, ...rest } = options;
+  return rest;
+}
 
 function isBindingOptions(options: CloudflareMemoryOptions): options is CloudflareBindingOptions {
   return isUnknownRecord(options) && "binding" in options;
@@ -477,6 +499,14 @@ function profilePath(namespace: string, profileName: string): string {
   return `/namespaces/${encodePath(namespace)}/profiles/${encodePath(profileName)}`;
 }
 
+/**
+ * Profile backed by a Workers binding.
+ *
+ * A binding call runs in process and cannot be interrupted, so cancellation
+ * only decides whether it starts. The check sits inside the error wrapper so an
+ * aborted call rejects like any other failure instead of throwing at the call
+ * site, and the remaining options reach the binding untouched.
+ */
 class CloudflareBindingProfile extends MemoryProfile implements CloudflareMemoryProfile {
   private readonly profile: AgentMemoryProfileBinding;
 
@@ -488,43 +518,67 @@ class CloudflareBindingProfile extends MemoryProfile implements CloudflareMemory
   override ingest(messages: Iterable<MemoryMessage>, options: IngestOptions = {}): Promise<void> {
     const collected = collectMessages(messages);
     assertSessionId(options.sessionId);
-    return withCloudflareError(() => this.profile.ingest(collected, options));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.ingest(collected, withoutSignal(options));
+    });
   }
 
-  override remember(memory: RememberInput): Promise<Memory> {
+  override remember(memory: RememberInput, options: AbortOptions = {}): Promise<Memory> {
     assertString(memory.content, "Memory content");
     assertSessionId(memory.sessionId);
-    return withCloudflareError(() => this.profile.remember(memory));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.remember(memory);
+    });
   }
 
   override recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
     assertRecall(query, options);
-    return withCloudflareError(() => this.profile.recall(query, options));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.recall(query, withoutSignal(options));
+    });
   }
 
   override list(options: ListOptions = {}): Promise<ListResult> {
     assertListOptions(options, MAX_BINDING_LIST_LIMIT);
-    return withCloudflareError(() => this.profile.list(options));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.list(withoutSignal(options));
+    });
   }
 
-  override get(memoryId: string): Promise<Memory> {
+  override get(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     assertString(memoryId, "Memory ID");
-    return withCloudflareError(() => this.profile.get(memoryId));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.get(memoryId);
+    });
   }
 
-  override delete(memoryId: string): Promise<Memory> {
+  override delete(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     assertString(memoryId, "Memory ID");
-    return withCloudflareError(() => this.profile.delete(memoryId));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.delete(memoryId);
+    });
   }
 
-  override deleteSession(sessionId: string): Promise<void> {
+  override deleteSession(sessionId: string, options: AbortOptions = {}): Promise<void> {
     assertString(sessionId, "Session ID", MAX_SESSION_ID_CHARACTERS);
-    return withCloudflareError(() => this.profile.deleteSession(sessionId));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.deleteSession(sessionId);
+    });
   }
 
   override getSummary(options: SummaryOptions = {}): Promise<SummaryResult> {
     assertSessionId(options.sessionId);
-    return withCloudflareError(() => this.profile.getSummary(options));
+    return withCloudflareError(() => {
+      options.signal?.throwIfAborted();
+      return this.profile.getSummary(withoutSignal(options));
+    });
   }
 }
 
@@ -544,17 +598,19 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
     assertSessionId(options.sessionId);
     await this.client.request("/ingest", parseNull, {
       method: "POST",
-      body: JSON.stringify({ messages: collected, ...options }),
+      body: JSON.stringify({ messages: collected, ...withoutSignal(options) }),
+      signal: options.signal,
     });
   }
 
-  override async remember(memory: RememberInput): Promise<Memory> {
+  override async remember(memory: RememberInput, options: AbortOptions = {}): Promise<Memory> {
     assertString(memory.content, "Memory content");
     assertSessionId(memory.sessionId);
     return (
       await this.client.request("/remember", parseMemory, {
         method: "POST",
         body: JSON.stringify(memory),
+        signal: options.signal,
       })
     ).result;
   }
@@ -564,7 +620,8 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
     return (
       await this.client.request("/recall", parseRecallResult, {
         method: "POST",
-        body: JSON.stringify({ query, ...options }),
+        body: JSON.stringify({ query, ...withoutSignal(options) }),
+        signal: options.signal,
       })
     ).result;
   }
@@ -577,31 +634,39 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
     if (options.sessionId !== undefined) query.set("session_id", options.sessionId);
     if (options.type !== undefined) query.set("type", options.type);
     const suffix = query.size === 0 ? "" : `?${query}`;
-    const response = await this.client.request(`/memories${suffix}`, parseMemoryList);
+    const response = await this.client.request(`/memories${suffix}`, parseMemoryList, {
+      signal: options.signal,
+    });
     return {
       memories: response.result,
       ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
     };
   }
 
-  override async get(memoryId: string): Promise<Memory> {
-    assertString(memoryId, "Memory ID");
-    return (await this.client.request(`/memories/${encodePath(memoryId)}`, parseMemory)).result;
-  }
-
-  override async delete(memoryId: string): Promise<Memory> {
+  override async get(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     assertString(memoryId, "Memory ID");
     return (
       await this.client.request(`/memories/${encodePath(memoryId)}`, parseMemory, {
-        method: "DELETE",
+        signal: options.signal,
       })
     ).result;
   }
 
-  override async deleteSession(sessionId: string): Promise<void> {
+  override async delete(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
+    assertString(memoryId, "Memory ID");
+    return (
+      await this.client.request(`/memories/${encodePath(memoryId)}`, parseMemory, {
+        method: "DELETE",
+        signal: options.signal,
+      })
+    ).result;
+  }
+
+  override async deleteSession(sessionId: string, options: AbortOptions = {}): Promise<void> {
     assertString(sessionId, "Session ID", MAX_SESSION_ID_CHARACTERS);
     await this.client.request(`/sessions/${encodePath(sessionId)}`, parseNull, {
       method: "DELETE",
+      signal: options.signal,
     });
   }
 
@@ -610,7 +675,8 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
     return (
       await this.client.request("/summary", parseSummary, {
         method: "POST",
-        body: JSON.stringify(options),
+        body: JSON.stringify(withoutSignal(options)),
+        signal: options.signal,
       })
     ).result;
   }
@@ -639,7 +705,9 @@ export class CloudflareNamespaceClient {
     if (options.order !== undefined) query.set("order", options.order);
     if (options.direction !== undefined) query.set("direction", options.direction);
     const suffix = query.size === 0 ? "" : `?${query}`;
-    const response = await this.client.request(suffix, parseNamespaces);
+    const response = await this.client.request(suffix, parseNamespaces, {
+      signal: options.signal,
+    });
     return {
       namespaces: response.result,
       ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
@@ -647,20 +715,24 @@ export class CloudflareNamespaceClient {
   }
 
   /** Creates an Agent Memory namespace. */
-  async create(name: string): Promise<CloudflareNamespace> {
+  async create(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
     assertNamespaceName(name);
     return (
       await this.client.request("", parseNamespace, {
         method: "POST",
         body: JSON.stringify({ name }),
+        signal: options.signal,
       })
     ).result;
   }
 
   /** Permanently deletes an Agent Memory namespace and all of its contents. */
-  async delete(name: string): Promise<void> {
+  async delete(name: string, options: AbortOptions = {}): Promise<void> {
     assertNamespaceName(name);
-    await this.client.request(`/${encodePath(name)}`, parseNull, { method: "DELETE" });
+    await this.client.request(`/${encodePath(name)}`, parseNull, {
+      method: "DELETE",
+      signal: options.signal,
+    });
   }
 }
 
@@ -703,10 +775,11 @@ export class CloudflareMemoryProvider extends MemoryProvider {
     );
   }
 
-  override async deleteProfile(profileName: string): Promise<void> {
+  override async deleteProfile(profileName: string, abort: AbortOptions = {}): Promise<void> {
     assertProfileName(profileName);
     const options = this.options;
     if (isBindingOptions(options)) {
+      abort.signal?.throwIfAborted();
       await withCloudflareError(() => options.binding.deleteProfile(profileName));
       return;
     }
@@ -715,6 +788,7 @@ export class CloudflareMemoryProvider extends MemoryProvider {
       parseNull,
       {
         method: "DELETE",
+        signal: abort.signal,
       },
     );
   }

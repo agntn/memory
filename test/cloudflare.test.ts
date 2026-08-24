@@ -338,6 +338,53 @@ describe("abstract capability contract", () => {
   });
 });
 
+describe("CloudflareMemoryProvider cancellation", () => {
+  it("hands the signal to fetch and keeps it out of the request body", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ count: 0, answer: memory.summary, candidates: [] }),
+    );
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "support-agent",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const profile = await provider.getProfile("user-1");
+    const { signal } = new AbortController();
+
+    await profile.recall("what does the user prefer", { signal, responseLength: "short" });
+
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(init?.signal).toBe(signal);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      query: "what does the user prefer",
+      responseLength: "short",
+    });
+  });
+
+  it("refuses a binding call the caller already aborted", async () => {
+    const profile = {
+      ingest: vi.fn(async () => undefined),
+      remember: vi.fn(async () => memory),
+      recall: vi.fn(async () => ({ count: 0, answer: "", candidates: [] })),
+      list: vi.fn(async () => ({ memories: [] })),
+      get: vi.fn(async () => memory),
+      delete: vi.fn(async () => memory),
+      deleteSession: vi.fn(async () => undefined),
+      getSummary: vi.fn(async () => ({ summary: memory.summary })),
+    } satisfies AgentMemoryProfileBinding;
+    const provider = new CloudflareMemoryProvider({
+      binding: { getProfile: async () => profile, deleteProfile: async () => undefined },
+    });
+    const selected = await provider.getProfile("user-1");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(selected.list({ signal: controller.signal })).rejects.toThrow();
+    expect(profile.list).not.toHaveBeenCalled();
+  });
+});
+
 describe("provider registry", () => {
   it("registers Cloudflare explicitly", () => {
     registerAll();

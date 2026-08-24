@@ -76,6 +76,17 @@ await provider.close();
 
 `@oh-my-pi/pi-mnemopi` goes in the Bun app that builds the clients, not here. One memory profile is one Mnemopi bank, and a `sessionId` you pass has to match the client's fixed session.
 
+## Cancellation
+
+Every read and write takes an `AbortSignal`, so a call that nobody is waiting for stops instead of running to completion on your Cloudflare bill:
+
+```ts
+const controller = new AbortController();
+const page = await profile.list({ limit: 20, signal: controller.signal });
+```
+
+Over HTTP the signal goes straight to `fetch` and kills the request in flight. A Workers binding and the Mnemopi client run in process and cannot be interrupted once they start, so there the signal decides whether the call happens at all. Pi, OMP and MCP already pass their own signal down, so an interrupted turn no longer leaves a recall running.
+
 ## Pi and OMP extensions
 
 Pi and OMP each get a native extension with all twelve tools. They talk to Cloudflare over HTTP, so the host needs credentials:
@@ -143,7 +154,7 @@ const server = createMcpServer();
 await server.connect(transport);
 ```
 
-An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the answer and then one JSON object per candidate memory, ids and scores included, because an answer you cannot trace back to a memory is a dead end. Candidate summaries are capped by the service, so recall takes an `expand` count that pulls the full content of the best-scoring candidates into the same response, and `memory_list` takes the same count for the first entries of a page. `memory_get` takes a list of up to 30 ids and returns one record per unique id in request order, one service read each, with a per-id error message where a read fails; the call itself errors only when every read fails. List results say `cursor` and `hasMore` instead of dropping the key on the last page. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing.
+An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the answer and then one JSON object per candidate memory, ids and scores included, because an answer you cannot trace back to a memory is a dead end. Candidate summaries are capped by the service, so recall takes an `expand` count that pulls the full content of the best-scoring candidates into the same response, and `memory_list` takes the same count for the first entries of a page. `memory_get` takes a list of up to 30 ids and returns one record per unique id in request order, one service read each, with a per-id error message where a read fails; the call itself errors only when every read fails. `memory_list` and `memory_get` print their records the same way recall does, one compact JSON object per line, and the list header says outright whether another page waits behind a cursor. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing.
 
 When Claude Code launches the MCP server, its injected `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` are hashed into a deterministic write `sessionId`. The readable key names the harness and project but does not expose the full path or conversation id. Other MCP hosts may still pass `sessionId` explicitly when running without a bound operational scope.
 

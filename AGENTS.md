@@ -7,6 +7,7 @@
 - `MemoryProvider` owns namespaces and the profile lifecycle.
 - `MemoryProfile` owns memory operations inside one isolated profile.
 - A provider exposes only what its API actually supports. No optimistic capabilities.
+- Every operation takes an `AbortSignal`. A transport that cannot interrupt itself checks the signal at the call boundary, and a signal never reaches a request body.
 - Local harness sources and remote API providers stay separate concerns.
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
 - Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
@@ -18,6 +19,7 @@
 - The two harnesses order the renderer arguments differently: Pi passes `(args, theme, context)`, OMP passes `(args, options, theme)`. Verify the order in the installed runtime's declarations, never in the dev dependency.
 - Pi keeps the failure flag out of the result object and reports it in the render context. OMP puts it in the result. A renderer that reads only `result.isError` marks a failed Pi call as done.
 - Both harnesses print the call line and the result line in one container, so the result line carries no tool name.
+- Recall and ingest stream a progress line first. A partial result keeps the running icon, because an update is progress and not an outcome.
 - Model arguments and stored memory text cross the terminal trust boundary. Everything a renderer prints goes through the sanitizer first.
 
 ## Tool results
