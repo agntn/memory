@@ -67,7 +67,7 @@ const ICONS: Record<StatusIcon, { glyph: string; color: string }> = {
 };
 
 /** Argument carrying the subject of the call, most specific first. */
-const CALL_SUBJECT_KEYS = ["query", "content", "memoryId", "sessionId"] as const;
+const CALL_SUBJECT_KEYS = ["query", "content", "memoryIds", "memoryId", "sessionId"] as const;
 
 /** Arguments worth showing next to the subject as `key=value`. */
 const CALL_META_KEYS = [
@@ -180,6 +180,15 @@ function scalarText(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Read the subject of a call, which some tools address one at a time and
+ * others in a batch.
+ */
+function subjectText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return scalarText(value);
+  return value.length > 0 ? value.map(String).join(", ") : undefined;
+}
+
 function paint(theme: StatusTheme, color: string, text: string): string {
   return theme.fg ? theme.fg(color, text) : text;
 }
@@ -237,7 +246,7 @@ export function describeToolCall(
 
   let subject: string | undefined;
   for (const key of CALL_SUBJECT_KEYS) {
-    const value = scalarText(record[key]);
+    const value = subjectText(record[key]);
     if (value !== undefined) {
       subject = field(value, SUBJECT_WIDTH);
       break;

@@ -48,6 +48,17 @@ describe("call lines", () => {
     expect(line.meta).toBeUndefined();
   });
 
+  it("names every memory a batched get asks for", () => {
+    const line = describeToolCall("Get Memory", {
+      namespace: "default",
+      profile: "oritwoen",
+      memoryIds: ["01M0A", "01M0B"],
+    });
+
+    expect(line.description).toBe("01M0A, 01M0B");
+    expect(line.meta).toEqual(["default/oritwoen"]);
+  });
+
   it("counts the messages handed to ingestion", () => {
     const line = describeToolCall("Ingest Messages", {
       namespace: "default",
