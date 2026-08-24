@@ -15,6 +15,7 @@ import {
   memoryFieldDescriptions,
   memoryToolExecutors,
   memoryToolMeta,
+  memoryToolProgress,
 } from "../../shared/memory-tools.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
 import { describeToolCall, renderStatusLine, renderToolResult } from "../../shared/tui.ts";
@@ -246,6 +247,11 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
   };
 }
 
+/** One streamed update: the progress line, with the real result still to come. */
+function progress(text: string): AgentToolResult<Record<string, unknown>> {
+  return { content: [{ type: "text", text }], details: {} };
+}
+
 /** OMP keeps the failure flag in the result object it hands the renderer. */
 function resultLine(result: RenderedToolResult, options: RenderOptions, theme: StatusTheme) {
   return new Text(renderToolResult(result, result.isError ?? false, options, theme), 0, 0);
@@ -371,13 +377,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: ingestParameters,
     renderCall: callRenderer(memoryToolMeta.memory_ingest.label),
     renderResult: resultLine,
-    execute(
-      _id,
-      params,
-      signal,
-      _onUpdate,
-      ctx,
-    ): Promise<AgentToolResult<Record<string, unknown>>> {
+    execute(_id, params, signal, onUpdate, ctx): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_ingest));
       return memoryToolExecutors.ingest(operationalWriteParams(params, ctx) as IngestParams, {
         signal,
       });
@@ -391,7 +392,8 @@ export default function memoryExtension(omp: ExtensionAPI) {
     parameters: recallParameters,
     renderCall: callRenderer(memoryToolMeta.memory_recall.label),
     renderResult: resultLine,
-    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_recall));
       return memoryToolExecutors.recall(operationalParams(params) as RecallParams, { signal });
     },
   });

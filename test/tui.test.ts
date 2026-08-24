@@ -167,6 +167,18 @@ describe("result lines", () => {
     expect(line.title).toBeUndefined();
   });
 
+  it("keeps a streamed update on the running icon", () => {
+    const line = describeToolResult(
+      { content: [{ type: "text", text: "Searching memories" }], details: {} },
+      false,
+      { isPartial: true, spinnerFrame: 2 },
+    );
+
+    expect(line.icon).toBe("running");
+    expect(line.spinnerFrame).toBe(2);
+    expect(line.badge).toBeUndefined();
+  });
+
   it("ignores details that are not a record", () => {
     expect(describeToolResult({ content: [], details: "text" }, false).meta).toBeUndefined();
   });

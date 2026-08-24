@@ -278,12 +278,24 @@ export function describeToolCall(
  * argument because Pi keeps the flag out of the result object and reports it
  * through the render context instead.
  */
-export function describeToolResult(result: RenderedToolResult, isError: boolean): StatusLine {
+export function describeToolResult(
+  result: RenderedToolResult,
+  isError: boolean,
+  options?: RenderOptions,
+): StatusLine {
   if (isError) {
     return {
       icon: "error",
       description: field(firstLine(resultText(result)), SUBJECT_WIDTH),
       badge: "failed",
+    };
+  }
+
+  /** A streamed update is progress, not an outcome, so it keeps the running icon. */
+  if (options?.isPartial === true) {
+    return {
+      icon: "running",
+      ...(options.spinnerFrame === undefined ? {} : { spinnerFrame: options.spinnerFrame }),
     };
   }
 
@@ -379,7 +391,7 @@ export function renderToolResult(
   options: RenderOptions,
   theme: StatusTheme,
 ): string {
-  const line = describeToolResult(result, isError);
+  const line = describeToolResult(result, isError, options);
   const header = renderStatusLine(line, theme);
   const body = resultText(result);
   if (body.length === 0) return header;

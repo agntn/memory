@@ -8,7 +8,7 @@ import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import piMemoryExtension from "../packages/pi/extensions/memory.ts";
 import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
 import { painted, type RegisteredTool } from "./extensions.types.ts";
-import { memoryToolExecutors } from "../packages/shared/memory-tools.ts";
+import { memoryToolExecutors, memoryToolProgress } from "../packages/shared/memory-tools.ts";
 
 /**
  * Keep the rendered string so a test can read what the harness would print.
@@ -248,6 +248,29 @@ describe("memory extensions", () => {
       },
       { signal },
     );
+  });
+
+  it("streams a progress line before a recall answers", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const recall = ompTools().find((tool) => tool.name === "memory_recall") as
+      | (RegisteredTool & {
+          execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+        })
+      | undefined;
+    expect(recall).toBeDefined();
+    vi.spyOn(memoryToolExecutors, "recall").mockResolvedValue({
+      content: [{ type: "text", text: "recalled" }],
+      details: {},
+    });
+    const updates: Array<AgentToolResult<Record<string, unknown>>> = [];
+
+    await recall!.execute("call-1", { query: "what do we know" }, undefined, (update: unknown) => {
+      updates.push(update as AgentToolResult<Record<string, unknown>>);
+    });
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.content[0]).toMatchObject({ text: memoryToolProgress.memory_recall });
   });
 
   it("selects the Cloudflare namespace independently for every tool call", async () => {

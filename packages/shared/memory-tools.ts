@@ -142,6 +142,18 @@ export const memoryToolMeta = {
 } as const;
 
 /**
+ * What the extensions print while a slow call is still running.
+ *
+ * Recall waits on the service's own model and ingest waits on extraction, so
+ * both leave the row silent for seconds. The other tools answer fast enough
+ * that a progress line would only flicker.
+ */
+export const memoryToolProgress = {
+  memory_recall: "Searching memories",
+  memory_ingest: "Submitting messages for extraction",
+} as const;
+
+/**
  * Field descriptions for the parameter schemas.
  *
  * Pi and MCP read them through `memory-tool-schemas.ts`; the OMP extension reads

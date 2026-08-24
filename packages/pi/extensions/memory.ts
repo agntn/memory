@@ -16,7 +16,11 @@ import {
   configuredPiMemoryScope,
   memorySessionId,
 } from "../../shared/memory-scope.ts";
-import { memoryToolExecutors, memoryToolMeta } from "../../shared/memory-tools.ts";
+import {
+  memoryToolExecutors,
+  memoryToolMeta,
+  memoryToolProgress,
+} from "../../shared/memory-tools.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
 import { describeToolCall, renderStatusLine, renderToolResult } from "../../shared/tui.ts";
 import type {
@@ -32,6 +36,11 @@ import type {
   SessionParams,
   SummaryParams,
 } from "../../shared/memory-tools.types.ts";
+
+/** One streamed update: the progress line, with the real result still to come. */
+function progress(text: string): AgentToolResult<Record<string, unknown>> {
+  return { content: [{ type: "text", text }], details: {} };
+}
 
 /**
  * Render a finished call.
@@ -173,13 +182,8 @@ export default function memoryExtension(pi: ExtensionAPI) {
     parameters: ingestParameters,
     renderCall: callRenderer(memoryToolMeta.memory_ingest.label),
     renderResult: resultLine,
-    execute(
-      _id,
-      params,
-      signal,
-      _onUpdate,
-      ctx,
-    ): Promise<AgentToolResult<Record<string, unknown>>> {
+    execute(_id, params, signal, onUpdate, ctx): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_ingest));
       return memoryToolExecutors.ingest(operationalWriteParams(params, ctx) as IngestParams, {
         signal,
       });
@@ -194,7 +198,8 @@ export default function memoryExtension(pi: ExtensionAPI) {
     parameters: recallParameters,
     renderCall: callRenderer(memoryToolMeta.memory_recall.label),
     renderResult: resultLine,
-    execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_recall));
       return memoryToolExecutors.recall(operationalParams(params) as RecallParams, { signal });
     },
   });
