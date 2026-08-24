@@ -325,10 +325,12 @@ export class MnemopiMemoryProvider extends MemoryProvider {
   }
 
   /** Lists validated, deduplicated bank names without creating profile clients. */
-  override async listProfiles(): Promise<string[]> {
+  override async listProfiles(options: AbortOptions = {}): Promise<string[]> {
     try {
       if (this.closed) throw new MemoryError("Mnemopi provider is closed");
+      options.signal?.throwIfAborted();
       const profileNames = await this.options.listProfiles();
+      options.signal?.throwIfAborted();
       if (!Array.isArray(profileNames)) {
         throw new MemoryError("Invalid Mnemopi profile list");
       }

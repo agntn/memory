@@ -338,6 +338,15 @@ async function readMemories(
       ),
     ),
   );
+  /**
+   * A cancelled batch is cancelled, not partially read.
+   *
+   * The settle-per-id policy above cannot tell an abort from a missing record,
+   * so without this check the reads that were still in flight would come back
+   * as per-id errors, or as `content: null` through the expansion paths, and a
+   * caller who cancelled would receive a result that looks complete.
+   */
+  options.signal?.throwIfAborted();
   return new Map(readings);
 }
 

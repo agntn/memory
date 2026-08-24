@@ -506,6 +506,30 @@ describe("get result", () => {
     });
   });
 
+  it("reports a cancelled batch as cancelled, not as failed reads", async () => {
+    const controller = new AbortController();
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/mem-2")) controller.abort();
+        init?.signal?.throwIfAborted();
+        return Response.json({
+          success: true,
+          result: { ...memoryEntry("mem-1", null), content: "content mem-1" },
+        });
+      }),
+    );
+
+    await expect(
+      memoryToolExecutors.get(
+        { namespace: "get-cancel", profile: "agent", memoryIds: ["mem-1", "mem-2"] },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow();
+  });
+
   it("reads duplicate ids once", async () => {
     const urls = stubCloudflare((url) => {
       const id = url.split("/").at(-1) ?? "";
