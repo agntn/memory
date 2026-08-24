@@ -224,6 +224,33 @@ describe("result rendering", () => {
     expect(text.split("\n")[2]).toBe("      - id: 01M0");
   });
 
+  it("does not reprint an error line the header showed in full", () => {
+    /** 85 raw characters, 55 once the header collapses the padding. */
+    const padded = `${"  ".repeat(10)}Failed to reach the memory service after three attempts${"  ".repeat(5)}`;
+
+    const text = renderToolResult(
+      { content: [{ text: `${padded}\nsecond line` }] },
+      true,
+      {},
+      plain,
+    );
+
+    expect(text).toBe(
+      "✗ Failed to reach the memory service after three attempts (failed)\n  second line",
+    );
+  });
+
+  it("still prints an error line the header had to cut short", () => {
+    const text = renderToolResult(
+      { content: [{ text: `${"e".repeat(100)}\nsecond` }] },
+      true,
+      {},
+      plain,
+    );
+
+    expect(text.split("\n")[1]).toBe(`  ${"e".repeat(100)}`);
+  });
+
   it("does not print the first error line twice", () => {
     const text = renderToolResult(
       { content: [{ text: "Memory not found\nid: 01M0" }] },
@@ -266,6 +293,34 @@ describe("result rendering", () => {
     );
 
     expect(text.split("\n")[1]).toBe("  kept");
+  });
+});
+
+describe("surrogate safety", () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it("replaces an unpaired code unit the model sent", () => {
+    expect(sanitizeTerminalText(`start${String.fromCharCode(0xd800)}end`)).toBe("start end");
+    expect(sanitizeTerminalText(`a${String.fromCharCode(0xdc00)}b`)).toBe("a b");
+  });
+
+  it("keeps a real pair whole", () => {
+    expect(sanitizeTerminalText(`a${"\u{1F600}"}b`)).toBe(`a${"\u{1F600}"}b`);
+  });
+
+  it("never cuts a status field through a pair", () => {
+    const line = describeToolCall("Recall", { query: `${"q".repeat(70)}${"\u{1F600}"}rest` });
+
+    expect(lone.test(line.description!)).toBe(false);
+  });
+
+  it("never cuts a preview line through a pair", () => {
+    const body = `${"y".repeat(198)}${"\u{1F600}"}${"z".repeat(50)}`;
+    const preview = renderToolResult({ content: [{ text: body }] }, false, {}, plain).split(
+      "\n",
+    )[1];
+
+    expect(lone.test(preview!)).toBe(false);
   });
 });
 

@@ -115,9 +115,20 @@ const LINE_WIDTH_CAP = 2048;
  */
 const PREVIEW_LINE_WIDTH = 200;
 
+/**
+ * Cut `text` to `end` code units without splitting a surrogate pair.
+ *
+ * Half a pair is not a character the terminal can measure or print, so a cut
+ * that lands inside one gives back the code unit before it.
+ */
+function cutAt(text: string, end: number): string {
+  const last = text.charCodeAt(end - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
+}
+
 /** Cut a line to `max`, leaving the whitespace inside it alone. */
 function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return text.length <= max ? text : `${cutAt(text, max - 1)}…`;
 }
 
 /**
@@ -130,8 +141,16 @@ function clip(text: string, max: number): string {
 function truncate(text: string, max: number): string {
   const bounded = text.length > max * 4 ? text.slice(0, max * 4) : text;
   const single = bounded.replace(/\s+/g, " ").trim();
-  return single.length <= max ? single : `${single.slice(0, max - 1)}…`;
+  return single.length <= max ? single : `${cutAt(single, max - 1)}…`;
 }
+
+/**
+ * One half of a surrogate pair, standing on its own.
+ *
+ * Model arguments arrive as decoded JSON, which can carry an unpaired code
+ * unit. It is not a character, so it has no width the terminal can work with.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 /**
  * Strip everything that could drive the terminal instead of describing the
@@ -143,7 +162,9 @@ function stripControlBytes(value: unknown): string {
   const text = String(value);
   const bounded = clip(text, LINE_WIDTH_CAP);
   // oxlint-disable-next-line no-control-regex -- matching control bytes is the point
-  return stripVTControlCharacters(bounded).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ");
+  return stripVTControlCharacters(bounded)
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(LONE_SURROGATE, " ");
 }
 
 /** Sanitize a value for one status field: no control bytes, one line. */
@@ -377,7 +398,9 @@ export function renderToolResult(
   if (body.length === 0) return header;
 
   const first = isError ? firstLine(body) : "";
-  const from = isError && first.length <= SUBJECT_WIDTH ? first.length + 1 : 0;
+  // The header shows the sanitized line, so its length decides what it fit.
+  const from =
+    isError && sanitizeTerminalText(first).length <= SUBJECT_WIDTH ? first.length + 1 : 0;
   if (from > body.length) return header;
 
   const expanded = options.expanded === true;
