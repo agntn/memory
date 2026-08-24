@@ -7,14 +7,30 @@ import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import piMemoryExtension from "../packages/pi/extensions/memory.ts";
 import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
-import type { RegisteredTool } from "./extensions.types.ts";
+import { painted, type RegisteredTool } from "./extensions.types.ts";
 import { memoryToolExecutors } from "../packages/shared/memory-tools.ts";
 
+/**
+ * Keep the rendered string so a test can read what the harness would print.
+ *
+ * Each factory declares its own class because `vi.mock` is hoisted above every
+ * declaration in this file.
+ */
 vi.mock("@earendil-works/pi-tui", () => ({
-  Text: class Text {},
+  Text: class Text {
+    text: string;
+    constructor(text: string) {
+      this.text = text;
+    }
+  },
 }));
 vi.mock("@oh-my-pi/pi-tui", () => ({
-  Text: class Text {},
+  Text: class Text {
+    text: string;
+    constructor(text: string) {
+      this.text = text;
+    }
+  },
 }));
 
 const expectedNames = [
@@ -64,12 +80,7 @@ afterEach(() => {
 describe("memory extensions", () => {
   it("registers the complete Pi tool surface", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
-    const tools: RegisteredTool[] = [];
-    piMemoryExtension({
-      registerTool(tool: RegisteredTool) {
-        tools.push(tool);
-      },
-    } as unknown as PiExtensionAPI);
+    const tools = piTools();
 
     expect(tools.map((tool) => tool.name)).toEqual(expectedNames);
     expect(listLimit(tools)).toBe(100);
@@ -80,13 +91,7 @@ describe("memory extensions", () => {
   });
 
   it("registers the complete OMP tool surface with native approvals", () => {
-    const tools: RegisteredTool[] = [];
-    ompMemoryExtension({
-      typebox: OmpTypebox,
-      registerTool(tool: RegisteredTool) {
-        tools.push(tool);
-      },
-    } as unknown as OmpExtensionAPI);
+    const tools = ompTools();
 
     expect(tools.map((tool) => tool.name)).toEqual(expectedNames);
     expect(listLimit(tools)).toBe(100);
@@ -113,12 +118,7 @@ describe("memory extensions", () => {
   it("binds Pi operational tools to the canonical scope and session", async () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
-    const tools: RegisteredTool[] = [];
-    piMemoryExtension({
-      registerTool(tool: RegisteredTool) {
-        tools.push(tool);
-      },
-    } as unknown as PiExtensionAPI);
+    const tools = piTools();
     const remember = tools.find((tool) => tool.name === "memory_remember") as
       | (RegisteredTool & {
           execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
@@ -158,12 +158,7 @@ describe("memory extensions", () => {
         JSON.stringify({ namespace: "default", profile: "oritwoen" }),
       );
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
-      const tools: RegisteredTool[] = [];
-      piMemoryExtension({
-        registerTool(tool: RegisteredTool) {
-          tools.push(tool);
-        },
-      } as unknown as PiExtensionAPI);
+      const tools = piTools();
       const remember = tools.find((tool) => tool.name === "memory_remember") as
         | (RegisteredTool & {
             execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
@@ -211,13 +206,7 @@ describe("memory extensions", () => {
   it("binds OMP operational tools to the canonical scope and session", async () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
-    const tools: RegisteredTool[] = [];
-    ompMemoryExtension({
-      typebox: OmpTypebox,
-      registerTool(tool: RegisteredTool) {
-        tools.push(tool);
-      },
-    } as unknown as OmpExtensionAPI);
+    const tools = ompTools();
     const remember = tools.find((tool) => tool.name === "memory_remember") as
       | (RegisteredTool & {
           execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
@@ -321,5 +310,137 @@ describe("memory extensions", () => {
     expect(urls).toEqual([
       "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/empty-option-test/profiles/agent/memories?per_page=1",
     ]);
+  });
+});
+
+function piTools(): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+  piMemoryExtension({
+    registerTool(tool: RegisteredTool) {
+      tools.push(tool);
+    },
+  } as unknown as PiExtensionAPI);
+  return tools;
+}
+
+function ompTools(): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+  ompMemoryExtension({
+    typebox: OmpTypebox,
+    registerTool(tool: RegisteredTool) {
+      tools.push(tool);
+    },
+  } as unknown as OmpExtensionAPI);
+  return tools;
+}
+
+function tool(tools: RegisteredTool[], name: string): RegisteredTool {
+  const found = tools.find((candidate) => candidate.name === name);
+  expect(found).toBeDefined();
+  return found!;
+}
+
+describe("memory tool renderers", () => {
+  it("renders a Pi call line with Pi's argument order", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    const recall = tool(piTools(), "memory_recall");
+
+    const { text } = recall.renderCall!(
+      { namespace: "default", profile: "oritwoen", query: "what do I know" },
+      painted,
+      { isPartial: false, expanded: false },
+    );
+
+    expect(text).toBe(
+      "<success>✓ <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen",
+    );
+  });
+
+  it("renders an OMP call line with OMP's argument order", () => {
+    const recall = tool(ompTools(), "memory_recall");
+
+    const { text } = recall.renderCall!(
+      { namespace: "default", profile: "oritwoen", query: "what do I know" },
+      { isPartial: true, expanded: false, spinnerFrame: 3 },
+      painted,
+    );
+
+    expect(text).toBe("<accent>⠸ <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen");
+  });
+
+  it("names the bound profile the model never passed", () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+
+    for (const tools of [piTools(), ompTools()]) {
+      const { text } = tool(tools, "memory_recall").renderCall!({ query: "bound" }, {}, {});
+      expect(text).toContain("default/oritwoen");
+    }
+  });
+
+  it("leaves the profile out of a namespace call, which has none", () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+
+    for (const tools of [piTools(), ompTools()]) {
+      const create = tool(tools, "memory_namespace_create");
+      const { text } = create.renderCall!({ namespace: "scratch" }, {}, {});
+      expect(text).toContain("scratch");
+      expect(text).not.toContain("oritwoen");
+    }
+  });
+
+  it("reads a Pi failure from the render context, which is the only place it is", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    const get = tool(piTools(), "memory_get");
+
+    const { text } = get.renderResult!(
+      { content: [{ type: "text", text: "404: no such memory" }], details: {} },
+      { expanded: false, isPartial: false },
+      painted,
+      { isError: true },
+    );
+
+    expect(text).toBe("<error>✗ <dim>404: no such memory <accent>(failed)");
+  });
+
+  it("reads an OMP failure from the result object, which is where OMP puts it", () => {
+    const get = tool(ompTools(), "memory_get");
+
+    const { text } = get.renderResult!(
+      { content: [{ type: "text", text: "404: no such memory" }], details: {}, isError: true },
+      { expanded: false, isPartial: false },
+      painted,
+    );
+
+    expect(text).toBe("<error>✗ <dim>404: no such memory <accent>(failed)");
+  });
+
+  it("keeps the tool name out of the result line both harnesses print below the call", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    const result = {
+      content: [{ type: "text", text: "stored" }],
+      details: { id: "01M0", type: "fact" },
+    };
+
+    for (const tools of [piTools(), ompTools()]) {
+      const { text } = tool(tools, "memory_remember").renderResult!(result, {}, painted, {});
+      expect(text).toContain("01M0");
+      expect(text).not.toContain("Remember");
+    }
+  });
+
+  it("strips terminal control sequences out of arguments in both harnesses", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    const query = `${String.fromCharCode(27)}[2Jwiped${String.fromCharCode(0)}query`;
+
+    const pi = tool(piTools(), "memory_recall").renderCall!({ query }, painted, {});
+    const omp = tool(ompTools(), "memory_recall").renderCall!({ query }, {}, painted);
+
+    for (const { text } of [pi, omp]) {
+      expect(text).toContain("wiped query");
+      expect(text).not.toContain(String.fromCharCode(27));
+      expect(text).not.toContain(String.fromCharCode(0));
+    }
   });
 });
