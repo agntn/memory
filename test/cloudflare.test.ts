@@ -256,6 +256,51 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     await expect(profile.recall("question")).rejects.toBeInstanceOf(MemoryError);
   });
 
+  it("keeps the candidates when the service skips the synthesized answer", async () => {
+    const candidate = { id: memory.id, summary: memory.summary, sessionId: null, score: 0.4 };
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ count: 1, candidates: [candidate] }),
+    );
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const profile = await provider.getProfile("user");
+
+    await expect(profile.recall("what does the user prefer")).resolves.toEqual({
+      count: 1,
+      candidates: [candidate],
+    });
+  });
+
+  it("treats an empty object as the empty result a deletion returns", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse({}));
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const profile = await provider.getProfile("user");
+
+    await expect(profile.deleteSession("session-1")).resolves.toBeUndefined();
+  });
+
+  it("still rejects a body where an empty result belongs", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse("deleted"));
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const profile = await provider.getProfile("user");
+
+    await expect(profile.deleteSession("session-1")).rejects.toBeInstanceOf(MemoryHttpError);
+  });
+
   it("rejects malformed Cloudflare response bodies with a typed HTTP error", async () => {
     const fetcher = vi.fn<typeof fetch>(
       async () => new Response("<html>bad gateway</html>", { status: 502 }),
