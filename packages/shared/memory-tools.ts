@@ -268,11 +268,22 @@ function requireCapability<K extends keyof MemoryProfile>(
 }
 
 function json(value: unknown): string {
-  return JSON.stringify(
-    value,
-    (_key, item) => (item instanceof Date ? item.toISOString() : item),
-    2,
-  );
+  return JSON.stringify(value, dateAsIso, 2);
+}
+
+function dateAsIso(_key: string, item: unknown): unknown {
+  return item instanceof Date ? item.toISOString() : item;
+}
+
+/**
+ * Render records as one compact JSON object per line.
+ *
+ * Recall already answers this way. A pretty-printed list spends about an eighth
+ * of its bytes on indentation, which every reader of a thirty-memory page pays
+ * for and none of them asked for.
+ */
+function jsonLines(values: readonly unknown[]): string {
+  return values.map((value) => JSON.stringify(value, dateAsIso)).join("\n");
 }
 
 export function memoryTarget(params: ProfileParams): string {
@@ -396,6 +407,29 @@ function recallText(
       ? ""
       : `, full content on the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
   return `${header}\n\n${answer}\n\nCandidates (${candidates.length}), one JSON object per line${expansion}:\n${candidates.join("\n")}`;
+}
+
+/**
+ * Render a page of memories, naming where it came from and what follows it.
+ *
+ * The records go out one per line, so the header is the only place left to say
+ * whether another page waits. Dropping that would leave a caller unable to tell
+ * a finished listing from a truncated one.
+ */
+function listText(
+  params: ProfileParams,
+  memories: readonly unknown[],
+  cursor: string | undefined,
+): string {
+  const target = memoryTarget(params);
+  if (memories.length === 0) {
+    return cursor === undefined
+      ? `No memories in ${target}.`
+      : `No memories on this page of ${target}; more pages behind cursor ${cursor}.`;
+  }
+  const following = cursor === undefined ? "last page" : `more pages behind cursor ${cursor}`;
+  const header = `Memories in ${target} (${memories.length}), ${following}, one JSON object per line:`;
+  return `${header}\n${jsonLines(memories)}`;
 }
 
 /** How much a cascade delete removed, or `undefined` when it could not be read. */
@@ -558,7 +592,7 @@ export const memoryToolExecutors = {
     );
     const page = paged({ ...result, memories });
     return {
-      content: [{ type: "text", text: json(page) }],
+      content: [{ type: "text", text: listText(params, memories, result.cursor) }],
       details: page,
     };
   },
@@ -598,7 +632,7 @@ export const memoryToolExecutors = {
         ? ""
         : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => id).join(", ")}.\n`;
     return {
-      content: [{ type: "text", text: `${header}${json(memories)}` }],
+      content: [{ type: "text", text: `${header}${jsonLines(memories)}` }],
       details: { memories },
     };
   },

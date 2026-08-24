@@ -55,6 +55,14 @@ function textOf(result: { content: Array<{ text: string }> }): string {
   return result.content.map((part) => part.text).join("\n");
 }
 
+/** Read back the records a listing wrote, one JSON object per line under its header. */
+function records(result: { content: Array<{ text: string }> }): unknown[] {
+  return textOf(result)
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as unknown);
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -224,10 +232,8 @@ describe("list result", () => {
       expand: 2,
     });
 
-    const page = JSON.parse(textOf(result)) as {
-      memories: Array<{ id: string; content?: string }>;
-    };
-    expect(page.memories.map((memory) => [memory.id, memory.content])).toEqual([
+    const memories = records(result) as Array<{ id: string; content?: string }>;
+    expect(memories.map((memory) => [memory.id, memory.content])).toEqual([
       ["mem-1", "full content of mem-1"],
       ["mem-2", "full content of mem-2"],
       ["mem-3", undefined],
@@ -247,11 +253,9 @@ describe("list result", () => {
       expand: 5,
     });
 
-    const page = JSON.parse(textOf(result)) as {
-      memories: Array<{ id: string; content?: string | null }>;
-    };
-    expect(page.memories).toHaveLength(1);
-    expect(page.memories[0]).toMatchObject({ id: "mem-gone", content: null });
+    const memories = records(result) as Array<{ id: string; content?: string | null }>;
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({ id: "mem-gone", content: null });
   });
 
   it("rejects an out-of-range expand before calling the service", async () => {
@@ -270,6 +274,25 @@ describe("list result", () => {
   });
 });
 
+describe("listing format", () => {
+  it("prints one JSON object per line under a header that names the page", async () => {
+    stubCloudflare({
+      result: [memoryEntry("mem-1", "s1"), memoryEntry("mem-2", null)],
+      resultInfo: { cursor: "next" },
+    });
+
+    const result = await memoryToolExecutors.list({ namespace: "listing", profile: "agent" });
+
+    const [header, ...body] = textOf(result).split("\n");
+    expect(header).toBe(
+      "Memories in listing/agent (2), more pages behind cursor next, one JSON object per line:",
+    );
+    expect(body).toHaveLength(2);
+    expect(body.every((line) => !line.includes("\n") && line.startsWith("{"))).toBe(true);
+    expect(JSON.parse(body[0] ?? "{}")).toMatchObject({ id: "mem-1", sessionId: "s1" });
+  });
+});
+
 describe("paged results", () => {
   it("marks the last page instead of omitting the cursor", async () => {
     stubCloudflare({ result: [] });
@@ -280,7 +303,8 @@ describe("paged results", () => {
       limit: 10,
     });
 
-    expect(JSON.parse(textOf(result))).toMatchObject({ cursor: null, hasMore: false });
+    expect(textOf(result)).toBe("No memories in page-end/agent.");
+    expect(result.details).toMatchObject({ cursor: null, hasMore: false });
   });
 
   it("passes the next cursor through", async () => {
@@ -292,7 +316,8 @@ describe("paged results", () => {
       limit: 10,
     });
 
-    expect(JSON.parse(textOf(result))).toMatchObject({ cursor: "next-page", hasMore: true });
+    expect(textOf(result)).toContain("more pages behind cursor next-page");
+    expect(result.details).toMatchObject({ cursor: "next-page", hasMore: true });
   });
 
   it("marks namespace pages the same way", async () => {
@@ -451,7 +476,7 @@ describe("get result", () => {
       memoryIds: ["mem-2", "mem-1"],
     });
 
-    const memories = JSON.parse(textOf(result)) as Array<{ id: string; content: string }>;
+    const memories = records(result) as Array<{ id: string; content: string }>;
     expect(memories.map((memory) => memory.id)).toEqual(["mem-2", "mem-1"]);
     expect(memories[0]?.content).toBe("content mem-2");
     expect(urls).toHaveLength(2);
@@ -472,7 +497,7 @@ describe("get result", () => {
 
     const [header, ...body] = textOf(result).split("\n");
     expect(header).toBe("Read 1 of 2 memories; error entries for: mem-missing.");
-    const memories = JSON.parse(body.join("\n")) as Array<Record<string, unknown>>;
+    const memories = body.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(memories[0]).toMatchObject({ id: "mem-1", content: "content mem-1" });
     expect(memories[1]).toEqual({
       id: "mem-missing",
@@ -493,7 +518,7 @@ describe("get result", () => {
       memoryIds: ["mem-1", "mem-1", "mem-2"],
     });
 
-    const memories = JSON.parse(textOf(result)) as Array<{ id: string }>;
+    const memories = records(result) as Array<{ id: string }>;
     expect(memories.map((memory) => memory.id)).toEqual(["mem-1", "mem-2"]);
     expect(urls).toHaveLength(2);
   });
