@@ -89,6 +89,13 @@ function createTools(): MemoryToolDefinition[] {
         memoryToolExecutors.listNamespaces(args as NamespaceListParams, options),
     },
     {
+      name: "memory_namespace_get",
+      inputSchema: namespaceParameters,
+      annotations: readAnnotations,
+      execute: (args, options) =>
+        memoryToolExecutors.getNamespace(args as NamespaceParams, options),
+    },
+    {
       name: "memory_namespace_create",
       inputSchema: namespaceParameters,
       annotations: writeAnnotations,

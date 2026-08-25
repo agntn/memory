@@ -329,6 +329,27 @@ describe("paged results", () => {
   });
 });
 
+describe("namespace get result", () => {
+  it("returns the one namespace as JSON", async () => {
+    const urls = stubCloudflare({
+      result: {
+        id: "ns-1",
+        name: "probe",
+        created_at: "2026-08-17T00:00:00.000Z",
+        updated_at: "2026-08-17T00:00:00.000Z",
+      },
+    });
+
+    const result = await memoryToolExecutors.getNamespace({ namespace: "probe" });
+
+    expect(urls).toEqual([
+      "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/probe",
+    ]);
+    expect(JSON.parse(textOf(result))).toMatchObject({ id: "ns-1", name: "probe" });
+    expect(result.details).toMatchObject({ id: "ns-1", name: "probe" });
+  });
+});
+
 describe("ingest result", () => {
   it("states that extraction is asynchronous", async () => {
     stubCloudflare({ result: null });

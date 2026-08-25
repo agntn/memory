@@ -35,6 +35,7 @@ vi.mock("@oh-my-pi/pi-tui", () => ({
 
 const expectedNames = [
   "memory_namespace_list",
+  "memory_namespace_get",
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",
@@ -100,6 +101,7 @@ describe("memory extensions", () => {
     ).toBe(true);
     expect(requiresNamespace(tools[0]!)).toBe(false);
     expect(tools.map((tool) => tool.approval)).toEqual([
+      "read",
       "read",
       "write",
       "write",

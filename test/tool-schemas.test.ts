@@ -159,6 +159,7 @@ function ompToolParameters(): Map<string, unknown> {
 /** Tool name to the schema Pi and MCP publish for it. */
 const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_namespace_list: sharedSchemas.namespaceListParameters,
+  memory_namespace_get: sharedSchemas.namespaceParameters,
   memory_namespace_create: sharedSchemas.namespaceParameters,
   memory_namespace_delete: sharedSchemas.namespaceParameters,
   memory_remember: sharedSchemas.rememberParameters,

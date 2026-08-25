@@ -1,6 +1,6 @@
 # @agntn/memory
 
-One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same twelve tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
+One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same thirteen tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
 
 ## Install
 
@@ -38,6 +38,7 @@ const namespaces = new CloudflareNamespaceClient({
 
 await namespaces.create("my-agent");
 const page = await namespaces.list({ limit: 20, order: "name" });
+const one = await namespaces.get("my-agent");
 await namespaces.delete("my-agent");
 ```
 
@@ -89,7 +90,7 @@ Over HTTP the signal goes straight to `fetch` and kills the request in flight. A
 
 ## Pi and OMP extensions
 
-Pi and OMP each get a native extension with all twelve tools. They talk to Cloudflare over HTTP, so the host needs credentials:
+Pi and OMP each get a native extension with all thirteen tools. They talk to Cloudflare over HTTP, so the host needs credentials:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID="..."
@@ -120,7 +121,7 @@ Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/
 
 ## MCP server
 
-Same twelve tools over the Model Context Protocol, same credentials, stdio transport:
+Same thirteen tools over the Model Context Protocol, same credentials, stdio transport:
 
 ```bash
 memory mcp

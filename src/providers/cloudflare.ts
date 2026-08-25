@@ -445,12 +445,12 @@ function parseNamespaces(value: unknown): CloudflareNamespace[] {
 }
 
 class CloudflareHttpClient {
-  private readonly fetcher: typeof globalThis.fetch;
+  private readonly fetcher?: typeof globalThis.fetch;
   private readonly apiToken: string;
   private readonly baseURL: string;
 
   constructor(options: CloudflareAccountOptions, path: string) {
-    this.fetcher = options.fetch ?? globalThis.fetch;
+    this.fetcher = options.fetch;
     this.apiToken = options.apiToken;
     this.baseURL = `${CLOUDFLARE_API_URL}/accounts/${encodePath(options.accountId)}/agent-memory${path}`;
   }
@@ -461,7 +461,8 @@ class CloudflareHttpClient {
     init: RequestInit = {},
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
-      const response = await this.fetcher(`${this.baseURL}${path}`, {
+      /** The global fallback is read per request, so a fetch installed after the client (a polyfill, a test stub) still applies. */
+      const response = await (this.fetcher ?? globalThis.fetch)(`${this.baseURL}${path}`, {
         ...init,
         headers: {
           Authorization: `Bearer ${this.apiToken}`,
@@ -734,6 +735,16 @@ export class CloudflareNamespaceClient {
       namespaces: response.result,
       ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
     };
+  }
+
+  /** Reads one Agent Memory namespace by name. */
+  async get(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
+    assertNamespaceName(name);
+    return (
+      await this.client.request(`/${encodePath(name)}`, parseNamespace, {
+        signal: options.signal,
+      })
+    ).result;
   }
 
   /** Creates an Agent Memory namespace. */

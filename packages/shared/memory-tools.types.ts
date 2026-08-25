@@ -21,6 +21,7 @@ export interface MemoryModule {
       namespaces: NamespaceResult[];
       cursor?: string;
     }>;
+    get(name: string, options?: AbortOptions): Promise<NamespaceResult>;
     create(name: string, options?: AbortOptions): Promise<NamespaceResult>;
     delete(name: string, options?: AbortOptions): Promise<void>;
   };
