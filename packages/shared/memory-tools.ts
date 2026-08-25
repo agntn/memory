@@ -69,7 +69,8 @@ export const MAX_TOOL_INGEST_MESSAGES = 500;
  *
  * Recall and list expansion and memory_get share it. Every full record is one
  * read against the service, and measured recall responses have never carried
- * more than 30 candidates.
+ * more than 30 candidates. That same measurement bounds recall's candidates
+ * cap, so it reuses this constant.
  */
 export const MAX_TOOL_EXPAND = 30;
 
@@ -113,7 +114,7 @@ export const memoryToolMeta = {
   memory_recall: {
     label: "Recall",
     description:
-      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. Candidate summaries are capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get.",
+      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. Candidate summaries are capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get.",
   },
   memory_list: {
     label: "List Memories",
@@ -186,6 +187,8 @@ export const memoryFieldDescriptions = {
     "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
   responseLength: "Requested length of the prose answer. Defaults to medium.",
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
+  candidates:
+    "How many of the best-scoring candidates to keep in the result. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged.",
   expand:
     "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
   listExpand:
@@ -306,16 +309,16 @@ function paged<T extends { cursor?: string }>(result: T): Record<string, unknown
 }
 
 /**
- * Check the expand bounds before any round-trip is paid.
+ * Check a count parameter's bounds before any round-trip is paid.
  *
  * Schemas enforce them for tool callers, but the executors are exported, and
  * handed in directly a negative count would silently slice from the wrong end
- * while an oversized one would authorize more reads than the published cap.
+ * while an oversized one would step over the published cap.
  */
-function assertExpand(expand: number | undefined): void {
-  if (expand === undefined) return;
-  if (!Number.isInteger(expand) || expand < 1 || expand > MAX_TOOL_EXPAND) {
-    throw new Error(`Expand must be an integer between 1 and ${MAX_TOOL_EXPAND}`);
+function assertCount(value: number | undefined, label: string): void {
+  if (value === undefined) return;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_TOOL_EXPAND) {
+    throw new Error(`${label} must be an integer between 1 and ${MAX_TOOL_EXPAND}`);
   }
 }
 
@@ -377,6 +380,28 @@ async function readContents(
   );
 }
 
+/**
+ * Keep the best-scoring candidates, in the order the service ranked them.
+ *
+ * The service takes no candidate cap itself, so a busy profile answers every
+ * recall with its full candidate set, tail scores included. The selection
+ * follows the same rule as expand, by score, and the kept candidates stay in
+ * service order.
+ */
+function trimCandidates(
+  candidates: readonly RecallCandidate[],
+  limit: number | undefined,
+): readonly RecallCandidate[] {
+  if (limit === undefined || candidates.length <= limit) return candidates;
+  const kept = new Set(
+    candidates
+      .toSorted((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((candidate) => candidate.id),
+  );
+  return candidates.filter((candidate) => kept.has(candidate.id));
+}
+
 /** Read the full content behind the best-scoring recall candidates. */
 function expandCandidates(
   profile: MemoryProfile,
@@ -402,12 +427,13 @@ function expandCandidates(
 function recallText(
   params: ProfileParams,
   result: RecallResult,
+  shown: readonly RecallCandidate[],
   expanded: Map<string, string | null>,
 ): string {
   const answer = result.answer || "No answer returned.";
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
-  const candidates = result.candidates.map((candidate) =>
+  const candidates = shown.map((candidate) =>
     JSON.stringify({
       ...candidate,
       namespace: params.namespace,
@@ -415,12 +441,17 @@ function recallText(
       ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
     }),
   );
+  const trimmed = result.candidates.length - shown.length;
+  const count =
+    trimmed === 0
+      ? `${shown.length}`
+      : `${shown.length} of ${result.candidates.length}, the ${trimmed} lowest-scoring trimmed`;
   const failed = expanded.values().some((content) => content === null);
   const expansion =
     expanded.size === 0
       ? ""
       : `, full content on the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
-  return `${header}\n\n${answer}\n\nCandidates (${candidates.length}), one JSON object per line${expansion}:\n${candidates.join("\n")}`;
+  return `${header}\n\n${answer}\n\nCandidates (${count}), one JSON object per line${expansion}:\n${candidates.join("\n")}`;
 }
 
 /**
@@ -565,9 +596,10 @@ export const memoryToolExecutors = {
     };
   },
 
-  /** Answer a recall query, expanding the best-scoring candidates on request. */
+  /** Answer a recall query, trimming and expanding the candidates on request. */
   async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertExpand(params.expand);
+    assertCount(params.candidates, "Candidates");
+    assertCount(params.expand, "Expand");
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
@@ -575,16 +607,17 @@ export const memoryToolExecutors = {
       referenceDate: optionalString(params.referenceDate),
       ...options,
     });
-    const expanded = await expandCandidates(profile, result.candidates, params.expand, options);
+    const shown = trimCandidates(result.candidates, params.candidates);
+    const expanded = await expandCandidates(profile, shown, params.expand, options);
     return {
-      content: [{ type: "text", text: recallText(params, result, expanded) }],
-      details: result as unknown as Record<string, unknown>,
+      content: [{ type: "text", text: recallText(params, result, shown, expanded) }],
+      details: { ...result, candidates: shown },
     };
   },
 
   /** List a page of memories, expanding the first entries on request. */
   async list(params: ListParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertExpand(params.expand);
+    assertCount(params.expand, "Expand");
     const profile = await getProfile(params);
     const result = await requireCapability(
       profile,

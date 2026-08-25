@@ -154,6 +154,13 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       referenceDate: Type.Optional(
         Type.String({ description: memoryFieldDescriptions.referenceDate }),
       ),
+      candidates: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TOOL_EXPAND,
+          description: memoryFieldDescriptions.candidates,
+        }),
+      ),
       expand: Type.Optional(
         Type.Integer({
           minimum: 1,
