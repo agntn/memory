@@ -154,6 +154,74 @@ describe("recall result", () => {
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
   });
 
+  it("keeps only the best-scoring candidates when a cap is passed", async () => {
+    const urls = stubCloudflare({
+      result: {
+        count: 4,
+        answer: "Oritwoen builds with pnpm.",
+        candidates: [
+          { id: "mem-low", summary: "truncated", sessionId: null, score: 0.13 },
+          { id: "mem-top", summary: "truncated", sessionId: null, score: 0.82 },
+          { id: "mem-mid", summary: "truncated", sessionId: null, score: 0.41 },
+          { id: "mem-tail", summary: "truncated", sessionId: null, score: 0.0002 },
+        ],
+      },
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-trim",
+      profile: "agent",
+      query: "build tooling",
+      candidates: 2,
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (2 of 4, the 2 lowest-scoring trimmed), one JSON object per line:",
+    );
+    expect(records(result).map((candidate) => (candidate as { id: string }).id)).toEqual([
+      "mem-top",
+      "mem-mid",
+    ]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
+  });
+
+  it("expands only the candidates the cap kept", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 3,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [
+            { id: "mem-low", summary: "truncated", sessionId: null, score: 0.13 },
+            { id: "mem-top", summary: "truncated", sessionId: null, score: 0.82 },
+            { id: "mem-mid", summary: "truncated", sessionId: null, score: 0.41 },
+          ],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-trim-expand",
+      profile: "agent",
+      query: "build tooling",
+      candidates: 2,
+      expand: 3,
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (2 of 3, the 1 lowest-scoring trimmed), one JSON object per line, full content on the 2 best-scoring:",
+    );
+    expect(records(result)).toMatchObject([
+      { id: "mem-top", content: "full content of mem-top" },
+      { id: "mem-mid", content: "full content of mem-mid" },
+    ]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
+  });
+
   it("rejects an out-of-range expand before calling the service", async () => {
     const urls = stubCloudflare({ result: { count: 0, answer: "", candidates: [] } });
 
@@ -166,6 +234,22 @@ describe("recall result", () => {
           expand,
         }),
       ).rejects.toThrow("Expand must be an integer between 1 and 30");
+    }
+    expect(urls).toHaveLength(0);
+  });
+
+  it("rejects an out-of-range candidates cap before calling the service", async () => {
+    const urls = stubCloudflare({ result: { count: 0, answer: "", candidates: [] } });
+
+    for (const candidates of [0, 31]) {
+      await expect(
+        memoryToolExecutors.recall({
+          namespace: "recall-trim-guard",
+          profile: "agent",
+          query: "build tooling",
+          candidates,
+        }),
+      ).rejects.toThrow("Candidates must be an integer between 1 and 30");
     }
     expect(urls).toHaveLength(0);
   });

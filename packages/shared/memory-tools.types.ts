@@ -62,6 +62,7 @@ export interface RecallParams extends ProfileParams {
   thinkingLevel?: ThinkingLevel;
   responseLength?: ResponseLength;
   referenceDate?: string;
+  candidates?: number;
   expand?: number;
 }
 
