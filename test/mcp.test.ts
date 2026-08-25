@@ -88,6 +88,7 @@ describe("memory MCP server", () => {
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
     vi.stubEnv("CLAUDE_PROJECT_DIR", "/workspace/movie-enigma");
     vi.stubEnv("CLAUDE_CODE_SESSION_ID", "conversation-123");
+    vi.stubEnv("GROK_SESSION_ID", "grok-conversation-999");
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal(
       "fetch",
@@ -131,6 +132,55 @@ describe("memory MCP server", () => {
         body: {
           content: "one canonical memory",
           sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
+        },
+      },
+    ]);
+  });
+
+  it("falls back to the Grok session when no Claude session is in the environment", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("CLAUDE_PROJECT_DIR", "");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "");
+    vi.stubEnv("GROK_SESSION_ID", "grok-conversation-123");
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        });
+        return Response.json({
+          success: true,
+          result: {
+            id: "memory-grok",
+            type: "fact",
+            summary: "remembered",
+            content: "remembered",
+            sessionId: null,
+            createdAt: "2026-08-25T00:00:00.000Z",
+            updatedAt: "2026-08-25T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: { content: "one canonical memory" },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/default/profiles/oritwoen/remember"),
+        body: {
+          content: "one canonical memory",
+          sessionId: memorySessionId("grok", process.cwd(), "grok-conversation-123"),
         },
       },
     ]);

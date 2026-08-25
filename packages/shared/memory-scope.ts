@@ -167,3 +167,19 @@ export function claudeCodeMemorySessionId(
   if (!cwd || !conversationId) return undefined;
   return memorySessionId("claude", cwd, conversationId);
 }
+
+/**
+ * Derive Grok CLI's stable session key from the environment injected into MCP children.
+ * Grok injects only GROK_SESSION_ID and starts the child in the project root, so the child's
+ * own working directory stands in for a directory variable. Both harnesses leak their session
+ * variable into shell subprocesses, so a nested launch can carry both markers at once and the
+ * caller decides which harness wins.
+ */
+export function grokMemorySessionId(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): string | undefined {
+  const conversationId = env.GROK_SESSION_ID?.trim();
+  if (!conversationId) return undefined;
+  return memorySessionId("grok", cwd, conversationId);
+}

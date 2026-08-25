@@ -19,6 +19,7 @@ import {
   applyMemoryWriteScope,
   claudeCodeMemorySessionId,
   configuredMemoryScope,
+  grokMemorySessionId,
 } from "../packages/shared/memory-scope.ts";
 import { memoryToolExecutors, memoryToolMeta } from "../packages/shared/memory-tools.ts";
 import type {
@@ -77,7 +78,11 @@ function createTools(): MemoryToolDefinition[] {
   function operationalWriteParams<T extends object>(
     args: T,
   ): T & ProfileParams & { sessionId?: string } {
-    return applyMemoryWriteScope(args, operationalScope, claudeCodeMemorySessionId());
+    return applyMemoryWriteScope(
+      args,
+      operationalScope,
+      claudeCodeMemorySessionId() ?? grokMemorySessionId(),
+    );
   }
 
   return [
