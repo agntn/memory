@@ -105,8 +105,11 @@ const META_WIDTH = 40;
  */
 const COLLAPSED_BODY_LINES = 10;
 /**
- * A line wider than a few terminals carries no more information, and capping it
- * bounds both the wrapping cost and the escape sequence scan below.
+ * How much of a line the sanitizer reads before it gives up on the rest.
+ *
+ * A status field is a few dozen characters wide, so scanning a huge line whole
+ * buys nothing there. An expanded body passes no cap, because the whole line is
+ * what the reader opened the result for.
  */
 const LINE_WIDTH_CAP = 2048;
 /**
@@ -148,11 +151,13 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
  * call. Model arguments and stored memory text cross a trust boundary: the Text
  * component forwards ANSI and OSC sequences and raw control bytes unchanged.
  * `String()` comes first because hostile JSON ignores the declared types.
+ * `cap` is where the scan stops and an ellipsis takes over. A caller that needs
+ * the line intact raises it.
  */
-function stripControlBytes(value: unknown): string {
+function stripControlBytes(value: unknown, cap = LINE_WIDTH_CAP): string {
   const text = String(value);
-  const long = text.length > LINE_WIDTH_CAP;
-  const bounded = long ? cutAt(text, LINE_WIDTH_CAP) : text;
+  const long = text.length > cap;
+  const bounded = long ? cutAt(text, cap) : text;
   /* oxlint-disable-next-line no-control-regex */
   const clean = stripVTControlCharacters(bounded)
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
@@ -408,8 +413,10 @@ export function renderToolResult(
     expanded ? Number.POSITIVE_INFINITY : COLLAPSED_BODY_LINES,
   );
   const rendered = lines.map((text) => {
-    const clean = stripControlBytes(text);
-    return `  ${paint(theme, "toolOutput", expanded ? clean : clip(clean, PREVIEW_LINE_WIDTH))}`;
+    const clean = expanded
+      ? stripControlBytes(text, Number.POSITIVE_INFINITY)
+      : clip(stripControlBytes(text), PREVIEW_LINE_WIDTH);
+    return `  ${paint(theme, "toolOutput", clean)}`;
   });
   if (hidden > 0) rendered.push(`  ${paint(theme, "muted", `… ${hidden} more lines`)}`);
 
