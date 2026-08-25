@@ -133,7 +133,7 @@ export const memoryToolMeta = {
   memory_summary: {
     label: "Memory Summary",
     description:
-      "Summarize a memory profile or one session. The service returns Markdown prose without memory ids; use memory_list or memory_recall when ids are needed.",
+      "Summarize a memory profile or one session. Use it to get oriented in what a profile holds when there is no specific question to ask; with a question in hand, memory_recall answers it directly. The service returns Markdown prose without memory ids; use memory_list or memory_recall when ids are needed.",
   },
   memory_delete_session: {
     label: "Delete Memory Session",

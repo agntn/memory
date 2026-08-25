@@ -265,7 +265,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "memory_summary",
     ...memoryToolMeta.memory_summary,
-    promptSnippet: "Get a compact memory summary.",
+    promptSnippet: "Summarize a profile or session when there is no specific question to ask.",
     promptGuidelines: ["Pass sessionId only when a session-scoped summary is needed."],
     parameters: summaryParameters,
     renderCall: callRenderer(memoryToolMeta.memory_summary.label),
