@@ -116,6 +116,23 @@ export default function memoryExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "memory_namespace_get",
+    ...memoryToolMeta.memory_namespace_get,
+    promptSnippet: "Get one exact Agent Memory namespace.",
+    promptGuidelines: ["Use the exact name; memory_namespace_list shows the existing ones."],
+    parameters: namespaceParameters,
+    renderCall: callRenderer(memoryToolMeta.memory_namespace_get.label, false),
+    renderResult: resultLine,
+    execute(
+      _id,
+      params: NamespaceParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.getNamespace(params, { signal });
+    },
+  });
+
+  pi.registerTool({
     name: "memory_namespace_create",
     ...memoryToolMeta.memory_namespace_create,
     promptSnippet: "Create an Agent Memory namespace.",

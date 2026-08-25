@@ -320,6 +320,22 @@ export default function memoryExtension(omp: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "memory_namespace_get",
+    ...memoryToolMeta.memory_namespace_get,
+    approval: "read",
+    parameters: namespaceParameters,
+    renderCall: callRenderer(memoryToolMeta.memory_namespace_get.label, false),
+    renderResult: resultLine,
+    execute(
+      _id,
+      params: NamespaceParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.getNamespace(params, { signal });
+    },
+  });
+
+  pi.registerTool({
     name: "memory_namespace_create",
     ...memoryToolMeta.memory_namespace_create,
     approval: "write",

@@ -737,6 +737,16 @@ export class CloudflareNamespaceClient {
     };
   }
 
+  /** Reads one Agent Memory namespace by name. */
+  async get(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
+    assertNamespaceName(name);
+    return (
+      await this.client.request(`/${encodePath(name)}`, parseNamespace, {
+        signal: options.signal,
+      })
+    ).result;
+  }
+
   /** Creates an Agent Memory namespace. */
   async create(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
     assertNamespaceName(name);

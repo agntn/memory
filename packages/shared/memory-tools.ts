@@ -85,6 +85,11 @@ export const memoryToolMeta = {
     label: "List Memory Namespaces",
     description: "List Cloudflare Agent Memory namespaces for the configured account.",
   },
+  memory_namespace_get: {
+    label: "Get Memory Namespace",
+    description:
+      "Get one Cloudflare Agent Memory namespace by exact name: its id and timestamps. A name that does not exist returns a not-found error, so this is also the cheap way to check that a namespace is there without paging through the listing.",
+  },
   memory_namespace_create: {
     label: "Create Memory Namespace",
     description:
@@ -744,6 +749,17 @@ export const memoryToolExecutors = {
     return {
       content: [{ type: "text", text: json(page) }],
       details: page,
+    };
+  },
+
+  async getNamespace(
+    params: NamespaceParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    const namespace = await (await getNamespaceClient()).get(params.namespace, options);
+    return {
+      content: [{ type: "text", text: json(namespace) }],
+      details: namespace as unknown as Record<string, unknown>,
     };
   },
 

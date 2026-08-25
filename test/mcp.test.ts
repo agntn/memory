@@ -8,6 +8,7 @@ const openConnections: Array<{ close(): Promise<void> }> = [];
 
 const expectedNames = [
   "memory_namespace_list",
+  "memory_namespace_get",
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",

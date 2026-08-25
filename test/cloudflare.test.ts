@@ -318,16 +318,17 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
 });
 
 describe("CloudflareNamespaceClient", () => {
-  it("lists, creates, and deletes namespaces through the account API", async () => {
+  it("lists, gets, creates, and deletes namespaces through the account API", async () => {
     const namespace = {
       id: "namespace-id",
       name: "test-namespace",
       created_at: "2026-08-17T00:00:00.000Z",
       updated_at: "2026-08-17T00:00:00.000Z",
     };
-    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       if (init?.method === "DELETE") return jsonResponse(null);
       if (init?.method === "POST") return jsonResponse(namespace, { status: 201 });
+      if (String(input).endsWith("/namespaces/test-namespace")) return jsonResponse(namespace);
       return Response.json({
         result: [namespace],
         success: true,
@@ -347,6 +348,12 @@ describe("CloudflareNamespaceClient", () => {
       namespaces: [{ id: "namespace-id", name: "test-namespace" }],
       cursor: "next",
     });
+    await expect(client.get("test-namespace")).resolves.toEqual({
+      id: "namespace-id",
+      name: "test-namespace",
+      createdAt: new Date("2026-08-17T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-17T00:00:00.000Z"),
+    });
     await expect(client.create("test-namespace")).resolves.toMatchObject({
       id: "namespace-id",
       name: "test-namespace",
@@ -355,10 +362,12 @@ describe("CloudflareNamespaceClient", () => {
 
     expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
       "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces?per_page=20&cursor=cursor&order=name&direction=asc",
+      "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces/test-namespace",
       "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces",
       "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces/test-namespace",
     ]);
-    expect(fetcher.mock.calls[1]?.[1]?.body).toBe('{"name":"test-namespace"}');
+    expect(fetcher.mock.calls[1]?.[1]?.method).toBeUndefined();
+    expect(fetcher.mock.calls[2]?.[1]?.body).toBe('{"name":"test-namespace"}');
   });
 
   it("pages namespaces up to the cap the namespaces endpoint publishes", async () => {
@@ -393,6 +402,7 @@ describe("CloudflareNamespaceClient", () => {
     });
 
     await expect(client.create("Invalid Namespace")).rejects.toBeInstanceOf(MemoryInputError);
+    await expect(client.get("Invalid Namespace")).rejects.toBeInstanceOf(MemoryInputError);
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
