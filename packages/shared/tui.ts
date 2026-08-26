@@ -38,6 +38,8 @@ export type StatusIcon = "pending" | "running" | "done" | "error";
 export interface StatusLine {
   icon?: StatusIcon;
   spinnerFrame?: number;
+  /** Memory-specific mark that makes neighboring tool calls easy to scan. */
+  symbol?: string;
   /** Left out of a result line, whose call line already names the tool. */
   title?: string;
   description?: string;
@@ -61,24 +63,41 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 
 const ICONS: Record<StatusIcon, { glyph: string; color: string }> = {
   pending: { glyph: "·", color: "muted" },
-  running: { glyph: "·", color: "accent" },
+  running: { glyph: "◌", color: "accent" },
   done: { glyph: "✓", color: "success" },
   error: { glyph: "✗", color: "error" },
 };
 
+/** Visual vocabulary shared by the Pi and OMP memory extensions. */
+export const MEMORY_TOOL_SYMBOLS = {
+  memory_namespace_list: "🗂️",
+  memory_namespace_get: "📂",
+  memory_namespace_create: "➕",
+  memory_namespace_delete: "🗑️",
+  memory_remember: "🧠",
+  memory_ingest: "📥",
+  memory_recall: "🔎",
+  memory_list: "📚",
+  memory_get: "📖",
+  memory_delete: "🗑️",
+  memory_summary: "📝",
+  memory_delete_session: "🧹",
+  memory_delete_profile: "🗑️",
+} as const;
+
 /** Argument carrying the subject of the call, most specific first. */
 const CALL_SUBJECT_KEYS = ["query", "content", "memoryIds", "memoryId", "sessionId"] as const;
 
-/** Arguments worth showing next to the subject as `key=value`. */
-const CALL_META_KEYS = [
-  "type",
-  "thinkingLevel",
-  "responseLength",
-  "expand",
-  "limit",
-  "order",
-  "direction",
-] as const;
+/** Human labels for arguments worth showing next to the subject. */
+const CALL_META_LABELS = {
+  type: "type",
+  thinkingLevel: "thinking",
+  responseLength: "response",
+  expand: "expand",
+  limit: "limit",
+  order: "order",
+  direction: "direction",
+} as const;
 
 /**
  * Result fields naming what the service assigned.
@@ -88,14 +107,20 @@ const CALL_META_KEYS = [
  */
 const RESULT_NAME_KEYS = ["name", "id"] as const;
 
-/** Result fields worth restating next to the name. */
-const RESULT_FACT_KEYS = ["type", "sessionId"] as const;
+/** Human labels for result fields worth restating next to the name. */
+const RESULT_FACT_LABELS = { type: "type", sessionId: "session" } as const;
 
 /**
  * Result fields carrying a count. A tool reports the same fact as a number or
  * as the array behind it, so both forms are read here.
  */
-const RESULT_COUNT_KEYS = ["count", "messageCount", "memories", "namespaces"] as const;
+const RESULT_COUNT_LABELS = {
+  count: ["item", "items"],
+  messageCount: ["message", "messages"],
+  candidates: ["candidate", "candidates"],
+  memories: ["memory", "memories"],
+  namespaces: ["namespace", "namespaces"],
+} as const;
 
 const SUBJECT_WIDTH = 72;
 const META_WIDTH = 40;
@@ -245,6 +270,7 @@ export function describeToolCall(
   label: string,
   args: unknown,
   options?: RenderOptions,
+  symbol?: string,
 ): StatusLine {
   const record = isRecord(args) ? args : {};
   const target = callTarget(record);
@@ -261,14 +287,15 @@ export function describeToolCall(
   const meta: string[] = [];
   if (subject !== undefined && target !== undefined) meta.push(field(target, META_WIDTH));
   if (Array.isArray(record.messages)) meta.push(`messages ${record.messages.length}`);
-  for (const key of CALL_META_KEYS) {
+  for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
     const value = scalarText(record[key]);
-    if (value !== undefined) meta.push(`${key}=${field(value, META_WIDTH)}`);
+    if (value !== undefined) meta.push(`${metaLabel} ${field(value, META_WIDTH)}`);
   }
 
   return {
     icon: callIcon(options),
     spinnerFrame: options?.spinnerFrame,
+    symbol,
     title: label,
     description: subject ?? (target === undefined ? undefined : field(target, SUBJECT_WIDTH)),
     meta: meta.length > 0 ? meta : undefined,
@@ -301,6 +328,7 @@ export function describeToolResult(
     return {
       icon: "running",
       ...(options.spinnerFrame === undefined ? {} : { spinnerFrame: options.spinnerFrame }),
+      description: field(firstLine(resultText(result)), SUBJECT_WIDTH),
     };
   }
 
@@ -315,15 +343,20 @@ export function describeToolResult(
     }
   }
 
-  for (const key of RESULT_FACT_KEYS) {
+  for (const [key, factLabel] of Object.entries(RESULT_FACT_LABELS)) {
     const value = scalarText(details[key]);
-    if (value !== undefined) meta.push(`${key}=${field(value, META_WIDTH)}`);
+    if (value !== undefined) {
+      meta.push(
+        key === "type" ? field(value, META_WIDTH) : `${factLabel} ${field(value, META_WIDTH)}`,
+      );
+    }
   }
 
-  for (const key of RESULT_COUNT_KEYS) {
+  for (const [key, [singular, plural]] of Object.entries(RESULT_COUNT_LABELS)) {
     const value = details[key];
-    if (typeof value === "number") meta.push(`${key} ${value}`);
-    else if (Array.isArray(value)) meta.push(`${key} ${value.length}`);
+    const count =
+      typeof value === "number" ? value : Array.isArray(value) ? value.length : undefined;
+    if (count !== undefined) meta.push(`${count} ${count === 1 ? singular : plural}`);
   }
 
   if (details.hasMore === true) meta.push("more pages");
@@ -347,6 +380,7 @@ export function renderStatusLine(line: StatusLine, theme: StatusTheme): string {
     parts.push(paint(theme, icon.color, glyph ?? icon.glyph));
   }
 
+  if (line.symbol) parts.push(paint(theme, "accent", line.symbol));
   if (line.title) {
     parts.push(paint(theme, "toolTitle", theme.bold ? theme.bold(line.title) : line.title));
   }
@@ -401,9 +435,11 @@ export function renderToolResult(
   const body = resultText(result);
   if (body.length === 0) return header;
 
-  const first = isError ? firstLine(body) : "";
+  const first = isError || options.isPartial === true ? firstLine(body) : "";
   const from =
-    isError && sanitizeTerminalText(first).length <= SUBJECT_WIDTH ? first.length + 1 : 0;
+    (isError || options.isPartial === true) && sanitizeTerminalText(first).length <= SUBJECT_WIDTH
+      ? first.length + 1
+      : 0;
   if (from > body.length) return header;
 
   const expanded = options.expanded === true;
@@ -418,7 +454,9 @@ export function renderToolResult(
       : clip(stripControlBytes(text), PREVIEW_LINE_WIDTH);
     return `  ${paint(theme, "toolOutput", clean)}`;
   });
-  if (hidden > 0) rendered.push(`  ${paint(theme, "muted", `… ${hidden} more lines`)}`);
+  if (hidden > 0) {
+    rendered.push(`  ${paint(theme, "muted", `… ${hidden} more lines · expand to view`)}`);
+  }
 
   return [header, ...rendered].join("\n");
 }

@@ -402,7 +402,7 @@ describe("memory tool renderers", () => {
     );
 
     expect(text).toBe(
-      "<success>✓ <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen",
+      "<success>✓ <accent>🔎 <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen",
     );
   });
 
@@ -415,7 +415,9 @@ describe("memory tool renderers", () => {
       painted,
     );
 
-    expect(text).toBe("<accent>⠸ <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen");
+    expect(text).toBe(
+      "<accent>⠸ <accent>🔎 <toolTitle><b>Recall <dim>what do I know <muted>default/oritwoen",
+    );
   });
 
   it("names the bound profile the model never passed", () => {
@@ -478,6 +480,17 @@ describe("memory tool renderers", () => {
       expect(text).toContain("01M0");
       expect(text).not.toContain("Remember");
     }
+  });
+
+  it("uses the same memory-specific emoji in both harnesses", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+
+    const calls = [
+      tool(piTools(), "memory_remember").renderCall!({ content: "keep this" }, painted, {}),
+      tool(ompTools(), "memory_remember").renderCall!({ content: "keep this" }, {}, painted),
+    ];
+
+    for (const { text } of calls) expect(text).toContain("🧠");
   });
 
   it("strips terminal control sequences out of arguments in both harnesses", () => {

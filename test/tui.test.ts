@@ -18,16 +18,22 @@ const plain = {};
 
 describe("call lines", () => {
   it("leads with the question and keeps the profile as a fact", () => {
-    const line = describeToolCall("Recall", {
-      namespace: "default",
-      profile: "oritwoen",
-      query: "what do I know about TUI rendering",
-      thinkingLevel: "medium",
-    });
+    const line = describeToolCall(
+      "Recall",
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        query: "what do I know about TUI rendering",
+        thinkingLevel: "medium",
+      },
+      undefined,
+      "🔎",
+    );
 
+    expect(line.symbol).toBe("🔎");
     expect(line.title).toBe("Recall");
     expect(line.description).toBe("what do I know about TUI rendering");
-    expect(line.meta).toEqual(["default/oritwoen", "thinkingLevel=medium"]);
+    expect(line.meta).toEqual(["default/oritwoen", "thinking medium"]);
   });
 
   it("falls back to the profile when the call has no subject of its own", () => {
@@ -38,7 +44,7 @@ describe("call lines", () => {
     });
 
     expect(line.description).toBe("default/oritwoen");
-    expect(line.meta).toEqual(["limit=25"]);
+    expect(line.meta).toEqual(["limit 25"]);
   });
 
   it("describes a namespace call by its namespace alone", () => {
@@ -116,7 +122,7 @@ describe("result lines", () => {
     );
 
     expect(line.icon).toBe("done");
-    expect(line.meta).toEqual(["01M0", "type=fact", "sessionId=claude-memory-1"]);
+    expect(line.meta).toEqual(["01M0", "fact", "session claude-memory-1"]);
   });
 
   it("counts a page and says when another one waits", () => {
@@ -125,7 +131,7 @@ describe("result lines", () => {
       false,
     );
 
-    expect(line.meta).toEqual(["memories 2", "more pages"]);
+    expect(line.meta).toEqual(["2 memories", "more pages"]);
   });
 
   it("leaves the delete count to the sentence the tool already wrote", () => {
@@ -143,7 +149,7 @@ describe("result lines", () => {
       false,
     );
 
-    expect(line.meta).toEqual(["sessionId=s1"]);
+    expect(line.meta).toEqual(["session s1"]);
   });
 
   it("names a namespace the way every other tool addresses it", () => {
@@ -167,16 +173,26 @@ describe("result lines", () => {
     expect(line.title).toBeUndefined();
   });
 
-  it("keeps a streamed update on the running icon", () => {
-    const line = describeToolResult(
-      { content: [{ type: "text", text: "Searching memories" }], details: {} },
-      false,
-      { isPartial: true, spinnerFrame: 2 },
-    );
+  it("keeps a streamed update on one descriptive running line", () => {
+    const result = { content: [{ type: "text", text: "Searching memories" }], details: {} };
+    const line = describeToolResult(result, false, { isPartial: true, spinnerFrame: 2 });
 
     expect(line.icon).toBe("running");
     expect(line.spinnerFrame).toBe(2);
+    expect(line.description).toBe("Searching memories");
     expect(line.badge).toBeUndefined();
+    expect(renderToolResult(result, false, { isPartial: true, spinnerFrame: 2 }, plain)).toBe(
+      "⠹ Searching memories",
+    );
+  });
+
+  it("counts the candidates behind a recall answer", () => {
+    const line = describeToolResult(
+      { content: [], details: { candidates: [{ id: "a" }, { id: "b" }] } },
+      false,
+    );
+
+    expect(line.meta).toEqual(["2 candidates"]);
   });
 
   it("ignores details that are not a record", () => {
@@ -187,16 +203,22 @@ describe("result lines", () => {
 describe("status line rendering", () => {
   it("paints the icon, the title and the facts", () => {
     const text = renderStatusLine(
-      { icon: "done", title: "Recall", description: "q", meta: ["default/oritwoen"] },
+      {
+        icon: "done",
+        symbol: "🔎",
+        title: "Recall",
+        description: "q",
+        meta: ["default/oritwoen"],
+      },
       painted,
     );
 
-    expect(text).toBe("<success>✓ <toolTitle><b>Recall <dim>q <muted>default/oritwoen");
+    expect(text).toBe("<success>✓ <accent>🔎 <toolTitle><b>Recall <dim>q <muted>default/oritwoen");
   });
 
   it("animates the spinner from the frame the harness reports", () => {
     expect(renderStatusLine({ icon: "running", spinnerFrame: 12 }, plain)).toBe("⠹");
-    expect(renderStatusLine({ icon: "running" }, plain)).toBe("·");
+    expect(renderStatusLine({ icon: "running" }, plain)).toBe("◌");
   });
 
   it("reads without a theme", () => {
@@ -216,7 +238,7 @@ describe("result rendering", () => {
 
     expect(rendered).toHaveLength(12);
     expect(rendered[1]).toBe("  line 1");
-    expect(rendered.at(-1)).toBe("  … 4 more lines");
+    expect(rendered.at(-1)).toBe("  … 4 more lines · expand to view");
   });
 
   it("shows every line once the user expands the result", () => {

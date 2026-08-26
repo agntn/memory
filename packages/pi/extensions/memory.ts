@@ -22,7 +22,12 @@ import {
   memoryToolProgress,
 } from "../../shared/memory-tools.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
-import { describeToolCall, renderStatusLine, renderToolResult } from "../../shared/tui.ts";
+import {
+  describeToolCall,
+  MEMORY_TOOL_SYMBOLS,
+  renderStatusLine,
+  renderToolResult,
+} from "../../shared/tui.ts";
 import type {
   GetParams,
   IngestParams,
@@ -92,9 +97,14 @@ export default function memoryExtension(pi: ExtensionAPI) {
    * hides the namespace and profile from the model, so the line reads them back
    * out of the configured scope.
    */
-  function callRenderer(label: string, scoped = true) {
+  function callRenderer(name: keyof typeof memoryToolMeta, scoped = true) {
     return (args: object, theme: StatusTheme, context?: RenderOptions) => {
-      const line = describeToolCall(label, scoped ? operationalParams(args) : args, context);
+      const line = describeToolCall(
+        memoryToolMeta[name].label,
+        scoped ? operationalParams(args) : args,
+        context,
+        MEMORY_TOOL_SYMBOLS[name],
+      );
       return new Text(renderStatusLine(line, theme), 0, 0);
     };
   }
@@ -104,7 +114,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "List available Agent Memory namespaces.",
     promptGuidelines: ["Use cursor to page through results."],
     parameters: namespaceListParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_list.label, false),
+    renderCall: callRenderer("memory_namespace_list", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -121,7 +131,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Get one exact Agent Memory namespace.",
     promptGuidelines: ["Use the exact name; memory_namespace_list shows the existing ones."],
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_get.label, false),
+    renderCall: callRenderer("memory_namespace_get", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -138,7 +148,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Create an Agent Memory namespace.",
     promptGuidelines: ["Namespace names are lowercase letters, numbers, and internal hyphens."],
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_create.label, false),
+    renderCall: callRenderer("memory_namespace_create", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -157,7 +167,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
       "This is destructive and removes every profile and memory in the namespace.",
     ],
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_delete.label, false),
+    renderCall: callRenderer("memory_namespace_delete", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -174,7 +184,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Store a durable fact or instruction in agent memory.",
     promptGuidelines: ["Use only for information worth retaining across sessions."],
     parameters: rememberParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_remember.label),
+    renderCall: callRenderer("memory_remember"),
     renderResult: resultLine,
     execute(
       _id,
@@ -197,7 +207,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
       "Use for conversation history; use memory_remember for one explicit memory.",
     ],
     parameters: ingestParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_ingest.label),
+    renderCall: callRenderer("memory_ingest"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate, ctx): Promise<AgentToolResult<Record<string, unknown>>> {
       onUpdate?.(progress(memoryToolProgress.memory_ingest));
@@ -213,7 +223,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Recall durable context before answering or acting.",
     promptGuidelines: ["Use a focused natural-language query."],
     parameters: recallParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_recall.label),
+    renderCall: callRenderer("memory_recall"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
       onUpdate?.(progress(memoryToolProgress.memory_recall));
@@ -227,7 +237,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "List memories by session or type.",
     promptGuidelines: ["Use cursor to page through results."],
     parameters: listParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_list.label),
+    renderCall: callRenderer("memory_list"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.list(operationalParams(params) as ListParams, { signal });
@@ -240,7 +250,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: memoryToolMeta.memory_get.description,
     promptGuidelines: ["Use exact memory ids returned by another memory tool."],
     parameters: getParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_get.label),
+    renderCall: callRenderer("memory_get"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.get(operationalParams(params) as GetParams, { signal });
@@ -253,7 +263,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: memoryToolMeta.memory_delete.description,
     promptGuidelines: ["Use an exact memory id returned by another memory tool."],
     parameters: memoryParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete.label),
+    renderCall: callRenderer("memory_delete"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams, {
@@ -268,7 +278,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Summarize a profile or session when there is no specific question to ask.",
     promptGuidelines: ["Pass sessionId only when a session-scoped summary is needed."],
     parameters: summaryParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_summary.label),
+    renderCall: callRenderer("memory_summary"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.summary(operationalParams(params) as SummaryParams, { signal });
@@ -281,7 +291,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Delete one exact memory session.",
     promptGuidelines: ["This is destructive; use only with an exact session id."],
     parameters: sessionParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete_session.label),
+    renderCall: callRenderer("memory_delete_session"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams, {
@@ -296,7 +306,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Delete one exact memory profile.",
     promptGuidelines: ["This is destructive and removes the complete profile."],
     parameters: profileOnlyParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete_profile.label, false),
+    renderCall: callRenderer("memory_delete_profile", false),
     renderResult: resultLine,
     execute(_id, params: ProfileParams, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteProfile(params, { signal });
