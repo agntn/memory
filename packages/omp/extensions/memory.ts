@@ -18,7 +18,12 @@ import {
   memoryToolProgress,
 } from "../../shared/memory-tools.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
-import { describeToolCall, renderStatusLine, renderToolResult } from "../../shared/tui.ts";
+import {
+  describeToolCall,
+  MEMORY_TOOL_SYMBOLS,
+  renderStatusLine,
+  renderToolResult,
+} from "../../shared/tui.ts";
 import {
   applyMemoryScope,
   applyMemoryWriteScope,
@@ -304,9 +309,14 @@ export default function memoryExtension(omp: ExtensionAPI) {
    * scoped tool hides the namespace and profile from the model, so the line
    * reads them back out of the configured scope.
    */
-  function callRenderer(label: string, scoped = true) {
+  function callRenderer(name: keyof typeof memoryToolMeta, scoped = true) {
     return (args: object, options: RenderOptions, theme: StatusTheme) => {
-      const line = describeToolCall(label, scoped ? operationalParams(args) : args, options);
+      const line = describeToolCall(
+        memoryToolMeta[name].label,
+        scoped ? operationalParams(args) : args,
+        options,
+        MEMORY_TOOL_SYMBOLS[name],
+      );
       return new Text(renderStatusLine(line, theme), 0, 0);
     };
   }
@@ -315,7 +325,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_namespace_list,
     approval: "read",
     parameters: namespaceListParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_list.label, false),
+    renderCall: callRenderer("memory_namespace_list", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -331,7 +341,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_namespace_get,
     approval: "read",
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_get.label, false),
+    renderCall: callRenderer("memory_namespace_get", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -347,7 +357,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_namespace_create,
     approval: "write",
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_create.label, false),
+    renderCall: callRenderer("memory_namespace_create", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -363,7 +373,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_namespace_delete,
     approval: "write",
     parameters: namespaceParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_namespace_delete.label, false),
+    renderCall: callRenderer("memory_namespace_delete", false),
     renderResult: resultLine,
     execute(
       _id,
@@ -379,7 +389,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_remember,
     approval: "write",
     parameters: rememberParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_remember.label),
+    renderCall: callRenderer("memory_remember"),
     renderResult: resultLine,
     execute(
       _id,
@@ -399,7 +409,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_ingest,
     approval: "write",
     parameters: ingestParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_ingest.label),
+    renderCall: callRenderer("memory_ingest"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate, ctx): Promise<AgentToolResult<Record<string, unknown>>> {
       onUpdate?.(progress(memoryToolProgress.memory_ingest));
@@ -414,7 +424,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_recall,
     approval: "read",
     parameters: recallParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_recall.label),
+    renderCall: callRenderer("memory_recall"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
       onUpdate?.(progress(memoryToolProgress.memory_recall));
@@ -427,7 +437,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_list,
     approval: "read",
     parameters: listParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_list.label),
+    renderCall: callRenderer("memory_list"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.list(operationalParams(params) as ListParams, { signal });
@@ -439,7 +449,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_get,
     approval: "read",
     parameters: getParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_get.label),
+    renderCall: callRenderer("memory_get"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.get(operationalParams(params) as GetParams, { signal });
@@ -451,7 +461,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_delete,
     approval: "write",
     parameters: memoryParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete.label),
+    renderCall: callRenderer("memory_delete"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteMemory(operationalParams(params) as MemoryParams, {
@@ -465,7 +475,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_summary,
     approval: "read",
     parameters: summaryParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_summary.label),
+    renderCall: callRenderer("memory_summary"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.summary(operationalParams(params) as SummaryParams, { signal });
@@ -477,7 +487,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_delete_session,
     approval: "write",
     parameters: sessionParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete_session.label),
+    renderCall: callRenderer("memory_delete_session"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams, {
@@ -491,7 +501,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     ...memoryToolMeta.memory_delete_profile,
     approval: "write",
     parameters: profileOnlyParameters,
-    renderCall: callRenderer(memoryToolMeta.memory_delete_profile.label, false),
+    renderCall: callRenderer("memory_delete_profile", false),
     renderResult: resultLine,
     execute(_id, params: ProfileParams, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteProfile(params, { signal });
