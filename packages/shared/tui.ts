@@ -115,7 +115,7 @@ const LINE_WIDTH_CAP = 2048;
 /**
  * Width one preview line gets before it is cut.
  *
- * A memory arrives as JSON with its content on a single line, which can run for
+ * A record line, or a content line without breaks of its own, can run for
  * thousands of characters. Wrapped whole, one such line buries the ten-line
  * preview under itself, so the collapsed view cuts every line to this and the
  * expanded view shows them in full.
