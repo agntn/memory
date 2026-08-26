@@ -114,7 +114,7 @@ export const memoryToolMeta = {
   memory_recall: {
     label: "Recall",
     description:
-      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. Candidate summaries are capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get.",
+      "Answer a question from a memory profile. Returns a prose answer, then the candidate memories it drew on as one JSON object per line with id, score, sessionId, summary, namespace, and profile. The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. Candidate summaries are capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.",
   },
   memory_list: {
     label: "List Memories",
@@ -283,15 +283,24 @@ function dateAsIso(_key: string, item: unknown): unknown {
   return item instanceof Date ? item.toISOString() : item;
 }
 
+/** Whether a record carries full content to indent; one rule for the renderer and the headers. */
+function hasFullContent(value: unknown): value is Record<string, unknown> & { content: string } {
+  return typeof (value as { content?: unknown } | null)?.content === "string";
+}
+
 /**
- * Render records as one compact JSON object per line.
- *
- * Recall already answers this way. A pretty-printed list spends about an eighth
- * of its bytes on indentation, which every reader of a thirty-memory page pays
- * for and none of them asked for.
+ * One compact JSON object per line, full content indented below its record:
+ * inlined, a JSON string folds a long memory into one physical line MCP hosts
+ * truncate into an ungreppable blob, and the indent keeps records alone at column zero.
  */
-function jsonLines(values: readonly unknown[]): string {
-  return values.map((value) => JSON.stringify(value, dateAsIso)).join("\n");
+function recordLines(values: readonly unknown[]): string {
+  return values
+    .map((value) => {
+      if (!hasFullContent(value)) return JSON.stringify(value, dateAsIso);
+      const { content, ...rest } = value;
+      return `${JSON.stringify(rest, dateAsIso)}\n  ${content.replaceAll("\n", "\n  ")}`;
+    })
+    .join("\n");
 }
 
 export function memoryTarget(params: ProfileParams): string {
@@ -433,14 +442,12 @@ function recallText(
   const answer = result.answer || "No answer returned.";
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
-  const candidates = shown.map((candidate) =>
-    JSON.stringify({
-      ...candidate,
-      namespace: params.namespace,
-      profile: params.profile,
-      ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
-    }),
-  );
+  const records = shown.map((candidate) => ({
+    ...candidate,
+    namespace: params.namespace,
+    profile: params.profile,
+    ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
+  }));
   const trimmed = result.candidates.length - shown.length;
   const count =
     trimmed === 0
@@ -450,8 +457,8 @@ function recallText(
   const expansion =
     expanded.size === 0
       ? ""
-      : `, full content on the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
-  return `${header}\n\n${answer}\n\nCandidates (${count}), one JSON object per line${expansion}:\n${candidates.join("\n")}`;
+      : `, full content indented under the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
+  return `${header}\n\n${answer}\n\nCandidates (${count}), one JSON object per line${expansion}:\n${recordLines(records)}`;
 }
 
 /**
@@ -473,8 +480,10 @@ function listText(
       : `No memories on this page of ${target}; more pages behind cursor ${cursor}.`;
   }
   const following = cursor === undefined ? "last page" : `more pages behind cursor ${cursor}`;
-  const header = `Memories in ${target} (${memories.length}), ${following}, one JSON object per line:`;
-  return `${header}\n${jsonLines(memories)}`;
+  const expanded = memories.filter(hasFullContent).length;
+  const contentNote = expanded === 0 ? "" : `, full content indented under ${expanded} of them`;
+  const header = `Memories in ${target} (${memories.length}), ${following}, one JSON object per line${contentNote}:`;
+  return `${header}\n${recordLines(memories)}`;
 }
 
 /** How much a cascade delete removed, or `undefined` when it could not be read. */
@@ -679,7 +688,7 @@ export const memoryToolExecutors = {
         ? ""
         : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => id).join(", ")}.\n`;
     return {
-      content: [{ type: "text", text: `${header}${jsonLines(memories)}` }],
+      content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
       details: { memories },
     };
   },

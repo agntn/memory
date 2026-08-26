@@ -56,11 +56,23 @@ function textOf(result: { content: Array<{ text: string }> }): string {
 }
 
 /** Read back the records a listing wrote, one JSON object per line under its header. */
-function records(result: { content: Array<{ text: string }> }): unknown[] {
+function records<T = unknown>(result: { content: Array<{ text: string }> }): T[] {
   return textOf(result)
     .split("\n")
     .filter((line) => line.startsWith("{"))
-    .map((line) => JSON.parse(line) as unknown);
+    .map((line) => JSON.parse(line) as T);
+}
+
+/** The content block indented under the record carrying this id, prefixes stripped. */
+function contentUnder(result: { content: Array<{ text: string }> }, id: string): string[] {
+  const lines = textOf(result).split("\n");
+  const record = lines.findIndex((line) => line.startsWith("{") && line.includes(`"id":"${id}"`));
+  const block: string[] = [];
+  for (const line of lines.slice(record + 1)) {
+    if (!line.startsWith("  ")) break;
+    block.push(line.slice(2));
+  }
+  return block;
 }
 
 afterEach(() => {
@@ -138,20 +150,51 @@ describe("recall result", () => {
       expand: 2,
     });
 
-    const text = textOf(result);
-    expect(text).toContain(
-      "Candidates (3), one JSON object per line, full content on the 2 best-scoring:",
+    expect(textOf(result)).toContain(
+      "Candidates (3), one JSON object per line, full content indented under the 2 best-scoring:",
     );
-    const candidates = text
-      .split("\n")
-      .slice(-3)
-      .map((line) => JSON.parse(line) as { id: string; content?: string });
-    expect(candidates.map((candidate) => [candidate.id, candidate.content])).toEqual([
-      ["mem-low", undefined],
-      ["mem-top", "full content of mem-top"],
-      ["mem-mid", "full content of mem-mid"],
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      "mem-low",
+      "mem-top",
+      "mem-mid",
     ]);
+    expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
+    expect(contentUnder(result, "mem-mid")).toEqual(["full content of mem-mid"]);
+    expect(contentUnder(result, "mem-low")).toEqual([]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
+  });
+
+  it("keeps a multi-line content out of the record line", async () => {
+    stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        return {
+          result: {
+            ...memoryEntry("mem-long", null),
+            content: "first line of the memory\nsecond line of the memory",
+          },
+        };
+      }
+      return {
+        result: {
+          count: 1,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [{ id: "mem-long", summary: "truncated", sessionId: null, score: 0.9 }],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-multiline",
+      profile: "agent",
+      query: "build tooling",
+      expand: 1,
+    });
+
+    expect(JSON.stringify(records(result))).not.toContain("first line");
+    expect(contentUnder(result, "mem-long")).toEqual([
+      "first line of the memory",
+      "second line of the memory",
+    ]);
   });
 
   it("keeps only the best-scoring candidates when a cap is passed", async () => {
@@ -213,11 +256,13 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (2 of 3, the 1 lowest-scoring trimmed), one JSON object per line, full content on the 2 best-scoring:",
+      "Candidates (2 of 3, the 1 lowest-scoring trimmed), one JSON object per line, full content indented under the 2 best-scoring:",
     );
-    expect(records(result)).toMatchObject([
-      { id: "mem-top", content: "full content of mem-top" },
-      { id: "mem-mid", content: "full content of mem-mid" },
+    expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
+    expect(contentUnder(result, "mem-mid")).toEqual(["full content of mem-mid"]);
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      "mem-top",
+      "mem-mid",
     ]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
   });
@@ -274,7 +319,9 @@ describe("recall result", () => {
     });
 
     const text = textOf(result);
-    expect(text).toContain("full content on the 1 best-scoring (null where the read failed):");
+    expect(text).toContain(
+      "full content indented under the 1 best-scoring (null where the read failed):",
+    );
     expect(JSON.parse(text.split("\n").at(-1) ?? "{}")).toMatchObject({
       id: "mem-gone",
       content: null,
@@ -316,11 +363,15 @@ describe("list result", () => {
       expand: 2,
     });
 
-    const memories = records(result) as Array<{ id: string; content?: string }>;
-    expect(memories.map((memory) => [memory.id, memory.content])).toEqual([
-      ["mem-1", "full content of mem-1"],
-      ["mem-2", "full content of mem-2"],
-      ["mem-3", undefined],
+    expect(textOf(result)).toContain(
+      "one JSON object per line, full content indented under 2 of them:",
+    );
+    expect(contentUnder(result, "mem-1")).toEqual(["full content of mem-1"]);
+    expect(contentUnder(result, "mem-2")).toEqual(["full content of mem-2"]);
+    expect(records<{ id: string }>(result).map((memory) => memory.id)).toEqual([
+      "mem-1",
+      "mem-2",
+      "mem-3",
     ]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
   });
@@ -337,7 +388,7 @@ describe("list result", () => {
       expand: 5,
     });
 
-    const memories = records(result) as Array<{ id: string; content?: string | null }>;
+    const memories = records<{ id: string; content?: string | null }>(result);
     expect(memories).toHaveLength(1);
     expect(memories[0]).toMatchObject({ id: "mem-gone", content: null });
   });
@@ -581,9 +632,8 @@ describe("get result", () => {
       memoryIds: ["mem-2", "mem-1"],
     });
 
-    const memories = records(result) as Array<{ id: string; content: string }>;
-    expect(memories.map((memory) => memory.id)).toEqual(["mem-2", "mem-1"]);
-    expect(memories[0]?.content).toBe("content mem-2");
+    expect(records<{ id: string }>(result).map((memory) => memory.id)).toEqual(["mem-2", "mem-1"]);
+    expect(contentUnder(result, "mem-2")).toEqual(["content mem-2"]);
     expect(urls).toHaveLength(2);
   });
 
@@ -600,10 +650,12 @@ describe("get result", () => {
       memoryIds: ["mem-1", "mem-missing"],
     });
 
-    const [header, ...body] = textOf(result).split("\n");
-    expect(header).toBe("Read 1 of 2 memories; error entries for: mem-missing.");
-    const memories = body.map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(memories[0]).toMatchObject({ id: "mem-1", content: "content mem-1" });
+    expect(textOf(result).split("\n")[0]).toBe(
+      "Read 1 of 2 memories; error entries for: mem-missing.",
+    );
+    expect(contentUnder(result, "mem-1")).toEqual(["content mem-1"]);
+    const memories = records<Record<string, unknown>>(result);
+    expect(memories[0]).toMatchObject({ id: "mem-1" });
     expect(memories[1]).toEqual({
       id: "mem-missing",
       error:
@@ -647,8 +699,7 @@ describe("get result", () => {
       memoryIds: ["mem-1", "mem-1", "mem-2"],
     });
 
-    const memories = records(result) as Array<{ id: string }>;
-    expect(memories.map((memory) => memory.id)).toEqual(["mem-1", "mem-2"]);
+    expect(records<{ id: string }>(result).map((memory) => memory.id)).toEqual(["mem-1", "mem-2"]);
     expect(urls).toHaveLength(2);
   });
 
