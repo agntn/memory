@@ -20,6 +20,7 @@ import type {
   NamespaceParams,
   ProfileParams,
   RecallParams,
+  RecallVisibilityParams,
   RememberParams,
   SessionParams,
   SummaryParams,
@@ -53,6 +54,7 @@ export const MEMORY_NAME_PATTERN = "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$";
  * survives percent-encoding and would move a request up to the profile endpoint.
  */
 export const MEMORY_ID_PATTERN = "^(?!\\.{1,2}$)[^/\\\\]+$";
+const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
 /**
  * ISO-8601 instants that carry an explicit offset.
  *
@@ -62,6 +64,9 @@ export const MEMORY_ID_PATTERN = "^(?!\\.{1,2}$)[^/\\\\]+$";
 export const ISO_INSTANT_PATTERN =
   "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:\\d{2})$";
 export const MAX_TOOL_QUERY_CHARACTERS = 1_024;
+export const MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS = 300;
+const MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS = 10_000;
+const TOOL_TEXT_CONTROL_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 export const MAX_TOOL_MESSAGE_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
 /**
@@ -106,6 +111,11 @@ export const memoryToolMeta = {
     description:
       "Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the summary and the memory type itself.",
   },
+  memory_wait_for_recall: {
+    label: "Wait for Recall",
+    description:
+      "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits.",
+  },
   memory_ingest: {
     label: "Ingest Messages",
     description:
@@ -147,14 +157,9 @@ export const memoryToolMeta = {
   },
 } as const;
 
-/**
- * What the extensions print while a slow call is still running.
- *
- * Recall waits on the service's own model and ingest waits on extraction, so
- * both leave the row silent for seconds. The other tools answer fast enough
- * that a progress line would only flicker.
- */
+/** Progress text for calls that can stay pending long enough to need it. */
 export const memoryToolProgress = {
+  memory_wait_for_recall: "Waiting for memory to reach recall",
   memory_recall: "Searching memories",
   memory_ingest: "Submitting messages for extraction",
 } as const;
@@ -183,6 +188,12 @@ export const memoryFieldDescriptions = {
     "When the message was sent, as an ISO-8601 instant with an explicit offset, for example 2026-08-17T10:00:00Z.",
   messages: "Conversation messages in the order they were exchanged.",
   recallQuery: "Natural-language recall query.",
+  recallVisibilityMemoryId:
+    "Exact memory id returned by memory_remember. The check succeeds only when this id appears among recall candidates.",
+  recallVisibilityQuery:
+    "The exact natural-language query the caller will use to retrieve this memory.",
+  recallVisibilityTimeout:
+    "Maximum seconds to poll before returning a timeout. The host may cancel earlier, and the check never writes or deletes memory.",
   thinkingLevel:
     "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
   responseLength: "Requested length of the prose answer. Defaults to medium.",
@@ -277,6 +288,10 @@ function requireCapability<K extends keyof MemoryProfile>(
 
 function json(value: unknown): string {
   return JSON.stringify(value, dateAsIso, 2);
+}
+
+function quoteToolText(value: string): string {
+  return JSON.stringify(value.replaceAll(TOOL_TEXT_CONTROL_PATTERN, " "));
 }
 
 function dateAsIso(_key: string, item: unknown): unknown {
@@ -558,6 +573,58 @@ function assertMemoryIds(memoryIds: readonly string[]): void {
   }
 }
 
+/** Validate the polling contract before paying for the first recall. */
+function assertRecallVisibility(params: RecallVisibilityParams): void {
+  if (
+    typeof params.memoryId !== "string" ||
+    params.memoryId.length < 1 ||
+    !memoryIdPattern.test(params.memoryId)
+  ) {
+    throw new Error("Recall visibility memory id is invalid");
+  }
+  if (
+    typeof params.query !== "string" ||
+    params.query.length < 1 ||
+    params.query.length > MAX_TOOL_QUERY_CHARACTERS
+  ) {
+    throw new Error(
+      `Recall visibility query must contain 1 to ${MAX_TOOL_QUERY_CHARACTERS} characters`,
+    );
+  }
+  if (
+    !Number.isInteger(params.timeoutSeconds) ||
+    params.timeoutSeconds < 1 ||
+    params.timeoutSeconds > MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS
+  ) {
+    throw new Error(
+      `Recall visibility timeout must be an integer between 1 and ${MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS} seconds`,
+    );
+  }
+}
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+/** Wait without leaving a timer or abort listener behind. */
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export const memoryToolExecutors = {
   async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
@@ -569,6 +636,77 @@ export const memoryToolExecutors = {
       content: [{ type: "text", text: json(memory) }],
       details: memory as unknown as Record<string, unknown>,
     };
+  },
+
+  async waitForRecall(
+    params: RecallVisibilityParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    assertRecallVisibility(params);
+    const profile = await getProfile(params);
+    const recall = requireCapability(profile, "recall");
+    const timeoutMilliseconds = params.timeoutSeconds * 1_000;
+    const startedAt = performance.now();
+    const timeoutController = new AbortController();
+    const timeout = setTimeout(() => timeoutController.abort(), timeoutMilliseconds);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutController.signal])
+      : timeoutController.signal;
+    let attempts = 0;
+
+    try {
+      while (true) {
+        signal.throwIfAborted();
+        attempts += 1;
+        const result = await recall(params.query, {
+          thinkingLevel: "low",
+          responseLength: "short",
+          signal,
+        });
+        const waitMilliseconds = Math.round(performance.now() - startedAt);
+        if (
+          waitMilliseconds <= timeoutMilliseconds &&
+          result.candidates.some((candidate) => candidate.id === params.memoryId)
+        ) {
+          const details = {
+            id: params.memoryId,
+            namespace: params.namespace,
+            profile: params.profile,
+            attempts,
+            waitMilliseconds,
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Memory ${quoteToolText(params.memoryId)} reached recall in ${memoryTarget(params)} after ${waitMilliseconds} ms and ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
+              },
+            ],
+            details,
+          };
+        }
+        const remaining = timeoutMilliseconds - waitMilliseconds;
+        if (remaining <= 0) break;
+        const backoff = Math.min(attempts * 2_000, MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS);
+        await delay(Math.min(backoff, remaining), signal);
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      if (!timeoutController.signal.aborted) {
+        const elapsed = Math.round(performance.now() - startedAt);
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Recall visibility check for memory ${quoteToolText(params.memoryId)} failed after ${elapsed} ms: ${quoteToolText(message)}. No memory was changed.`,
+          { cause: error },
+        );
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    throw new Error(
+      `Memory ${quoteToolText(params.memoryId)} did not appear in recall within ${timeoutMilliseconds} ms after ${attempts} attempts. No memory was changed.`,
+    );
   },
 
   async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {

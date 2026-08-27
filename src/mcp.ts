@@ -32,6 +32,7 @@ import type {
   NamespaceParams,
   ProfileParams,
   RecallParams,
+  RecallVisibilityParams,
   RememberParams,
   SessionParams,
   SummaryParams,
@@ -121,6 +122,16 @@ function createTools(): MemoryToolDefinition[] {
       execute: (args, options) =>
         memoryToolExecutors.remember(
           operationalWriteParams(args as { sessionId?: string }) as RememberParams,
+          options,
+        ),
+    },
+    {
+      name: "memory_wait_for_recall",
+      inputSchema: operationalSchemas.recallVisibilityParameters,
+      annotations: readAnnotations,
+      execute: (args, options) =>
+        memoryToolExecutors.waitForRecall(
+          operationalParams(args as object) as RecallVisibilityParams,
           options,
         ),
     },

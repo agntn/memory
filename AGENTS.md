@@ -19,13 +19,13 @@
 - The two harnesses order the renderer arguments differently: Pi passes `(args, theme, context)`, OMP passes `(args, options, theme)`. Verify the order in the installed runtime's declarations, never in the dev dependency.
 - Pi keeps the failure flag out of the result object and reports it in the render context. OMP puts it in the result. A renderer that reads only `result.isError` marks a failed Pi call as done.
 - Both harnesses print the call line and the result line in one container, so the result line carries no tool name.
-- Recall and ingest stream a progress line first. A partial result keeps the running icon, because an update is progress and not an outcome.
+- Recall, ingest and `memory_wait_for_recall` stream a progress line first. A partial result keeps the running icon, because an update is progress and not an outcome.
 - Model arguments and stored memory text cross the terminal trust boundary. Everything a renderer prints goes through the sanitizer first.
 
 ## Tool results
 
 - A result is text and nothing else. MCP clients never see `details`, so anything the caller needs has to be in the text.
-- Say what the caller cannot control: the service assigns memory types, extraction is asynchronous, cascade deletes report nothing on their own.
+- Say what the caller cannot control: the service assigns memory types, extraction is asynchronous, recall visibility can lag behind a durable write, and cascade deletes report nothing on their own.
 - Only verified service rules go in descriptions and schemas. Verified so far: namespaces and profiles take lowercase letters, numbers and internal hyphens; `per_page` caps at 500 on memories and 1000 on namespaces, so the two listings do not share a bound; an unknown memory id returns a server error, not a 404, while an unknown namespace name returns a real 404; deleting a session that holds nothing still succeeds.
 - Identifiers go into URL paths, so `.` and `..` are rejected. `encodeURIComponent` leaves dots alone and one dot segment moves a memory delete up to the profile endpoint.
 

@@ -14,16 +14,18 @@ interface StubResponse {
  * `response` may be a single payload or a function that picks one per URL, which
  * the cascade deletes need because they read the profile before deleting.
  */
-function stubCloudflare(response: StubResponse | ((url: string) => StubResponse)): string[] {
+function stubCloudflare(
+  response: StubResponse | ((url: string, init?: RequestInit) => StubResponse),
+): string[] {
   const urls: string[] = [];
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: string | URL | Request) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       urls.push(url);
-      const payload = typeof response === "function" ? response(url) : response;
+      const payload = typeof response === "function" ? response(url, init) : response;
       if (payload.failure !== undefined) {
         return Response.json(
           { success: false, errors: [{ message: payload.failure.message }] },
@@ -38,6 +40,24 @@ function stubCloudflare(response: StubResponse | ((url: string) => StubResponse)
     }),
   );
   return urls;
+}
+
+function stubPendingRecall(): { signal?: AbortSignal } {
+  const request: { signal?: AbortSignal } = {};
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      request.signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => reject(request.signal?.reason), {
+          once: true,
+        });
+      });
+    }),
+  );
+  return request;
 }
 
 function memoryEntry(id: string, sessionId: string | null): Record<string, unknown> {
@@ -76,8 +96,186 @@ function contentUnder(result: { content: Array<{ text: string }> }, id: string):
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe("recall visibility", () => {
+  it("waits for the exact id while unrelated candidates are already present", async () => {
+    vi.useFakeTimers();
+    let recalls = 0;
+    const bodies: unknown[] = [];
+    const urls = stubCloudflare((_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as unknown);
+      recalls += 1;
+      return {
+        result: {
+          count: recalls === 1 ? 2 : 3,
+          answer: "unrelated answer",
+          candidates: [
+            { id: "mem-new-prefix", summary: "near match", sessionId: null, score: 0.9 },
+            ...(recalls === 1
+              ? []
+              : [{ id: "mem-new", summary: "exact match", sessionId: null, score: 0.8 }]),
+            { id: "mem-unrelated", summary: "unrelated", sessionId: null, score: 0.7 },
+          ],
+        },
+      };
+    });
+
+    const pending = memoryToolExecutors.waitForRecall({
+      namespace: "recall-visible",
+      profile: "agent",
+      memoryId: "mem-new",
+      query: "distinctive durable content",
+      timeoutSeconds: 30,
+    });
+    await vi.waitFor(() => expect(recalls).toBe(1));
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await pending;
+
+    expect(urls).toHaveLength(2);
+    expect(urls.every((url) => url.endsWith("/recall"))).toBe(true);
+    expect(bodies).toEqual([
+      {
+        query: "distinctive durable content",
+        thinkingLevel: "low",
+        responseLength: "short",
+      },
+      {
+        query: "distinctive durable content",
+        thinkingLevel: "low",
+        responseLength: "short",
+      },
+    ]);
+    expect(result.details).toMatchObject({
+      id: "mem-new",
+      attempts: 2,
+      waitMilliseconds: expect.any(Number),
+    });
+    expect(textOf(result)).toContain(
+      'Memory "mem-new" reached recall in recall-visible/agent after',
+    );
+    expect((result.details.waitMilliseconds as number) >= 2_000).toBe(true);
+  });
+
+  it("removes control and format characters before returning the memory id", async () => {
+    const unsafeCharacters = [0x1b, 0x9b, 0x2028, 0x202e].map((point) =>
+      String.fromCodePoint(point),
+    );
+    const memoryId = `mem-1${unsafeCharacters.join("")}Injected result`;
+    stubCloudflare({
+      result: {
+        count: 1,
+        answer: "ready",
+        candidates: [{ id: memoryId, summary: "ready", sessionId: null, score: 1 }],
+      },
+    });
+
+    const result = await memoryToolExecutors.waitForRecall({
+      namespace: "recall-safe-output",
+      profile: "agent",
+      memoryId,
+      query: "durable marker",
+      timeoutSeconds: 30,
+    });
+
+    expect(textOf(result)).toContain('"mem-1    Injected result"');
+    for (const character of unsafeCharacters) expect(textOf(result)).not.toContain(character);
+  });
+
+  it("rejects invalid bounds before calling recall", async () => {
+    const urls = stubCloudflare({ result: {} });
+
+    for (const params of [
+      { memoryId: "..", query: "query", timeoutSeconds: 30 },
+      { memoryId: "mem-1", query: "", timeoutSeconds: 30 },
+      { memoryId: "mem-1", query: "query", timeoutSeconds: 0 },
+      { memoryId: "mem-1", query: "query", timeoutSeconds: 301 },
+      { memoryId: "mem-1", query: "query", timeoutSeconds: 1.5 },
+    ]) {
+      await expect(
+        memoryToolExecutors.waitForRecall({
+          namespace: "recall-wait-guard",
+          profile: "agent",
+          ...params,
+        }),
+      ).rejects.toThrow();
+    }
+
+    expect(urls).toHaveLength(0);
+  });
+
+  it("aborts an in-flight recall when its deadline expires", async () => {
+    vi.useFakeTimers();
+    const request = stubPendingRecall();
+
+    const pending = memoryToolExecutors.waitForRecall({
+      namespace: "recall-in-flight-timeout",
+      profile: "agent",
+      memoryId: "mem-saved",
+      query: "stored before timeout",
+      timeoutSeconds: 1,
+    });
+    await vi.waitFor(() => expect(request.signal).toBeDefined());
+    const rejection = expect(pending).rejects.toThrow(
+      'Memory "mem-saved" did not appear in recall within 1000 ms',
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(request.signal?.aborted).toBe(true);
+  });
+
+  it("forwards host cancellation into an in-flight recall", async () => {
+    const request = stubPendingRecall();
+    const controller = new AbortController();
+    const pending = memoryToolExecutors.waitForRecall(
+      {
+        namespace: "recall-host-cancel",
+        profile: "agent",
+        memoryId: "mem-saved",
+        query: "stored before cancellation",
+        timeoutSeconds: 30,
+      },
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(request.signal).toBeDefined());
+    const rejection = expect(pending).rejects.toThrow("host cancelled");
+    controller.abort(new Error("host cancelled"));
+    await rejection;
+
+    expect(request.signal?.aborted).toBe(true);
+  });
+
+  it("times out without changing any memory", async () => {
+    vi.useFakeTimers();
+    const urls = stubCloudflare({
+      result: {
+        count: 1,
+        answer: "unrelated answer",
+        candidates: [{ id: "mem-unrelated", summary: "candidate", sessionId: null, score: 0.9 }],
+      },
+    });
+
+    const pending = memoryToolExecutors.waitForRecall({
+      namespace: "recall-timeout",
+      profile: "agent",
+      memoryId: "mem-saved",
+      query: "stored before timeout",
+      timeoutSeconds: 1,
+    });
+    const rejection = expect(pending).rejects.toThrow(
+      'Memory "mem-saved" did not appear in recall within 1000 ms',
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/recall");
+    expect(urls.some((url) => url.includes("/remember") || url.includes("/memories/"))).toBe(false);
+  });
 });
 
 describe("recall result", () => {

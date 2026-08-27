@@ -37,6 +37,7 @@ import type {
   NamespaceParams,
   ProfileParams,
   RecallParams,
+  RecallVisibilityParams,
   RememberParams,
   SessionParams,
   SummaryParams,
@@ -66,6 +67,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const operationalScope = configuredPiMemoryScope();
   const {
     rememberParameters,
+    recallVisibilityParameters,
     ingestParameters,
     recallParameters,
     listParameters,
@@ -196,6 +198,25 @@ export default function memoryExtension(pi: ExtensionAPI) {
       return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams, {
         signal,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_wait_for_recall",
+    ...memoryToolMeta.memory_wait_for_recall,
+    promptSnippet: "Wait until one stored memory can be found through recall.",
+    promptGuidelines: [
+      "Pass the exact id returned by memory_remember and the query you will reuse.",
+    ],
+    parameters: recallVisibilityParameters,
+    renderCall: callRenderer("memory_wait_for_recall"),
+    renderResult: resultLine,
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_wait_for_recall));
+      return memoryToolExecutors.waitForRecall(
+        operationalParams(params) as RecallVisibilityParams,
+        { signal },
+      );
     },
   });
 
