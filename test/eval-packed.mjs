@@ -49,6 +49,7 @@ const expectedToolNames = [
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",
+  "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
   "memory_list",
@@ -76,7 +77,13 @@ globalThis.fetch = async (input, init) => {
     body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
   });
   const result = url.endsWith("/recall")
-    ? { count: 0, answer: "packed recall answer", candidates: [] }
+    ? {
+        count: 1,
+        answer: "packed recall answer",
+        candidates: [
+          { id: memoryResult.id, summary: memoryResult.summary, sessionId: null, score: 1 },
+        ],
+      }
     : memoryResult;
   return Response.json({ success: true, result });
 };
@@ -158,6 +165,15 @@ try {
   assert.equal(rememberRequest.body.content, "one packed memory");
   // A write without a caller session still carries the harness-derived one.
   assert.match(rememberRequest.body.sessionId, /^omp-[a-z0-9-]+-[0-9a-f]{16}$/);
+
+  const visible = await ompTools.get("memory_wait_for_recall").execute("packed-wait", {
+    namespace: "packed",
+    profile: "agent",
+    memoryId: memoryResult.id,
+    query: "packed",
+    timeoutSeconds: 5,
+  });
+  assert.match(visible.content[0].text, /"packed-memory-1" reached recall/);
 
   // The Pi extension ships from the same tarball and reaches the library through
   // the shared executors, so it has to work from the packed layout too.

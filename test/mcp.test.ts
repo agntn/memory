@@ -12,6 +12,7 @@ const expectedNames = [
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",
+  "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
   "memory_list",
@@ -51,12 +52,59 @@ describe("memory MCP server", () => {
       required: expect.arrayContaining(["namespace", "profile", "content"]),
     });
     expect(
+      response.tools.find((tool) => tool.name === "memory_wait_for_recall")?.annotations
+        ?.readOnlyHint,
+    ).toBe(true);
+    expect(
       response.tools.find((tool) => tool.name === "memory_recall")?.annotations?.readOnlyHint,
     ).toBe(true);
     expect(
       response.tools.find((tool) => tool.name === "memory_delete_profile")?.annotations
         ?.destructiveHint,
     ).toBe(true);
+  });
+
+  it("executes the recall visibility check through the shared MCP path", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)) as unknown);
+        return Response.json({
+          success: true,
+          result: {
+            count: 1,
+            answer: "ready",
+            candidates: [{ id: "mem-1", summary: "ready", sessionId: null, score: 1 }],
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_wait_for_recall",
+      arguments: {
+        namespace: "default",
+        profile: "agent",
+        memoryId: "mem-1",
+        query: "durable marker",
+        timeoutSeconds: 30,
+      },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(response.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('Memory "mem-1" reached recall in default/agent'),
+      }),
+    ]);
+    expect(bodies).toEqual([
+      { query: "durable marker", thinkingLevel: "low", responseLength: "short" },
+    ]);
   });
 
   it("gives the outbound request the caller's cancellation signal", async () => {

@@ -7,6 +7,7 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
+  MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
   MAX_TOOL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
@@ -75,6 +76,24 @@ export const rememberParameters = Type.Object({
       maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
     }),
   ),
+});
+export const recallVisibilityParameters = Type.Object({
+  ...profileParameters,
+  memoryId: Type.String({
+    description: memoryFieldDescriptions.recallVisibilityMemoryId,
+    minLength: 1,
+    pattern: MEMORY_ID_PATTERN,
+  }),
+  query: Type.String({
+    description: memoryFieldDescriptions.recallVisibilityQuery,
+    minLength: 1,
+    maxLength: MAX_TOOL_QUERY_CHARACTERS,
+  }),
+  timeoutSeconds: Type.Integer({
+    description: memoryFieldDescriptions.recallVisibilityTimeout,
+    minimum: 1,
+    maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
+  }),
 });
 export const ingestParameters = Type.Object({
   ...profileParameters,
@@ -213,6 +232,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
   if (!scoped) {
     return {
       rememberParameters,
+      recallVisibilityParameters,
       ingestParameters,
       recallParameters,
       listParameters,
@@ -225,6 +245,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
 
   return {
     rememberParameters: Type.Omit(rememberParameters, ["namespace", "profile", "sessionId"]),
+    recallVisibilityParameters: Type.Omit(recallVisibilityParameters, ["namespace", "profile"]),
     ingestParameters: Type.Omit(ingestParameters, ["namespace", "profile", "sessionId"]),
     recallParameters: Type.Omit(recallParameters, ["namespace", "profile"]),
     listParameters: Type.Omit(listParameters, ["namespace", "profile"]),

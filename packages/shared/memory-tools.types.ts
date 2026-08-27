@@ -66,6 +66,12 @@ export interface RecallParams extends ProfileParams {
   expand?: number;
 }
 
+export interface RecallVisibilityParams extends ProfileParams {
+  memoryId: string;
+  query: string;
+  timeoutSeconds: number;
+}
+
 export interface ListParams extends ProfileParams {
   limit?: number;
   cursor?: string;

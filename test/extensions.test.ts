@@ -39,6 +39,7 @@ const expectedNames = [
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",
+  "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
   "memory_list",
@@ -106,6 +107,7 @@ describe("memory extensions", () => {
       "write",
       "write",
       "write",
+      "read",
       "write",
       "read",
       "read",
@@ -262,6 +264,65 @@ describe("memory extensions", () => {
     } as unknown as OmpExtensionAPI);
 
     expect(labels).toEqual(["Memory"]);
+  });
+
+  it("streams a progress line while recall visibility is pending", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const execute = vi.spyOn(memoryToolExecutors, "waitForRecall").mockResolvedValue({
+      content: [{ type: "text", text: "visible" }],
+      details: {},
+    });
+    const updates: Array<AgentToolResult<Record<string, unknown>>> = [];
+    const controllers = [new AbortController(), new AbortController()];
+
+    for (const [index, tools] of [piTools(), ompTools()].entries()) {
+      const wait = tools.find((tool) => tool.name === "memory_wait_for_recall") as
+        | (RegisteredTool & {
+            execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+          })
+        | undefined;
+      expect(wait).toBeDefined();
+      await wait!.execute(
+        "call-1",
+        { memoryId: "mem-1", query: "durable marker", timeoutSeconds: 30 },
+        controllers[index]?.signal,
+        (update: unknown) => updates.push(update as AgentToolResult<Record<string, unknown>>),
+      );
+    }
+
+    expect(execute).toHaveBeenNthCalledWith(
+      1,
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        memoryId: "mem-1",
+        query: "durable marker",
+        timeoutSeconds: 30,
+      },
+      { signal: controllers[0]?.signal },
+    );
+    expect(execute).toHaveBeenNthCalledWith(
+      2,
+      {
+        namespace: "default",
+        profile: "oritwoen",
+        memoryId: "mem-1",
+        query: "durable marker",
+        timeoutSeconds: 30,
+      },
+      { signal: controllers[1]?.signal },
+    );
+    expect(updates).toHaveLength(2);
+    expect(
+      updates.map((update) => {
+        const first = update.content[0];
+        return first?.type === "text" ? first.text : undefined;
+      }),
+    ).toEqual([
+      memoryToolProgress.memory_wait_for_recall,
+      memoryToolProgress.memory_wait_for_recall,
+    ]);
   });
 
   it("streams a progress line before a recall answers", async () => {

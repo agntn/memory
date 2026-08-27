@@ -8,6 +8,7 @@ import {
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
+  MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
   MAX_TOOL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_ID_PATTERN,
@@ -39,6 +40,7 @@ import type {
   NamespaceParams,
   ProfileParams,
   RecallParams,
+  RecallVisibilityParams,
   RememberParams,
   SessionParams,
   SummaryParams,
@@ -105,6 +107,24 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
+    }),
+    recallVisibilityParameters: Type.Object({
+      ...profileParameters,
+      memoryId: Type.String({
+        description: memoryFieldDescriptions.recallVisibilityMemoryId,
+        minLength: 1,
+        pattern: MEMORY_ID_PATTERN,
+      }),
+      query: Type.String({
+        description: memoryFieldDescriptions.recallVisibilityQuery,
+        minLength: 1,
+        maxLength: MAX_TOOL_QUERY_CHARACTERS,
+      }),
+      timeoutSeconds: Type.Integer({
+        description: memoryFieldDescriptions.recallVisibilityTimeout,
+        minimum: 1,
+        maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
+      }),
     }),
     ingestParameters: Type.Object({
       ...profileParameters,
@@ -249,6 +269,10 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       "profile",
       "sessionId",
     ]),
+    recallVisibilityParameters: Type.Omit(parameters.recallVisibilityParameters, [
+      "namespace",
+      "profile",
+    ]),
     ingestParameters: Type.Omit(parameters.ingestParameters, ["namespace", "profile", "sessionId"]),
     recallParameters: Type.Omit(parameters.recallParameters, ["namespace", "profile"]),
     listParameters: Type.Omit(parameters.listParameters, ["namespace", "profile"]),
@@ -276,6 +300,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     namespaceParameters,
     namespaceListParameters,
     rememberParameters,
+    recallVisibilityParameters,
     ingestParameters,
     recallParameters,
     listParameters,
@@ -401,6 +426,22 @@ export default function memoryExtension(omp: ExtensionAPI) {
       return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams, {
         signal,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_wait_for_recall",
+    ...memoryToolMeta.memory_wait_for_recall,
+    approval: "read",
+    parameters: recallVisibilityParameters,
+    renderCall: callRenderer("memory_wait_for_recall"),
+    renderResult: resultLine,
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_wait_for_recall));
+      return memoryToolExecutors.waitForRecall(
+        operationalParams(params) as RecallVisibilityParams,
+        { signal },
+      );
     },
   });
 

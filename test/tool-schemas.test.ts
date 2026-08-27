@@ -163,6 +163,7 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_namespace_create: sharedSchemas.namespaceParameters,
   memory_namespace_delete: sharedSchemas.namespaceParameters,
   memory_remember: sharedSchemas.rememberParameters,
+  memory_wait_for_recall: sharedSchemas.recallVisibilityParameters,
   memory_ingest: sharedSchemas.ingestParameters,
   memory_recall: sharedSchemas.recallParameters,
   memory_list: sharedSchemas.listParameters,
@@ -184,6 +185,12 @@ describe("tool schemas", () => {
     expect(remember.namespace?.max).toBe(cloudflareMemoryLimits.namespaceNameCharacters);
     expect(remember.profile?.max).toBe(cloudflareMemoryLimits.profileNameCharacters);
     expect(remember.sessionId?.max).toBe(cloudflareMemoryLimits.sessionIdCharacters);
+
+    const visibility = sharedShape(sharedSchemas.recallVisibilityParameters);
+    expect(visibility.memoryId?.pattern).toBeTruthy();
+    expect(visibility.query?.max).toBe(MAX_TOOL_QUERY_CHARACTERS);
+    expect(visibility.timeoutSeconds?.min).toBe(1);
+    expect(visibility.timeoutSeconds?.max).toBe(300);
 
     const ingest = sharedShape(sharedSchemas.ingestParameters);
     expect(ingest.messages?.max).toBe(cloudflareMemoryLimits.ingestMessages);
