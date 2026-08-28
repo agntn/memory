@@ -184,6 +184,7 @@ try {
   const recalled = await piTools
     .get("memory_recall")
     .execute("packed-pi", { namespace: "packed", profile: "agent", query: "what is packed?" });
+  assert.match(recalled.content[0].text, /answerTrust: "service-generated-untrusted"/);
   assert.match(recalled.content[0].text, /packed recall answer/);
   assert.match(requests.at(-1).url, /\/namespaces\/packed\/profiles\/agent\/recall$/);
 
