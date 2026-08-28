@@ -24,6 +24,7 @@ import type {
   RememberParams,
   SessionParams,
   SummaryParams,
+  SupersedeParams,
 } from "./memory-tools.types.ts";
 
 let memoryModulePromise: Promise<MemoryModule> | undefined;
@@ -115,6 +116,10 @@ export const memoryToolMeta = {
     label: "Remember",
     description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
+  memory_supersede: {
+    label: "Supersede Memory",
+    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+  },
   memory_wait_for_recall: {
     label: "Wait for Recall",
     description:
@@ -160,6 +165,7 @@ export const memoryToolMeta = {
 
 /** Progress text for calls that can stay pending long enough to need it. */
 export const memoryToolProgress = {
+  memory_supersede: "Replacing memory",
   memory_wait_for_recall: "Waiting for memory to reach recall",
   memory_recall: "Searching memories",
   memory_ingest: "Submitting messages for extraction",
@@ -191,6 +197,8 @@ export const memoryFieldDescriptions = {
   recallQuery: "Natural-language recall query.",
   recallVisibilityMemoryId:
     "Exact memory id returned by memory_remember. The check succeeds only when this id appears among recall candidates.",
+  supersedeOldMemoryId:
+    "Exact id of the memory to delete only after the replacement is readable and visible in recall.",
   recallVisibilityQuery:
     "The exact natural-language query the caller will use to retrieve this memory.",
   recallVisibilityTimeout:
@@ -604,6 +612,11 @@ function assertRecallVisibility(params: RecallVisibilityParams): void {
       `Recall visibility query must contain 1 to ${MAX_TOOL_QUERY_CHARACTERS} characters`,
     );
   }
+  if (new TextEncoder().encode(params.query).byteLength > MAX_TOOL_QUERY_CHARACTERS) {
+    throw new Error(
+      `Recall visibility query must not exceed ${MAX_TOOL_QUERY_CHARACTERS} UTF-8 bytes`,
+    );
+  }
   if (
     !Number.isInteger(params.timeoutSeconds) ||
     params.timeoutSeconds < 1 ||
@@ -638,6 +651,67 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+interface RecallVisibility {
+  attempts: number;
+  waitMilliseconds: number;
+}
+
+async function waitForRecallCandidate(
+  profile: MemoryProfile,
+  params: RecallVisibilityParams,
+  options: AbortOptions = {},
+): Promise<RecallVisibility> {
+  assertRecallVisibility(params);
+  const recall = requireCapability(profile, "recall");
+  const timeoutMilliseconds = params.timeoutSeconds * 1_000;
+  const startedAt = performance.now();
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(), timeoutMilliseconds);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutController.signal])
+    : timeoutController.signal;
+  let attempts = 0;
+
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      attempts += 1;
+      const result = await recall(params.query, {
+        thinkingLevel: "low",
+        responseLength: "short",
+        signal,
+      });
+      const waitMilliseconds = Math.round(performance.now() - startedAt);
+      if (
+        waitMilliseconds <= timeoutMilliseconds &&
+        result.candidates.some((candidate) => candidate.id === params.memoryId)
+      ) {
+        return { attempts, waitMilliseconds };
+      }
+      const remaining = timeoutMilliseconds - waitMilliseconds;
+      if (remaining <= 0) break;
+      const backoff = Math.min(attempts * 2_000, MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS);
+      await delay(Math.min(backoff, remaining), signal);
+    }
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    if (!timeoutController.signal.aborted) {
+      const elapsed = Math.round(performance.now() - startedAt);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Recall visibility check for memory ${quoteToolText(params.memoryId)} failed after ${elapsed} ms: ${quoteToolText(message)}.`,
+        { cause: error },
+      );
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  throw new Error(
+    `Memory ${quoteToolText(params.memoryId)} did not appear in recall within ${timeoutMilliseconds} ms after ${attempts} attempts.`,
+  );
+}
+
 export const memoryToolExecutors = {
   async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     const profile = await getProfile(params);
@@ -651,75 +725,102 @@ export const memoryToolExecutors = {
     };
   },
 
+  async supersede(params: SupersedeParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+    assertRecallVisibility({
+      ...params,
+      memoryId: params.oldMemoryId,
+    });
+    const profile = await getProfile(params);
+    const replacement = await requireCapability(profile, "remember")(
+      { content: params.content, sessionId: optionalString(params.sessionId) },
+      options,
+    );
+    let visibility: RecallVisibility;
+    let verifiedReplacement: Memory;
+    try {
+      if (replacement.id === params.oldMemoryId) {
+        throw new Error("Replacement reused the old memory id");
+      }
+      verifiedReplacement = await requireCapability(profile, "get")(replacement.id, options);
+      if (
+        verifiedReplacement.id !== replacement.id ||
+        verifiedReplacement.content !== params.content
+      ) {
+        throw new Error("Exact replacement read did not match the stored id and content");
+      }
+      visibility = await waitForRecallCandidate(
+        profile,
+        {
+          namespace: params.namespace,
+          profile: params.profile,
+          memoryId: replacement.id,
+          query: params.query,
+          timeoutSeconds: params.timeoutSeconds,
+        },
+        options,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
+        { cause: error },
+      );
+    }
+    try {
+      await requireCapability(profile, "delete")(params.oldMemoryId, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Replacement memory ${quoteToolText(replacement.id)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
+        { cause: error },
+      );
+    }
+    const details = {
+      oldMemoryId: params.oldMemoryId,
+      newMemory: verifiedReplacement,
+      ...visibility,
+    };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)} in ${memoryTarget(params)} after ${visibility.waitMilliseconds} ms and ${visibility.attempts} ${visibility.attempts === 1 ? "attempt" : "attempts"}.\n${json({ ...details, newMemory: withSummaryTrust(verifiedReplacement) })}`,
+        },
+      ],
+      details,
+    };
+  },
+
   async waitForRecall(
     params: RecallVisibilityParams,
     options: AbortOptions = {},
   ): Promise<MemoryToolResult> {
-    assertRecallVisibility(params);
     const profile = await getProfile(params);
-    const recall = requireCapability(profile, "recall");
-    const timeoutMilliseconds = params.timeoutSeconds * 1_000;
-    const startedAt = performance.now();
-    const timeoutController = new AbortController();
-    const timeout = setTimeout(() => timeoutController.abort(), timeoutMilliseconds);
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, timeoutController.signal])
-      : timeoutController.signal;
-    let attempts = 0;
-
+    let visibility: RecallVisibility;
     try {
-      while (true) {
-        signal.throwIfAborted();
-        attempts += 1;
-        const result = await recall(params.query, {
-          thinkingLevel: "low",
-          responseLength: "short",
-          signal,
-        });
-        const waitMilliseconds = Math.round(performance.now() - startedAt);
-        if (
-          waitMilliseconds <= timeoutMilliseconds &&
-          result.candidates.some((candidate) => candidate.id === params.memoryId)
-        ) {
-          const details = {
-            id: params.memoryId,
-            namespace: params.namespace,
-            profile: params.profile,
-            attempts,
-            waitMilliseconds,
-          };
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Memory ${quoteToolText(params.memoryId)} reached recall in ${memoryTarget(params)} after ${waitMilliseconds} ms and ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
-              },
-            ],
-            details,
-          };
-        }
-        const remaining = timeoutMilliseconds - waitMilliseconds;
-        if (remaining <= 0) break;
-        const backoff = Math.min(attempts * 2_000, MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS);
-        await delay(Math.min(backoff, remaining), signal);
-      }
+      visibility = await waitForRecallCandidate(profile, params, options);
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      if (!timeoutController.signal.aborted) {
-        const elapsed = Math.round(performance.now() - startedAt);
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Recall visibility check for memory ${quoteToolText(params.memoryId)} failed after ${elapsed} ms: ${quoteToolText(message)}. No memory was changed.`,
-          { cause: error },
-        );
-      }
-    } finally {
-      clearTimeout(timeout);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message} No memory was changed.`, { cause: error });
     }
-
-    throw new Error(
-      `Memory ${quoteToolText(params.memoryId)} did not appear in recall within ${timeoutMilliseconds} ms after ${attempts} attempts. No memory was changed.`,
-    );
+    const { attempts, waitMilliseconds } = visibility;
+    const details = {
+      id: params.memoryId,
+      namespace: params.namespace,
+      profile: params.profile,
+      attempts,
+      waitMilliseconds,
+    };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Memory ${quoteToolText(params.memoryId)} reached recall in ${memoryTarget(params)} after ${waitMilliseconds} ms and ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
+        },
+      ],
+      details,
+    };
   },
 
   async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {

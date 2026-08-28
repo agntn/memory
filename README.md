@@ -1,6 +1,6 @@
 # @agntn/memory
 
-One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same fourteen tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
+One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same fifteen tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
 
 ## Install
 
@@ -90,7 +90,7 @@ Over HTTP the signal goes straight to `fetch` and kills the request in flight. A
 
 ## Pi and OMP extensions
 
-Pi and OMP each get a native extension with all fourteen tools. They talk to Cloudflare over HTTP, so the host needs credentials:
+Pi and OMP each get a native extension with all fifteen tools. They talk to Cloudflare over HTTP, so the host needs credentials:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID="..."
@@ -121,7 +121,7 @@ Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/
 
 ## MCP server
 
-Same fourteen tools over the Model Context Protocol, same credentials, stdio transport:
+Same fifteen tools over the Model Context Protocol, same credentials, stdio transport:
 
 ```bash
 memory mcp
@@ -155,13 +155,13 @@ const server = createMcpServer();
 await server.connect(transport);
 ```
 
-An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the service answer with `answerTrust: "service-generated-untrusted"` and indents its lines so they cannot impersonate candidate records, then prints one JSON object per candidate memory. Cloudflare does not identify which candidate IDs support the prose, so state decisions use full candidate `content` instead of the answer alone. The service also generates each record's `summary`; serialized records mark it with `summaryTrust: "service-generated-untrusted"`. Use summaries for discovery, then read `content` before making a state decision. Summaries are capped, so recall takes an `expand` count that pulls the full content of the best-scoring candidates into the same response, and `memory_list` takes the same count for the first entries of a page. The service itself returns every candidate it ranked, tail scores included, so recall also takes a `candidates` cap that keeps only the best-scoring ones and says in the header how many were trimmed. `memory_get` takes a list of up to 30 ids and returns one record per unique id in request order, one service read each, with a per-id error message where a read fails; the call itself errors only when every read fails. `memory_list` and `memory_get` print their records the same way recall does, one compact JSON object per line with any full content indented below its record, and the list header says outright whether another page waits behind a cursor. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing. `memory_wait_for_recall` takes the id from `memory_remember` and polls for that exact candidate with bounded backoff, so a long wait cannot hide the id of a write that already succeeded.
+An MCP client only ever sees the result text, so every result has to stand on its own. `memory_recall` prints the service answer with `answerTrust: "service-generated-untrusted"` and indents its lines so they cannot impersonate candidate records, then prints one JSON object per candidate memory. Cloudflare does not identify which candidate IDs support the prose, so state decisions use full candidate `content` instead of the answer alone. The service also generates each record's `summary`; serialized records mark it with `summaryTrust: "service-generated-untrusted"`. Use summaries for discovery, then read `content` before making a state decision. Summaries are capped, so recall takes an `expand` count that pulls the full content of candidates with the highest scores into the same response, and `memory_list` takes the same count for the first entries of a page. The service itself returns every candidate it ranked, tail scores included, so recall also takes a `candidates` cap that keeps only the highest scoring ones and says how many it trimmed. `memory_get` takes a list of up to 30 ids and returns one record per unique id in request order, one service read each, with an error message for each failed id; the call itself errors only when every read fails. `memory_list` and `memory_get` print their records the same way recall does, one compact JSON object per line with any full content indented below its record, and the list header says outright whether another page waits behind a cursor. Deleting a session or a profile tells you how much it removed, and says plainly when a session id matched nothing. `memory_wait_for_recall` takes the id from `memory_remember` and polls for that exact candidate with bounded backoff, so a long wait cannot hide the id of a write that already succeeded. `memory_supersede` uses that check between an exact read of the replacement and deletion of the old id. If a check or delete fails, it keeps the replacement and reports both ids instead of trying a risky rollback.
 
 When Claude Code launches the MCP server, its injected `CLAUDE_PROJECT_DIR` and `CLAUDE_CODE_SESSION_ID` are hashed into a deterministic write `sessionId`. The readable key names the harness and project but does not expose the full path or conversation id. Other MCP hosts may still pass `sessionId` explicitly when running without a bound operational scope.
 
 Three Cloudflare behaviours will bite you otherwise. An unknown memory id comes back as a generic 500, not a 404, so `memory_get` adds a line saying the id may simply not exist. Deleting a session that never existed succeeds quietly, which is why the delete counts what it found first. And a durable write can take a while to appear in recall. The visibility check reports its measured wait, while timeout or host cancellation changes no memory.
 
-What Cloudflare does not give you: editing a memory, listing profiles, batch reads, or any handle on the asynchronous ingest job. The tool descriptions say so instead of staying silent, and the multi-id `memory_get` is this package fanning out single reads, not a service batch endpoint.
+What Cloudflare does not give you: editing a memory, listing profiles, batch reads, or any handle on the asynchronous ingest job. The tool descriptions say so instead of staying silent. Both `memory_get` with several ids and `memory_supersede` are compositions inside this package, not service batch or update endpoints.
 
 ## License
 
