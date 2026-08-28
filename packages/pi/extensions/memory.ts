@@ -41,6 +41,7 @@ import type {
   RememberParams,
   SessionParams,
   SummaryParams,
+  SupersedeParams,
 } from "../../shared/memory-tools.types.ts";
 
 /** One streamed update: the progress line, with the real result still to come. */
@@ -67,6 +68,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const operationalScope = configuredPiMemoryScope();
   const {
     rememberParameters,
+    supersedeParameters,
     recallVisibilityParameters,
     ingestParameters,
     recallParameters,
@@ -196,6 +198,24 @@ export default function memoryExtension(pi: ExtensionAPI) {
       ctx,
     ): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.remember(operationalWriteParams(params, ctx) as RememberParams, {
+        signal,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_supersede",
+    ...memoryToolMeta.memory_supersede,
+    promptSnippet: "Replace a durable memory without deleting the old record first.",
+    promptGuidelines: [
+      "Use the old id and the exact recall query that must find the replacement before deletion.",
+    ],
+    parameters: supersedeParameters,
+    renderCall: callRenderer("memory_supersede"),
+    renderResult: resultLine,
+    execute(_id, params, signal, onUpdate, ctx): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_supersede));
+      return memoryToolExecutors.supersede(operationalWriteParams(params, ctx) as SupersedeParams, {
         signal,
       });
     },

@@ -12,6 +12,7 @@ const expectedNames = [
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_remember",
+  "memory_supersede",
   "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
@@ -50,6 +51,19 @@ describe("memory MCP server", () => {
     ).toMatchObject({
       type: "object",
       required: expect.arrayContaining(["namespace", "profile", "content"]),
+    });
+    expect(response.tools.find((tool) => tool.name === "memory_supersede")).toMatchObject({
+      inputSchema: {
+        required: expect.arrayContaining([
+          "namespace",
+          "profile",
+          "oldMemoryId",
+          "content",
+          "query",
+          "timeoutSeconds",
+        ]),
+      },
+      annotations: { destructiveHint: true, idempotentHint: false },
     });
     expect(
       response.tools.find((tool) => tool.name === "memory_wait_for_recall")?.annotations
@@ -104,6 +118,85 @@ describe("memory MCP server", () => {
     ]);
     expect(bodies).toEqual([
       { query: "durable marker", thinkingLevel: "low", responseLength: "short" },
+    ]);
+  });
+
+  it("stores and verifies a replacement before deleting the old memory", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({
+          url,
+          method: init?.method ?? "GET",
+          ...(init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) as unknown }),
+        });
+        if (url.endsWith("/recall")) {
+          return Response.json({
+            success: true,
+            result: {
+              count: 1,
+              answer: "ready",
+              candidates: [{ id: "mem-new", summary: "replacement", sessionId: null, score: 1 }],
+            },
+          });
+        }
+        const old = url.endsWith("/memories/mem-old");
+        return Response.json({
+          success: true,
+          result: {
+            id: old ? "mem-old" : "mem-new",
+            type: "fact",
+            summary: old ? "old" : "replacement",
+            content: old ? "old checkpoint" : "new checkpoint",
+            sessionId: null,
+            createdAt: "2026-08-28T00:00:00.000Z",
+            updatedAt: "2026-08-28T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_supersede",
+      arguments: {
+        namespace: "default",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: "new checkpoint",
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(response.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/mem-old[\s\S]*mem-new|mem-new[\s\S]*mem-old/),
+      }),
+    ]);
+    expect(requests.map(({ url, method }) => ({ path: new URL(url).pathname, method }))).toEqual([
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/remember",
+        method: "POST",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-new",
+        method: "GET",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/recall",
+        method: "POST",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
+        method: "DELETE",
+      },
     ]);
   });
 
@@ -236,6 +329,16 @@ describe("memory MCP server", () => {
     expect(rememberSchema?.properties).not.toHaveProperty("namespace");
     expect(rememberSchema?.properties).not.toHaveProperty("profile");
     expect(rememberSchema?.properties).not.toHaveProperty("sessionId");
+    const supersedeSchema = tools.tools.find(
+      (tool) => tool.name === "memory_supersede",
+    )?.inputSchema;
+    expect(supersedeSchema).toMatchObject({
+      type: "object",
+      required: ["oldMemoryId", "content", "query", "timeoutSeconds"],
+    });
+    expect(supersedeSchema?.properties).not.toHaveProperty("namespace");
+    expect(supersedeSchema?.properties).not.toHaveProperty("profile");
+    expect(supersedeSchema?.properties).not.toHaveProperty("sessionId");
 
     const response = await client.callTool({
       name: "memory_remember",

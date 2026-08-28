@@ -40,6 +40,7 @@ import type {
   RememberParams,
   SessionParams,
   SummaryParams,
+  SupersedeParams,
 } from "../packages/shared/memory-tools.types.ts";
 import { version } from "./version.ts";
 
@@ -69,6 +70,12 @@ const destructiveAnnotations: Tool["annotations"] = {
   readOnlyHint: false,
   destructiveHint: true,
   idempotentHint: true,
+  openWorldHint: true,
+};
+const supersedeAnnotations: Tool["annotations"] = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
   openWorldHint: true,
 };
 const MCP_PROGRESS_INTERVAL_MS = 30_000;
@@ -127,6 +134,16 @@ function createTools(): MemoryToolDefinition[] {
       execute: (args, options) =>
         memoryToolExecutors.remember(
           operationalWriteParams(args as { sessionId?: string }) as RememberParams,
+          options,
+        ),
+    },
+    {
+      name: "memory_supersede",
+      inputSchema: operationalSchemas.supersedeParameters,
+      annotations: supersedeAnnotations,
+      execute: (args, options) =>
+        memoryToolExecutors.supersede(
+          operationalWriteParams(args as { sessionId?: string }) as SupersedeParams,
           options,
         ),
     },
@@ -269,8 +286,14 @@ export function createMcpServer(): Server {
     let progressTimer: ReturnType<typeof setInterval> | undefined;
     const progressToken = extra._meta?.progressToken;
     const timeoutSeconds = args.timeoutSeconds;
+    const progressMessage =
+      tool.name === "memory_wait_for_recall"
+        ? memoryToolProgress.memory_wait_for_recall
+        : tool.name === "memory_supersede"
+          ? memoryToolProgress.memory_supersede
+          : undefined;
     if (
-      tool.name === "memory_wait_for_recall" &&
+      progressMessage !== undefined &&
       progressToken !== undefined &&
       typeof timeoutSeconds === "number"
     ) {
@@ -285,7 +308,7 @@ export function createMcpServer(): Server {
               progressToken,
               progress,
               total,
-              message: memoryToolProgress.memory_wait_for_recall,
+              message: progressMessage,
             },
           })
           .catch((error: unknown) => {

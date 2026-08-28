@@ -105,6 +105,7 @@ describe("memory summary trust", () => {
   it("marks generated summaries as untrusted in every tool description that returns records", () => {
     for (const name of [
       "memory_remember",
+      "memory_supersede",
       "memory_recall",
       "memory_list",
       "memory_get",
@@ -389,6 +390,160 @@ describe("recall visibility", () => {
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain("/recall");
     expect(urls.some((url) => url.includes("/remember") || url.includes("/memories/"))).toBe(false);
+  });
+});
+
+describe("memory supersession", () => {
+  const replacement = {
+    id: "mem-new",
+    type: "fact",
+    summary: "replacement",
+    content: "new checkpoint",
+    sessionId: "session-new",
+    createdAt: "2026-08-28T00:00:00.000Z",
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  };
+
+  it("rejects an oversized UTF-8 query before creating the replacement", async () => {
+    const urls = stubCloudflare({ result: replacement });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        namespace: "supersede-query-guard",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "ą".repeat(1_024),
+        timeoutSeconds: 30,
+      }),
+    ).rejects.toThrow("1024 UTF-8 bytes");
+
+    expect(urls).toHaveLength(0);
+  });
+
+  it("leaves the old memory untouched when replacement creation fails", async () => {
+    const urls = stubCloudflare({ failure: { status: 503, message: "write unavailable" } });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        namespace: "supersede-create-fail",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      }),
+    ).rejects.toThrow("write unavailable");
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/remember");
+  });
+
+  it("does not delete when the service reuses the old memory id", async () => {
+    const urls = stubCloudflare({ result: { ...replacement, id: "mem-old" } });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        namespace: "supersede-id-reuse",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      }),
+    ).rejects.toThrow("Replacement reused the old memory id");
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/remember");
+  });
+
+  it("keeps the old memory when the exact replacement read does not match", async () => {
+    const urls = stubCloudflare((url) => ({
+      result: url.endsWith("/memories/mem-new")
+        ? { ...replacement, content: "different checkpoint" }
+        : replacement,
+    }));
+
+    const error = await memoryToolExecutors
+      .supersede({
+        namespace: "supersede-read-mismatch",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("mem-old");
+    expect((error as Error).message).toContain("mem-new");
+    expect(urls).toHaveLength(2);
+    expect(urls.some((url) => url.endsWith("/memories/mem-old"))).toBe(false);
+  });
+
+  it("reports both ids when the replacement fails its visibility check", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.endsWith("/recall")) {
+        return { failure: { status: 503, message: "recall unavailable" } };
+      }
+      return { result: replacement };
+    });
+
+    const error = await memoryToolExecutors
+      .supersede({
+        namespace: "supersede-recall-fail",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("mem-old");
+    expect((error as Error).message).toContain("mem-new");
+    expect(urls.some((url) => url.endsWith("/memories/mem-old"))).toBe(false);
+    expect(urls.filter((url) => url.endsWith("/memories/mem-new"))).toHaveLength(1);
+  });
+
+  it("reports both ids and keeps the replacement when deleting the old memory fails", async () => {
+    const urls = stubCloudflare((url, init) => {
+      if (url.endsWith("/recall")) {
+        return {
+          result: {
+            count: 1,
+            answer: "ready",
+            candidates: [
+              { id: replacement.id, summary: replacement.summary, sessionId: null, score: 1 },
+            ],
+          },
+        };
+      }
+      if (url.endsWith("/memories/mem-old") && init?.method === "DELETE") {
+        return { failure: { status: 503, message: "delete unavailable" } };
+      }
+      return { result: replacement };
+    });
+
+    const error = await memoryToolExecutors
+      .supersede({
+        namespace: "supersede-delete-fail",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("mem-old");
+    expect((error as Error).message).toContain("mem-new");
+    expect((error as Error).message).toContain("deletion outcome is unknown");
+    expect((error as Error).message).not.toContain("delete the replacement");
+    expect(urls.filter((url) => url.endsWith("/memories/mem-new"))).toHaveLength(1);
   });
 });
 

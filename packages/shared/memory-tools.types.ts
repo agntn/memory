@@ -48,6 +48,14 @@ export interface RememberParams extends ProfileParams {
   sessionId?: string;
 }
 
+export interface SupersedeParams extends ProfileParams {
+  oldMemoryId: string;
+  content: string;
+  query: string;
+  timeoutSeconds: number;
+  sessionId?: string;
+}
+
 export interface IngestParams extends ProfileParams {
   messages: Array<{
     role: "system" | "user" | "assistant";

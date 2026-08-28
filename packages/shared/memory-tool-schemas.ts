@@ -77,6 +77,34 @@ export const rememberParameters = Type.Object({
     }),
   ),
 });
+export const supersedeParameters = Type.Object({
+  ...profileParameters,
+  oldMemoryId: Type.String({
+    description: memoryFieldDescriptions.supersedeOldMemoryId,
+    minLength: 1,
+    pattern: MEMORY_ID_PATTERN,
+  }),
+  content: Type.String({
+    description: memoryFieldDescriptions.rememberContent,
+    minLength: 1,
+  }),
+  query: Type.String({
+    description: memoryFieldDescriptions.recallVisibilityQuery,
+    minLength: 1,
+    maxLength: MAX_TOOL_QUERY_CHARACTERS,
+  }),
+  timeoutSeconds: Type.Integer({
+    description: memoryFieldDescriptions.recallVisibilityTimeout,
+    minimum: 1,
+    maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
+  }),
+  sessionId: Type.Optional(
+    Type.String({
+      description: memoryFieldDescriptions.writeSessionId,
+      maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
+    }),
+  ),
+});
 export const recallVisibilityParameters = Type.Object({
   ...profileParameters,
   memoryId: Type.String({
@@ -232,6 +260,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
   if (!scoped) {
     return {
       rememberParameters,
+      supersedeParameters,
       recallVisibilityParameters,
       ingestParameters,
       recallParameters,
@@ -245,6 +274,7 @@ export function createOperationalMemoryToolSchemas(scoped: boolean) {
 
   return {
     rememberParameters: Type.Omit(rememberParameters, ["namespace", "profile", "sessionId"]),
+    supersedeParameters: Type.Omit(supersedeParameters, ["namespace", "profile", "sessionId"]),
     recallVisibilityParameters: Type.Omit(recallVisibilityParameters, ["namespace", "profile"]),
     ingestParameters: Type.Omit(ingestParameters, ["namespace", "profile", "sessionId"]),
     recallParameters: Type.Omit(recallParameters, ["namespace", "profile"]),
