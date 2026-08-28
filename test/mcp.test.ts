@@ -107,6 +107,75 @@ describe("memory MCP server", () => {
     ]);
   });
 
+  it("keeps a long recall wait alive with MCP progress", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const startedAt = performance.now();
+    let recalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        recalls += 1;
+        const ready = performance.now() - startedAt >= 65_000;
+        return Response.json({
+          success: true,
+          result: {
+            count: ready ? 1 : 0,
+            answer: ready ? "ready" : "waiting",
+            candidates: ready
+              ? [{ id: "mem-progress", summary: "ready", sessionId: null, score: 1 }]
+              : [],
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+    const updates: Array<{ progress: number; total?: number; message?: string }> = [];
+
+    const pending = client.callTool(
+      {
+        name: "memory_wait_for_recall",
+        arguments: {
+          namespace: "default",
+          profile: "agent",
+          memoryId: "mem-progress",
+          query: "durable marker",
+          timeoutSeconds: 90,
+        },
+      },
+      undefined,
+      {
+        onprogress: (update) => updates.push(update),
+        resetTimeoutOnProgress: true,
+      },
+    );
+    const settled = pending.then(
+      (response) => ({ response }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.waitFor(() => expect(recalls).toBe(1));
+    await vi.advanceTimersByTimeAsync(70_000);
+
+    const outcome = await settled;
+    expect(outcome).toEqual({
+      response: expect.objectContaining({
+        content: [
+          expect.objectContaining({
+            text: expect.stringContaining('Memory "mem-progress" reached recall in default/agent'),
+          }),
+        ],
+      }),
+    });
+    expect(updates).toEqual([
+      { progress: 30_000, total: 90_000, message: "Waiting for memory to reach recall" },
+      { progress: 60_000, total: 90_000, message: "Waiting for memory to reach recall" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(updates).toHaveLength(2);
+  });
+
   it("gives the outbound request the caller's cancellation signal", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
