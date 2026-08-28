@@ -21,7 +21,11 @@ import {
   configuredMemoryScope,
   grokMemorySessionId,
 } from "../packages/shared/memory-scope.ts";
-import { memoryToolExecutors, memoryToolMeta } from "../packages/shared/memory-tools.ts";
+import {
+  memoryToolExecutors,
+  memoryToolMeta,
+  memoryToolProgress,
+} from "../packages/shared/memory-tools.ts";
 import type {
   GetParams,
   IngestParams,
@@ -67,6 +71,7 @@ const destructiveAnnotations: Tool["annotations"] = {
   idempotentHint: true,
   openWorldHint: true,
 };
+const MCP_PROGRESS_INTERVAL_MS = 30_000;
 
 function createTools(): MemoryToolDefinition[] {
   const operationalScope = configuredMemoryScope();
@@ -261,6 +266,34 @@ export function createMcpServer(): Server {
       };
     }
 
+    let progressTimer: ReturnType<typeof setInterval> | undefined;
+    const progressToken = extra._meta?.progressToken;
+    const timeoutSeconds = args.timeoutSeconds;
+    if (
+      tool.name === "memory_wait_for_recall" &&
+      progressToken !== undefined &&
+      typeof timeoutSeconds === "number"
+    ) {
+      const startedAt = performance.now();
+      const total = timeoutSeconds * 1_000;
+      progressTimer = setInterval(() => {
+        const progress = Math.min(Math.round(performance.now() - startedAt), total);
+        void extra
+          .sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress,
+              total,
+              message: memoryToolProgress.memory_wait_for_recall,
+            },
+          })
+          .catch((error: unknown) => {
+            server.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          });
+      }, MCP_PROGRESS_INTERVAL_MS);
+    }
+
     try {
       return toCallToolResult(await tool.execute(args, { signal: extra.signal }));
     } catch (error) {
@@ -273,6 +306,8 @@ export function createMcpServer(): Server {
         ],
         isError: true,
       };
+    } finally {
+      if (progressTimer !== undefined) clearInterval(progressTimer);
     }
   });
 
