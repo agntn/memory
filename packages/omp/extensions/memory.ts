@@ -47,7 +47,7 @@ import type {
   SupersedeParams,
 } from "../../shared/memory-tools.types.ts";
 
-/**
+/*
  * Rebuild the shared parameter shapes with OMP's TypeBox.
  *
  * OMP validates tool parameters with its host build, so these schemas cannot be
@@ -317,12 +317,12 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
   };
 }
 
-/** One streamed update: the progress line, with the real result still to come. */
+/* One streamed update: the progress line, with the real result still to come. */
 function progress(text: string): AgentToolResult<Record<string, unknown>> {
   return { content: [{ type: "text", text }], details: {} };
 }
 
-/** OMP keeps the failure flag in the result object it hands the renderer. */
+/* OMP keeps the failure flag in the result object it hands the renderer. */
 function resultLine(result: RenderedToolResult, options: RenderOptions, theme: StatusTheme) {
   return new Text(renderToolResult(result, result.isError ?? false, options, theme), 0, 0);
 }
@@ -362,7 +362,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     );
   }
 
-  /**
+  /*
    * Build the call renderer for one tool.
    *
    * OMP orders the renderer arguments `(args, options, theme)`, unlike Pi. A

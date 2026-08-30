@@ -255,7 +255,12 @@ export const summaryParameters = Type.Object({
 });
 export const profileOnlyParameters = Type.Object(profileParameters);
 
-/** Build the model-facing schemas for either a fixed operational scope or raw administration. */
+/**
+ * Build the model-facing schemas for either a fixed operational scope or raw administration.
+ *
+ * @param scoped - Whether namespace, profile, and write provenance are bound by the host.
+ * @returns {object} The schema set exposed to model-facing memory tools.
+ */
 export function createOperationalMemoryToolSchemas(scoped: boolean) {
   if (!scoped) {
     return {

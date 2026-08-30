@@ -44,12 +44,12 @@ import type {
   SupersedeParams,
 } from "../../shared/memory-tools.types.ts";
 
-/** One streamed update: the progress line, with the real result still to come. */
+/* One streamed update: the progress line, with the real result still to come. */
 function progress(text: string): AgentToolResult<Record<string, unknown>> {
   return { content: [{ type: "text", text }], details: {} };
 }
 
-/**
+/*
  * Render a finished call.
  *
  * Pi orders the renderer arguments `(result, options, theme, context)` and
@@ -59,7 +59,7 @@ function resultLine(
   result: RenderedToolResult,
   options: RenderOptions,
   theme: StatusTheme,
-  context?: { isError?: boolean },
+  context?: Readonly<{ isError?: boolean }>,
 ) {
   return new Text(renderToolResult(result, context?.isError ?? false, options, theme), 0, 0);
 }
@@ -94,7 +94,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     );
   }
 
-  /**
+  /*
    * Build the call renderer for one tool.
    *
    * Pi orders the renderer arguments `(args, theme, context)`. A scoped tool

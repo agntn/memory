@@ -8,10 +8,10 @@ import {
   sanitizeTerminalText,
 } from "../packages/shared/tui.ts";
 
-const ESC = String.fromCharCode(27);
-const NUL = String.fromCharCode(0);
-const BEL = String.fromCharCode(7);
-const C1 = String.fromCharCode(155);
+const ESC = String.fromCodePoint(27);
+const NUL = String.fromCodePoint(0);
+const BEL = String.fromCodePoint(7);
+const C1 = String.fromCodePoint(155);
 
 /** Both theme methods are optional, so a bare object has to render too. */
 const plain = {};
@@ -357,8 +357,8 @@ describe("surrogate safety", () => {
   const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
   it("replaces an unpaired code unit the model sent", () => {
-    expect(sanitizeTerminalText(`start${String.fromCharCode(0xd800)}end`)).toBe("start end");
-    expect(sanitizeTerminalText(`a${String.fromCharCode(0xdc00)}b`)).toBe("a b");
+    expect(sanitizeTerminalText(`start${String.fromCodePoint(0xd800)}end`)).toBe("start end");
+    expect(sanitizeTerminalText(`a${String.fromCodePoint(0xdc00)}b`)).toBe("a b");
   });
 
   it("keeps a real pair whole", () => {

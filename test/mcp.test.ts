@@ -566,6 +566,33 @@ describe("memory MCP server", () => {
     ]);
   });
 
+  it("does not serialize fields from non-Error failure causes", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw { kind: "network", apiToken: "do-not-leak" };
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_get",
+      arguments: {
+        namespace: "mcp-error-test",
+        profile: "agent",
+        memoryIds: ["mem-1"],
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      { type: "text", text: "memory_get failed: Unknown memory provider error" },
+    ]);
+    expect(JSON.stringify(response)).not.toContain("do-not-leak");
+  });
+
   it("reports an executor failure as a tool error", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "");

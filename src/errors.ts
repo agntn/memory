@@ -2,7 +2,7 @@ export class MemoryError extends Error {
   readonly provider?: string;
   override readonly cause?: unknown;
 
-  constructor(message: string, options: { provider?: string; cause?: unknown } = {}) {
+  constructor(message: string, options: Readonly<{ provider?: string; cause?: unknown }> = {}) {
     super(message);
     this.name = new.target.name;
     this.provider = options.provider;
@@ -16,7 +16,7 @@ export class MemoryHttpError extends MemoryError {
   constructor(
     message: string,
     statusCode: number,
-    options: { provider?: string; cause?: unknown } = {},
+    options: Readonly<{ provider?: string; cause?: unknown }> = {},
   ) {
     super(message, options);
     this.statusCode = statusCode;

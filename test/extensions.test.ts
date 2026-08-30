@@ -51,12 +51,17 @@ const expectedNames = [
   "memory_delete_profile",
 ];
 
+function sharedListLimit(parameters: RegisteredTool["parameters"] | undefined): number | undefined {
+  return parameters?.properties?.limit?.maximum;
+}
+
+function ompListLimit(parameters: RegisteredTool["parameters"] | undefined): number | undefined {
+  return parameters?.ir?.props?.find((property) => property.key === "limit")?.val?.max;
+}
+
 function listLimit(tools: RegisteredTool[]): number | undefined {
   const parameters = tools.find((tool) => tool.name === "memory_list")?.parameters;
-  return (
-    parameters?.properties?.limit?.maximum ??
-    parameters?.ir?.props?.find((property) => property.key === "limit")?.val?.max
-  );
+  return sharedListLimit(parameters) ?? ompListLimit(parameters);
 }
 
 function requiredFields(tool: RegisteredTool): string[] {
@@ -558,15 +563,15 @@ describe("memory tool renderers", () => {
 
   it("strips terminal control sequences out of arguments in both harnesses", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
-    const query = `${String.fromCharCode(27)}[2Jwiped${String.fromCharCode(0)}query`;
+    const query = `${String.fromCodePoint(27)}[2Jwiped${String.fromCodePoint(0)}query`;
 
     const pi = tool(piTools(), "memory_recall").renderCall!({ query }, painted, {});
     const omp = tool(ompTools(), "memory_recall").renderCall!({ query }, {}, painted);
 
     for (const { text } of [pi, omp]) {
       expect(text).toContain("wiped query");
-      expect(text).not.toContain(String.fromCharCode(27));
-      expect(text).not.toContain(String.fromCharCode(0));
+      expect(text).not.toContain(String.fromCodePoint(27));
+      expect(text).not.toContain(String.fromCodePoint(0));
     }
   });
 });

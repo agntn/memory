@@ -46,17 +46,21 @@ export interface MnemopiClient {
   readonly sessionId: string;
   /** Stores a working memory and returns its generated ID. */
   remember(
-    memory: {
+    memory: Readonly<{
       content: string;
       session_id?: string;
       memory_type?: string;
-    },
-    options?: { source?: string },
+    }>,
+    options?: Readonly<{ source?: string }>,
   ): string;
   /** Returns raw Mnemopi recall rows for the fixed session. */
-  recall(query: string, topK?: number, options?: { query_time?: string }): Promise<unknown[]>;
+  recall(
+    query: string,
+    topK?: number,
+    options?: Readonly<{ query_time?: string }>,
+  ): Promise<unknown[]>;
   /** Resolves a raw working, episodic, or fact row by ID. */
-  get(memoryId: string): unknown | null;
+  get(memoryId: string): unknown;
   /** Waits for pending asynchronous extraction work, when configured. */
   flushExtractions?(): Promise<void>;
   /** Closes the underlying Mnemopi database connection. */
@@ -103,28 +107,56 @@ function assertProfileName(profileName: string): void {
   }
 }
 
+function hasRequiredClientShape(client: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof client.bank === "string" &&
+    typeof client.sessionId === "string" &&
+    typeof client.remember === "function" &&
+    typeof client.recall === "function" &&
+    typeof client.get === "function" &&
+    typeof client.close === "function"
+  );
+}
+
 function assertClient(client: MnemopiClient): void {
   if (
     !isUnknownRecord(client) ||
-    typeof client.bank !== "string" ||
-    typeof client.sessionId !== "string" ||
-    typeof client.remember !== "function" ||
-    typeof client.recall !== "function" ||
-    typeof client.get !== "function" ||
-    (client.flushExtractions !== undefined && typeof client.flushExtractions !== "function") ||
-    typeof client.close !== "function"
+    !hasRequiredClientShape(client) ||
+    (client.flushExtractions !== undefined && typeof client.flushExtractions !== "function")
   ) {
     throw new MemoryInputError("Mnemopi client is invalid", { provider: PROVIDER_NAME });
   }
 }
 
-function requiredString(record: Record<string, unknown>, key: string): string {
+function assertOwnedClient(client: MnemopiClient): void {
+  try {
+    assertClient(client);
+  } catch (error) {
+    try {
+      if (isUnknownRecord(client) && typeof client.close === "function") client.close();
+    } catch (closeError) {
+      throw new MemoryError("Mnemopi client is invalid and could not be closed", {
+        provider: PROVIDER_NAME,
+        cause: closeError,
+      });
+    }
+    throw error;
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false;
+  const items: unknown[] = value;
+  return items.every((item) => typeof item === "string");
+}
+
+function requiredString(record: Readonly<Record<string, unknown>>, key: string): string {
   const value = record[key];
   if (typeof value !== "string") throw new MemoryError(`Invalid Mnemopi memory: ${key}`);
   return value;
 }
 
-function optionalString(record: Record<string, unknown>, key: string): string | null {
+function optionalString(record: Readonly<Record<string, unknown>>, key: string): string | null {
   const value = record[key];
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") throw new MemoryError(`Invalid Mnemopi memory: ${key}`);
@@ -192,11 +224,19 @@ export class MnemopiMemoryProfile extends MemoryProfile {
    * Stores a working memory in the client's session.
    *
    * A supplied session ID must match the fixed session of the client.
+   *
+   * @param input - Memory content and optional fixed session identifier.
+   * @param options - Cancellation checked at the call boundary.
+   * @returns {Promise<Memory>} The normalized memory read back from Mnemopi.
    */
   override async remember(input: RememberInput, options: AbortOptions = {}): Promise<Memory> {
     try {
       options.signal?.throwIfAborted();
-      if (input.sessionId != null && input.sessionId !== this.client.sessionId) {
+      if (
+        input.sessionId !== undefined &&
+        input.sessionId !== null &&
+        input.sessionId !== this.client.sessionId
+      ) {
         throw new MemoryInputError(
           `Mnemopi profile uses session ${this.client.sessionId}, not ${input.sessionId}`,
           { provider: PROVIDER_NAME },
@@ -221,6 +261,10 @@ export class MnemopiMemoryProfile extends MemoryProfile {
    * Recalls up to five candidates and joins their content into the unified answer.
    *
    * `referenceDate` is forwarded to Mnemopi as its temporal query time.
+   *
+   * @param query - Recall query sent to the fixed bank session.
+   * @param options - Recall tuning and call-boundary cancellation.
+   * @returns {Promise<RecallResult>} The normalized recall answer and ranked candidates.
    */
   override async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
     try {
@@ -249,7 +293,13 @@ export class MnemopiMemoryProfile extends MemoryProfile {
     }
   }
 
-  /** Resolves a working, episodic, or fact record by ID within this bank's visibility. */
+  /**
+   * Resolve a working, episodic, or fact record by ID within this bank's visibility.
+   *
+   * @param memoryId - Provider-native memory identifier.
+   * @param options - Cancellation checked at the call boundary.
+   * @returns {Promise<Memory>} The normalized memory record.
+   */
   override async get(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     try {
       options.signal?.throwIfAborted();
@@ -284,7 +334,12 @@ export class MnemopiMemoryProvider extends MemoryProvider {
     assertOptions(options);
     this.options = options;
   }
-  /** Opens or reuses the profile backed by the named Mnemopi bank. */
+  /**
+   * Open or reuse the profile backed by the named Mnemopi bank.
+   *
+   * @param profileName - Validated Mnemopi bank name.
+   * @returns {Promise<MnemopiMemoryProfile>} The cached or newly opened memory profile.
+   */
   override async getProfile(profileName: string): Promise<MnemopiMemoryProfile> {
     try {
       assertProfileName(profileName);
@@ -293,21 +348,7 @@ export class MnemopiMemoryProvider extends MemoryProvider {
       if (existing !== undefined) return existing;
 
       const client = this.options.createClient(profileName);
-      try {
-        assertClient(client);
-      } catch (error) {
-        try {
-          if (isUnknownRecord(client) && typeof client.close === "function") {
-            client.close.call(client);
-          }
-        } catch (closeError) {
-          throw new MemoryError("Mnemopi client is invalid and could not be closed", {
-            provider: PROVIDER_NAME,
-            cause: closeError,
-          });
-        }
-        throw error;
-      }
+      assertOwnedClient(client);
       if (client.bank !== profileName) {
         client.close();
         throw new MemoryInputError(
@@ -324,18 +365,23 @@ export class MnemopiMemoryProvider extends MemoryProvider {
     }
   }
 
-  /** Lists validated, deduplicated bank names without creating profile clients. */
+  /**
+   * List validated, deduplicated bank names without creating profile clients.
+   *
+   * @param options - Cancellation checked before and after enumeration.
+   * @returns {Promise<string[]>} The available bank names in provider order, deduplicated.
+   */
   override async listProfiles(options: AbortOptions = {}): Promise<string[]> {
     try {
       if (this.closed) throw new MemoryError("Mnemopi provider is closed");
       options.signal?.throwIfAborted();
-      const profileNames = await this.options.listProfiles();
+      const rawProfileNames: unknown = await this.options.listProfiles();
       options.signal?.throwIfAborted();
-      if (!Array.isArray(profileNames)) {
+      if (!isStringArray(rawProfileNames)) {
         throw new MemoryError("Invalid Mnemopi profile list");
       }
-      for (const profileName of profileNames) assertProfileName(profileName);
-      return [...new Set(profileNames)];
+      for (const profileName of rawProfileNames) assertProfileName(profileName);
+      return [...new Set(rawProfileNames)];
     } catch (error) {
       throw normalizeMemoryError(error, PROVIDER_NAME);
     }
@@ -349,9 +395,11 @@ export class MnemopiMemoryProvider extends MemoryProvider {
     this.clients.clear();
     this.profiles.clear();
     const extractions = await Promise.allSettled(
-      clients.map((client) => client.flushExtractions?.()),
+      clients.map(async (client) => {
+        await client.flushExtractions?.();
+      }),
     );
-    let failure = extractions.find(
+    let failure: unknown = extractions.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     )?.reason;
     for (const client of clients) {
@@ -365,7 +413,12 @@ export class MnemopiMemoryProvider extends MemoryProvider {
   }
 }
 
-/** Creates a Mnemopi provider for registry-based construction. */
+/**
+ * Create a Mnemopi provider for registry-based construction.
+ *
+ * @param options - Runtime hooks connecting the adapter to Mnemopi.
+ * @returns {MnemopiMemoryProvider} A provider that opens Mnemopi banks lazily.
+ */
 export function mnemopiMemoryFactory(options: MnemopiMemoryOptions): MnemopiMemoryProvider {
   return new MnemopiMemoryProvider(options);
 }
