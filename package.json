@@ -44,9 +44,9 @@
   "scripts": {
     "build": "obuild",
     "dev": "obuild --stub",
-    "fmt": "oxlint . --fix && oxfmt .",
-    "lint": "oxlint . && oxfmt --check .",
-    "lint:fix": "oxlint . --fix && oxfmt .",
+    "fmt": "pnpm build && oxlint . --fix && oxfmt .",
+    "lint": "pnpm build && oxlint . && oxfmt --check .",
+    "lint:fix": "pnpm build && oxlint . --fix && oxfmt .",
     "typecheck": "pnpm build && tsc --noEmit --skipLibCheck && tsc --noEmit -p tsconfig.extensions.json",
     "test": "vitest --run",
     "test:packed": "node --import tsx test/eval-packed.mjs",
@@ -71,6 +71,7 @@
     "obuild": "0.4.38",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
+    "oxlint-tsgolint": "7.0.2001",
     "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vitest": "4.1.10"

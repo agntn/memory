@@ -149,18 +149,19 @@ const LINE_WIDTH_CAP = 2048;
  */
 const PREVIEW_LINE_WIDTH = 200;
 
-/**
+/*
  * Cut `text` to `end` code units without splitting a surrogate pair.
  *
  * Half a pair is not a character the terminal can measure or print, so a cut
  * that lands inside one gives back the code unit before it.
  */
 function cutAt(text: string, end: number): string {
+  // oxlint-disable-next-line unicorn/prefer-code-point -- This boundary check must inspect one UTF-16 code unit, not combine the pair.
   const last = text.charCodeAt(end - 1);
   return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
 }
 
-/** Cut a line to `max`, leaving the whitespace inside it alone. */
+/* Cut a line to `max`, leaving the whitespace inside it alone. */
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${cutAt(text, max - 1)}…`;
 }
@@ -172,8 +173,9 @@ function clip(text: string, max: number): string {
  * unit. It is not a character, so it has no width the terminal can work with.
  */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const CONTROL_CHARACTER = /\p{Cc}/gu;
 
-/**
+/*
  * Strip everything that could drive the terminal instead of describing the
  * call. Model arguments and stored memory text cross a trust boundary: the Text
  * component forwards ANSI and OSC sequences and raw control bytes unchanged.
@@ -185,19 +187,23 @@ function stripControlBytes(value: unknown, cap = LINE_WIDTH_CAP): string {
   const text = String(value);
   const long = text.length > cap;
   const bounded = long ? cutAt(text, cap) : text;
-  /* oxlint-disable-next-line no-control-regex */
   const clean = stripVTControlCharacters(bounded)
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replaceAll(CONTROL_CHARACTER, " ")
     .replace(LONE_SURROGATE, " ");
   return long ? `${clean}…` : clean;
 }
 
-/** Sanitize a value for one status field: no control bytes, one line. */
+/**
+ * Sanitize a value for one status field: no control bytes, one line.
+ *
+ * @param value - Untrusted value crossing the terminal boundary.
+ * @returns {string} Plain single-line text safe to interpolate into a status row.
+ */
 export function sanitizeTerminalText(value: unknown): string {
-  return stripControlBytes(value).replace(/\s+/g, " ").trim();
+  return stripControlBytes(value).replaceAll(/\s+/g, " ").trim();
 }
 
-/** Sanitize a value and fit it into one status field. */
+/* Sanitize a value and fit it into one status field. */
 function field(value: unknown, max: number): string {
   return clip(sanitizeTerminalText(value), max);
 }
@@ -212,7 +218,7 @@ function scalarText(value: unknown): string | undefined {
   return undefined;
 }
 
-/**
+/*
  * Read the subject of a call, which some tools address one at a time and
  * others in a batch.
  */
@@ -225,7 +231,7 @@ function paint(theme: StatusTheme, color: string, text: string): string {
   return theme.fg ? theme.fg(color, text) : text;
 }
 
-/** Join the text the tool returned, skipping parts that carry no text. */
+/* Join the text the tool returned, skipping parts that carry no text. */
 function resultText(result: RenderedToolResult): string {
   const parts: string[] = [];
   for (const part of result.content ?? []) {
@@ -239,25 +245,48 @@ function firstLine(body: string): string {
   return breakAt === -1 ? body : body.slice(0, breakAt);
 }
 
-/**
+/*
  * Name the profile a call addresses.
  *
  * A namespace tool addresses a namespace and has no profile, and a wrapper
  * bound to one scope hands the renderer arguments that already carry both.
  */
-function callTarget(record: Record<string, unknown>): string | undefined {
+function callTarget(record: Readonly<Record<string, unknown>>): string | undefined {
   const namespace = scalarText(record.namespace);
   if (namespace === undefined) return undefined;
   const profile = scalarText(record.profile);
   return profile === undefined ? namespace : `${namespace}/${profile}`;
 }
 
-/** Map the harness's streaming state onto a call icon. */
+/* Map the harness's streaming state onto a call icon. */
 function callIcon(options: RenderOptions | undefined): StatusIcon | undefined {
   if (!options) return undefined;
   if (options.isPartial === false) return "done";
   if (options.spinnerFrame !== undefined) return "running";
   return options.executionStarted === true ? "running" : "pending";
+}
+
+function callSubject(record: Readonly<Record<string, unknown>>): string | undefined {
+  for (const key of CALL_SUBJECT_KEYS) {
+    const value = subjectText(record[key]);
+    if (value !== undefined) return field(value, SUBJECT_WIDTH);
+  }
+  return undefined;
+}
+
+function callMeta(
+  record: Readonly<Record<string, unknown>>,
+  subject: string | undefined,
+  target: string | undefined,
+): string[] {
+  const meta: string[] = [];
+  if (subject !== undefined && target !== undefined) meta.push(field(target, META_WIDTH));
+  if (Array.isArray(record.messages)) meta.push(`messages ${record.messages.length}`);
+  for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
+    const value = scalarText(record[key]);
+    if (value !== undefined) meta.push(`${metaLabel} ${field(value, META_WIDTH)}`);
+  }
+  return meta;
 }
 
 /**
@@ -267,6 +296,12 @@ function callIcon(options: RenderOptions | undefined): StatusIcon | undefined {
  * differently; without it the line simply carries no status icon. The profile
  * moves into the meta once a more specific subject takes the description, so a
  * recall shows its question and still says where it looked.
+ *
+ * @param label - Human-readable tool label.
+ * @param args - Untrusted tool arguments supplied by the model.
+ * @param options - Current streaming state, when the harness exposes it.
+ * @param symbol - Memory-specific symbol shown beside the label.
+ * @returns {StatusLine} A normalized status line for the tool call.
  */
 export function describeToolCall(
   label: string,
@@ -276,23 +311,8 @@ export function describeToolCall(
 ): StatusLine {
   const record = isRecord(args) ? args : {};
   const target = callTarget(record);
-
-  let subject: string | undefined;
-  for (const key of CALL_SUBJECT_KEYS) {
-    const value = subjectText(record[key]);
-    if (value !== undefined) {
-      subject = field(value, SUBJECT_WIDTH);
-      break;
-    }
-  }
-
-  const meta: string[] = [];
-  if (subject !== undefined && target !== undefined) meta.push(field(target, META_WIDTH));
-  if (Array.isArray(record.messages)) meta.push(`messages ${record.messages.length}`);
-  for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
-    const value = scalarText(record[key]);
-    if (value !== undefined) meta.push(`${metaLabel} ${field(value, META_WIDTH)}`);
-  }
+  const subject = callSubject(record);
+  const meta = callMeta(record, subject, target);
 
   return {
     icon: callIcon(options),
@@ -304,6 +324,48 @@ export function describeToolCall(
   };
 }
 
+function resultNameMeta(details: Readonly<Record<string, unknown>>): string[] {
+  for (const key of RESULT_NAME_KEYS) {
+    const value = scalarText(details[key]);
+    if (value !== undefined) return [field(value, META_WIDTH)];
+  }
+  return [];
+}
+
+function resultFactMeta(details: Readonly<Record<string, unknown>>): string[] {
+  const meta: string[] = [];
+  for (const [key, factLabel] of Object.entries(RESULT_FACT_LABELS)) {
+    const value = scalarText(details[key]);
+    if (value !== undefined) {
+      meta.push(
+        key === "type" ? field(value, META_WIDTH) : `${factLabel} ${field(value, META_WIDTH)}`,
+      );
+    }
+  }
+  return meta;
+}
+
+function resultCountMeta(details: Readonly<Record<string, unknown>>): string[] {
+  const meta: string[] = [];
+  for (const [key, [singular, plural]] of Object.entries(RESULT_COUNT_LABELS)) {
+    const value = details[key];
+    const count =
+      typeof value === "number" ? value : Array.isArray(value) ? value.length : undefined;
+    if (count !== undefined) meta.push(`${count} ${count === 1 ? singular : plural}`);
+  }
+  return meta;
+}
+
+function resultMeta(details: Readonly<Record<string, unknown>>): string[] {
+  const meta = [
+    ...resultNameMeta(details),
+    ...resultFactMeta(details),
+    ...resultCountMeta(details),
+  ];
+  if (details.hasMore === true) meta.push("more pages");
+  return meta;
+}
+
 /**
  * Describe a finished tool result: the outcome plus the facts behind it.
  *
@@ -311,6 +373,11 @@ export function describeToolCall(
  * repeating the tool name would print it twice. `isError` is a separate
  * argument because Pi keeps the flag out of the result object and reports it
  * through the render context instead.
+ *
+ * @param result - Tool result supplied by the harness.
+ * @param isError - Whether the harness classified the result as failed.
+ * @param options - Current streaming and expansion state.
+ * @returns {StatusLine} A normalized status line for the tool result.
  */
 export function describeToolResult(
   result: RenderedToolResult,
@@ -325,7 +392,7 @@ export function describeToolResult(
     };
   }
 
-  /** A streamed update is progress, not an outcome, so it keeps the running icon. */
+  /* A streamed update is progress, not an outcome, so it keeps the running icon. */
   if (options?.isPartial === true) {
     return {
       icon: "running",
@@ -335,53 +402,34 @@ export function describeToolResult(
   }
 
   const details = isRecord(result.details) ? result.details : {};
-  const meta: string[] = [];
-
-  for (const key of RESULT_NAME_KEYS) {
-    const value = scalarText(details[key]);
-    if (value !== undefined) {
-      meta.push(field(value, META_WIDTH));
-      break;
-    }
-  }
-
-  for (const [key, factLabel] of Object.entries(RESULT_FACT_LABELS)) {
-    const value = scalarText(details[key]);
-    if (value !== undefined) {
-      meta.push(
-        key === "type" ? field(value, META_WIDTH) : `${factLabel} ${field(value, META_WIDTH)}`,
-      );
-    }
-  }
-
-  for (const [key, [singular, plural]] of Object.entries(RESULT_COUNT_LABELS)) {
-    const value = details[key];
-    const count =
-      typeof value === "number" ? value : Array.isArray(value) ? value.length : undefined;
-    if (count !== undefined) meta.push(`${count} ${count === 1 ? singular : plural}`);
-  }
-
-  if (details.hasMore === true) meta.push("more pages");
-
+  const meta = resultMeta(details);
   return {
     icon: "done",
     meta: meta.length > 0 ? meta : undefined,
   };
 }
 
-/** Render one status header. Everything interpolated is already sanitized. */
+function renderedIcon(line: StatusLine, theme: StatusTheme): string | undefined {
+  if (!line.icon) return undefined;
+  const icon = ICONS[line.icon];
+  const glyph =
+    line.icon === "running" && line.spinnerFrame !== undefined
+      ? SPINNER_FRAMES[line.spinnerFrame % SPINNER_FRAMES.length]
+      : icon.glyph;
+  return paint(theme, icon.color, glyph ?? icon.glyph);
+}
+
+/**
+ * Render one status header. Everything interpolated is already sanitized.
+ *
+ * @param line - Normalized status-line fields.
+ * @param theme - Harness theme used for optional styling.
+ * @returns {string} The rendered one-line status header.
+ */
 export function renderStatusLine(line: StatusLine, theme: StatusTheme): string {
   const parts: string[] = [];
-
-  if (line.icon) {
-    const icon = ICONS[line.icon];
-    const glyph =
-      line.icon === "running" && line.spinnerFrame !== undefined
-        ? SPINNER_FRAMES[line.spinnerFrame % SPINNER_FRAMES.length]
-        : icon.glyph;
-    parts.push(paint(theme, icon.color, glyph ?? icon.glyph));
-  }
-
+  const icon = renderedIcon(line, theme);
+  if (icon !== undefined) parts.push(icon);
   if (line.symbol) parts.push(paint(theme, "accent", line.symbol));
   if (line.title) {
     parts.push(paint(theme, "toolTitle", theme.bold ? theme.bold(line.title) : line.title));
@@ -393,7 +441,7 @@ export function renderStatusLine(line: StatusLine, theme: StatusTheme): string {
   return parts.join(" ");
 }
 
-/**
+/*
  * Walk `body` line by line from `from`, materializing at most `max` of them.
  *
  * A collapsed result shows ten lines of a page that can be tens of kilobytes,
@@ -417,6 +465,13 @@ function takeLines(body: string, from: number, max: number): { lines: string[]; 
   return { lines, hidden };
 }
 
+function renderedBodyStart(body: string, isError: boolean, isPartial: boolean): number {
+  const first = isError || isPartial ? firstLine(body) : "";
+  return (isError || isPartial) && sanitizeTerminalText(first).length <= SUBJECT_WIDTH
+    ? first.length + 1
+    : 0;
+}
+
 /**
  * Render a finished call: the status header plus the tool's own output,
  * trimmed to a preview until the user expands the result.
@@ -425,6 +480,12 @@ function takeLines(body: string, from: number, max: number): { lines: string[]; 
  * below it. The exception is a line the header had to cut short, which the body
  * still owes the reader in full. The header prints the sanitized line, so its
  * length is the one that decides which case this is.
+ *
+ * @param result - Tool result supplied by the harness.
+ * @param isError - Whether the harness classified the result as failed.
+ * @param options - Current expansion and streaming state.
+ * @param theme - Harness theme used for optional styling.
+ * @returns {string} The status header followed by the visible result body.
  */
 export function renderToolResult(
   result: RenderedToolResult,
@@ -437,11 +498,7 @@ export function renderToolResult(
   const body = resultText(result);
   if (body.length === 0) return header;
 
-  const first = isError || options.isPartial === true ? firstLine(body) : "";
-  const from =
-    (isError || options.isPartial === true) && sanitizeTerminalText(first).length <= SUBJECT_WIDTH
-      ? first.length + 1
-      : 0;
+  const from = renderedBodyStart(body, isError, options.isPartial === true);
   if (from > body.length) return header;
 
   const expanded = options.expanded === true;

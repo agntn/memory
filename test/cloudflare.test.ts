@@ -78,11 +78,11 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     ).resolves.toEqual(memory);
     expect(fetcher).toHaveBeenCalledWith(
       "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces/support-agent/profiles/user-name/remember",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ Authorization: "Bearer secret-token" }),
-      }),
+      expect.objectContaining({ method: "POST" }),
     );
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer secret-token");
+    expect(headers.get("Content-Type")).toBe("application/json");
   });
 
   it("refuses identifiers that would leave their path segment", async () => {
@@ -185,7 +185,9 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
   });
 
   it("rejects malformed provider configuration with a domain error", () => {
-    expect(() => Reflect.construct(CloudflareMemoryProvider, [null])).toThrow(MemoryInputError);
+    expect(() => {
+      Reflect.construct(CloudflareMemoryProvider, [null]);
+    }).toThrow(MemoryInputError);
   });
 
   it("bounds ingest before consuming or sending an oversized conversation", async () => {
@@ -221,9 +223,9 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     const bindingProvider = new CloudflareMemoryProvider({ binding });
     const selectedBindingProfile = await bindingProvider.getProfile("user");
 
-    expect(() =>
-      Reflect.apply(selectedBindingProfile.deleteSession, selectedBindingProfile, [undefined]),
-    ).toThrow(MemoryInputError);
+    expect(() => {
+      Reflect.apply(selectedBindingProfile.deleteSession, selectedBindingProfile, [undefined]);
+    }).toThrow(MemoryInputError);
     expect(bindingProfile.deleteSession).not.toHaveBeenCalled();
 
     const fetcher = vi.fn<typeof fetch>();

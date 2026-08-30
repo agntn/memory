@@ -571,7 +571,7 @@ describe("recall result", () => {
     expect(lines[2]).toContain('answerTrust: "service-generated-untrusted"');
     expect(lines[3]).toBe("  Oritwoen builds with pnpm and obuild.");
     expect(textOf(result)).toContain("Candidates (2), one JSON object per line:");
-    const candidates = lines.slice(-2).map((line) => JSON.parse(line));
+    const candidates: unknown[] = lines.slice(-2).map((line) => JSON.parse(line) as unknown);
     expect(candidates).toEqual([
       {
         id: "mem-1",
@@ -1047,7 +1047,8 @@ describe("ingest payload", () => {
     });
 
     expect(bodies[0]).not.toContain("smuggled");
-    expect(JSON.parse(bodies[0] ?? "{}").messages[0]).toEqual({ role: "user", content: "hi" });
+    const body = JSON.parse(bodies[0] ?? "{}") as { messages: unknown[] };
+    expect(body.messages[0]).toEqual({ role: "user", content: "hi" });
   });
 });
 

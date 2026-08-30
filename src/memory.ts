@@ -17,7 +17,7 @@ import type {
 export abstract class MemoryProfile {}
 
 export interface MemoryProfile {
-  ingest?(messages: Iterable<MemoryMessage>, options?: IngestOptions): Promise<void>;
+  ingest?(messages: Iterable<Readonly<MemoryMessage>>, options?: IngestOptions): Promise<void>;
   remember?(memory: RememberInput, options?: AbortOptions): Promise<Memory>;
   recall?(query: string, options?: RecallOptions): Promise<RecallResult>;
   list?(options?: ListOptions): Promise<ListResult>;

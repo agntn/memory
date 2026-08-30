@@ -226,11 +226,28 @@ function createTools(): MemoryToolDefinition[] {
   ];
 }
 
-/** Format the first TypeBox validation failure for an MCP client. */
+/* Format the first TypeBox validation failure for an MCP client. */
 function validationError(schema: TSchema, value: unknown): string {
   const first = Value.Errors(schema, value)[0];
   if (!first) return "Invalid arguments";
   return `Invalid arguments at ${first.instancePath || "/"}: ${first.message}`;
+}
+
+function errorMessagePart(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  return typeof value === "string" ? value : "";
+}
+
+function asObject(value: unknown): object | undefined {
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+
+function isDistinctMessage(message: string, previous: string | undefined): boolean {
+  return message !== "" && previous !== message;
+}
+
+function errorCause(value: unknown): unknown {
+  return value instanceof Error ? value.cause : undefined;
 }
 
 function mcpErrorMessage(error: unknown): string {
@@ -238,28 +255,23 @@ function mcpErrorMessage(error: unknown): string {
   const seen = new Set<object>();
   let current: unknown = error;
 
-  for (let depth = 0; depth < MAX_MCP_ERROR_CHAIN_DEPTH && current !== null; depth += 1) {
-    if (typeof current === "object") {
-      if (seen.has(current)) break;
-      seen.add(current);
-    }
-
-    const message = (current instanceof Error ? current.message : String(current))
-      .replaceAll(MCP_ERROR_CONTROL_PATTERN, " ")
-      .trim();
-    if (message !== "" && messages.at(-1) !== message) messages.push(message);
-    if (!(current instanceof Error) || current.cause === undefined) break;
-    current = current.cause;
+  for (let depth = 0; depth < MAX_MCP_ERROR_CHAIN_DEPTH; depth += 1) {
+    const currentObject = asObject(current);
+    if (currentObject !== undefined && seen.has(currentObject)) break;
+    if (currentObject !== undefined) seen.add(currentObject);
+    const message = errorMessagePart(current).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim();
+    if (isDistinctMessage(message, messages.at(-1))) messages.push(message);
+    const cause = errorCause(current);
+    if (cause === undefined) break;
+    current = cause;
   }
 
-  return (
-    messages.join(": ") ||
-    String(error).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim() ||
-    "Unknown error"
-  );
+  if (messages.length > 0) return messages.join(": ");
+  const fallback = errorMessagePart(error).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim();
+  return fallback === "" ? "Unknown error" : fallback;
 }
 
-/**
+/*
  * Convert a shared tool result to the MCP text-result contract.
  *
  * `structuredContent` is intentionally omitted because clients prefer it over
@@ -267,6 +279,20 @@ function mcpErrorMessage(error: unknown): string {
  */
 function toCallToolResult(result: MemoryToolResult): CallToolResult {
   return { content: result.content.map((part) => ({ type: "text" as const, text: part.text })) };
+}
+
+function progressSpec(
+  name: keyof typeof memoryToolMeta,
+  timeoutSeconds: unknown,
+): { message: string; total: number } | undefined {
+  const message =
+    name === "memory_wait_for_recall"
+      ? memoryToolProgress.memory_wait_for_recall
+      : name === "memory_supersede"
+        ? memoryToolProgress.memory_supersede
+        : undefined;
+  if (message === undefined || typeof timeoutSeconds !== "number") return undefined;
+  return { message, total: timeoutSeconds * 1_000 };
 }
 
 /**
@@ -277,7 +303,7 @@ function toCallToolResult(result: MemoryToolResult): CallToolResult {
  * low-level `Server` is deliberate: `McpServer` accepts Zod schemas only, which
  * would require a second definition of every tool parameter shape.
  *
- * @returns An unconnected MCP server; the caller owns its transport and lifecycle.
+ * @returns {Server} An unconnected MCP server; the caller owns its transport and lifecycle.
  */
 export function createMcpServer(): Server {
   const tools = createTools();
@@ -313,30 +339,19 @@ export function createMcpServer(): Server {
 
     let progressTimer: ReturnType<typeof setInterval> | undefined;
     const progressToken = extra._meta?.progressToken;
-    const timeoutSeconds = args.timeoutSeconds;
-    const progressMessage =
-      tool.name === "memory_wait_for_recall"
-        ? memoryToolProgress.memory_wait_for_recall
-        : tool.name === "memory_supersede"
-          ? memoryToolProgress.memory_supersede
-          : undefined;
-    if (
-      progressMessage !== undefined &&
-      progressToken !== undefined &&
-      typeof timeoutSeconds === "number"
-    ) {
+    const progress = progressSpec(tool.name, args.timeoutSeconds);
+    if (progressToken !== undefined && progress !== undefined) {
       const startedAt = performance.now();
-      const total = timeoutSeconds * 1_000;
       progressTimer = setInterval(() => {
-        const progress = Math.min(Math.round(performance.now() - startedAt), total);
+        const completed = Math.min(Math.round(performance.now() - startedAt), progress.total);
         void extra
           .sendNotification({
             method: "notifications/progress",
             params: {
               progressToken,
-              progress,
-              total,
-              message: progressMessage,
+              progress: completed,
+              total: progress.total,
+              message: progress.message,
             },
           })
           .catch((error: unknown) => {

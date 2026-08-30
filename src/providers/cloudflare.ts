@@ -36,9 +36,12 @@ type BindingOptions<T extends AbortOptions> = Omit<T, "signal">;
  * delegating and decides on its own whether the call starts.
  */
 export interface AgentMemoryProfileBinding {
-  ingest(messages: Iterable<MemoryMessage>, options?: BindingOptions<IngestOptions>): Promise<void>;
+  ingest(
+    messages: Iterable<Readonly<MemoryMessage>>,
+    options?: BindingOptions<IngestOptions>,
+  ): Promise<void>;
   remember(memory: RememberInput): Promise<Memory>;
-  recall(query: string, options?: BindingOptions<RecallOptions>): Promise<RecallResult>;
+  recall(query: string, options?: BindingOptions<Readonly<RecallOptions>>): Promise<RecallResult>;
   list(options?: BindingOptions<ListOptions>): Promise<ListResult>;
   get(memoryId: string): Promise<Memory>;
   delete(memoryId: string): Promise<Memory>;
@@ -52,7 +55,7 @@ export interface AgentMemoryNamespaceBinding {
 }
 
 export interface CloudflareMemoryProfile extends MemoryProfile {
-  ingest(messages: Iterable<MemoryMessage>, options?: IngestOptions): Promise<void>;
+  ingest(messages: Iterable<Readonly<MemoryMessage>>, options?: IngestOptions): Promise<void>;
   remember(memory: RememberInput, options?: AbortOptions): Promise<Memory>;
   recall(query: string, options?: RecallOptions): Promise<RecallResult>;
   list(options?: ListOptions): Promise<ListResult>;
@@ -140,7 +143,7 @@ const capabilities: Readonly<MemoryCapabilities> = Object.freeze({
   listProfiles: false,
 });
 
-/**
+/*
  * Drop cancellation from the options a call forwards.
  *
  * A binding gets the rest as its own options, and an HTTP body gets them as
@@ -156,7 +159,7 @@ function isBindingOptions(options: CloudflareMemoryOptions): options is Cloudfla
   return isUnknownRecord(options) && "binding" in options;
 }
 
-/**
+/*
  * Encode one path segment, refusing values that would leave their position.
  *
  * `encodeURIComponent` does not escape dots, so an id of `..` survives into the
@@ -197,7 +200,7 @@ function assertNamespaceName(namespace: string): void {
   }
 }
 
-/** Profile names carry the same charset rule as namespaces; the service rejects the rest with 400. */
+/* Profile names carry the same charset rule as namespaces; the service rejects the rest with 400. */
 function assertProfileName(profileName: string): void {
   assertString(profileName, "Profile name", MAX_PROFILE_NAME_CHARACTERS);
   if (!NAMESPACE_NAME_PATTERN.test(profileName)) {
@@ -281,7 +284,32 @@ function assertRecall(query: string, options: RecallOptions): void {
   }
 }
 
-function collectMessages(messages: Iterable<MemoryMessage>): MemoryMessage[] {
+function assertMessage(message: Readonly<MemoryMessage>): void {
+  if (!isUnknownRecord(message)) {
+    throw new MemoryInputError("Each message must be an object", { provider: "cloudflare" });
+  }
+  if (message.role !== "system" && message.role !== "user" && message.role !== "assistant") {
+    throw new MemoryInputError("Message role must be system, user, or assistant", {
+      provider: "cloudflare",
+    });
+  }
+  assertString(message.content, "Message content");
+  if (new TextEncoder().encode(message.content).byteLength > MAX_MESSAGE_BYTES) {
+    throw new MemoryInputError(`Message content must not exceed ${MAX_MESSAGE_BYTES} UTF-8 bytes`, {
+      provider: "cloudflare",
+    });
+  }
+  if (
+    message.timestamp !== undefined &&
+    (!(message.timestamp instanceof Date) || Number.isNaN(message.timestamp.getTime()))
+  ) {
+    throw new MemoryInputError("Message timestamp must be a valid Date", {
+      provider: "cloudflare",
+    });
+  }
+}
+
+function collectMessages(messages: Iterable<Readonly<MemoryMessage>>): MemoryMessage[] {
   const collected: MemoryMessage[] = [];
   for (const message of messages) {
     if (collected.length === MAX_INGEST_MESSAGES) {
@@ -289,30 +317,8 @@ function collectMessages(messages: Iterable<MemoryMessage>): MemoryMessage[] {
         provider: "cloudflare",
       });
     }
-    if (!isUnknownRecord(message)) {
-      throw new MemoryInputError("Each message must be an object", { provider: "cloudflare" });
-    }
-    if (message.role !== "system" && message.role !== "user" && message.role !== "assistant") {
-      throw new MemoryInputError("Message role must be system, user, or assistant", {
-        provider: "cloudflare",
-      });
-    }
-    assertString(message.content, "Message content");
-    if (new TextEncoder().encode(message.content).byteLength > MAX_MESSAGE_BYTES) {
-      throw new MemoryInputError(
-        `Message content must not exceed ${MAX_MESSAGE_BYTES} UTF-8 bytes`,
-        { provider: "cloudflare" },
-      );
-    }
-    if (
-      message.timestamp !== undefined &&
-      (!(message.timestamp instanceof Date) || Number.isNaN(message.timestamp.getTime()))
-    ) {
-      throw new MemoryInputError("Message timestamp must be a valid Date", {
-        provider: "cloudflare",
-      });
-    }
-    collected.push(message);
+    assertMessage(message);
+    collected.push({ ...message });
   }
   return collected;
 }
@@ -381,7 +387,7 @@ function parseRecallCandidate(value: unknown): RecallCandidate {
   };
 }
 
-/**
+/*
  * Read a recall response, whose answer the service may leave out.
  *
  * Only `count` and `candidates` are promised. The answer is documented as
@@ -414,7 +420,7 @@ function parseSummary(value: unknown): SummaryResult {
   return { summary: parseString(value.summary, "summary") };
 }
 
-/**
+/*
  * Read the result of a call that carries no data back.
  *
  * Ingest and the deletions answer with a nullable object holding no fields, so
@@ -444,6 +450,57 @@ function parseNamespaces(value: unknown): CloudflareNamespace[] {
   return value.map(parseNamespace);
 }
 
+async function cloudflareResponseBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    throw responseError(
+      `Cloudflare Agent Memory returned invalid JSON (${response.status})`,
+      response.status,
+      error,
+    );
+  }
+}
+
+function responseMessage(value: unknown): string | undefined {
+  return isUnknownRecord(value) && typeof value.message === "string" ? value.message : undefined;
+}
+
+function throwCloudflareResponseError(
+  body: Readonly<Record<string, unknown>>,
+  response: Response,
+): never {
+  const errors: unknown[] = Array.isArray(body.errors) ? body.errors : [];
+  const messages = errors.flatMap((error) => {
+    const message = responseMessage(error);
+    return message === undefined ? [] : [message];
+  });
+  const message =
+    messages.join("; ") || `Cloudflare Agent Memory request failed (${response.status})`;
+  const options = { provider: "cloudflare" };
+  if (response.status === 401 || response.status === 403) {
+    throw new MemoryAuthError(message, response.status, options);
+  }
+  if (response.status === 404) {
+    throw new MemoryNotFoundError(message, response.status, options);
+  }
+  if (response.status === 429) {
+    throw new MemoryRateLimitError(message, response.status, options);
+  }
+  throw new MemoryHttpError(message, response.status, options);
+}
+
+function requireCloudflareEnvelope(value: unknown, response: Response): Record<string, unknown> {
+  if (!isUnknownRecord(value) || typeof value.success !== "boolean") {
+    throw responseError(
+      "Cloudflare Agent Memory returned an invalid response envelope",
+      response.status,
+    );
+  }
+  if (!response.ok || !value.success) throwCloudflareResponseError(value, response);
+  return value;
+}
+
 class CloudflareHttpClient {
   private readonly fetcher?: typeof globalThis.fetch;
   private readonly apiToken: string;
@@ -462,52 +519,17 @@ class CloudflareHttpClient {
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
       /** The global fallback is read per request, so a fetch installed after the client (a polyfill, a test stub) still applies. */
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${this.apiToken}`);
+      if (init.body !== undefined && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
       const response = await (this.fetcher ?? globalThis.fetch)(`${this.baseURL}${path}`, {
         ...init,
-        headers: {
-          Authorization: `Bearer ${this.apiToken}`,
-          ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...init.headers,
-        },
+        headers,
       });
 
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch (error) {
-        throw responseError(
-          `Cloudflare Agent Memory returned invalid JSON (${response.status})`,
-          response.status,
-          error,
-        );
-      }
-
-      if (!isUnknownRecord(body) || typeof body.success !== "boolean") {
-        throw responseError(
-          "Cloudflare Agent Memory returned an invalid response envelope",
-          response.status,
-        );
-      }
-      if (!response.ok || !body.success) {
-        const messages = Array.isArray(body.errors)
-          ? body.errors.flatMap((error) =>
-              isUnknownRecord(error) && typeof error.message === "string" ? [error.message] : [],
-            )
-          : [];
-        const message =
-          messages.join("; ") || `Cloudflare Agent Memory request failed (${response.status})`;
-        if (response.status === 401 || response.status === 403) {
-          throw new MemoryAuthError(message, response.status, { provider: "cloudflare" });
-        }
-        if (response.status === 404) {
-          throw new MemoryNotFoundError(message, response.status, { provider: "cloudflare" });
-        }
-        if (response.status === 429) {
-          throw new MemoryRateLimitError(message, response.status, { provider: "cloudflare" });
-        }
-        throw new MemoryHttpError(message, response.status, { provider: "cloudflare" });
-      }
-
+      const body = requireCloudflareEnvelope(await cloudflareResponseBody(response), response);
       const result = parseResult(body.result);
       const cursor =
         isUnknownRecord(body.result_info) && typeof body.result_info.cursor === "string"
@@ -538,7 +560,10 @@ class CloudflareBindingProfile extends MemoryProfile implements CloudflareMemory
     this.profile = profile;
   }
 
-  override ingest(messages: Iterable<MemoryMessage>, options: IngestOptions = {}): Promise<void> {
+  override ingest(
+    messages: Iterable<Readonly<MemoryMessage>>,
+    options: IngestOptions = {},
+  ): Promise<void> {
     const collected = collectMessages(messages);
     assertSessionId(options.sessionId);
     return withCloudflareError(() => {
@@ -614,7 +639,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   }
 
   override async ingest(
-    messages: Iterable<MemoryMessage>,
+    messages: Iterable<Readonly<MemoryMessage>>,
     options: IngestOptions = {},
   ): Promise<void> {
     const collected = collectMessages(messages);
@@ -719,7 +744,12 @@ export class CloudflareNamespaceClient {
     this.client = new CloudflareHttpClient(options, "/namespaces");
   }
 
-  /** Lists the account's Agent Memory namespaces. */
+  /**
+   * List the account's Agent Memory namespaces.
+   *
+   * @param options - Pagination and ordering options plus cancellation.
+   * @returns {Promise<CloudflareNamespaceListResult>} One normalized namespace page and optional cursor.
+   */
   async list(options: CloudflareNamespaceListOptions = {}): Promise<CloudflareNamespaceListResult> {
     assertNamespaceListOptions(options);
     const query = new URLSearchParams();
@@ -737,7 +767,13 @@ export class CloudflareNamespaceClient {
     };
   }
 
-  /** Reads one Agent Memory namespace by name. */
+  /**
+   * Read one Agent Memory namespace by name.
+   *
+   * @param name - Validated namespace name.
+   * @param options - Request cancellation.
+   * @returns {Promise<CloudflareNamespace>} The normalized namespace record.
+   */
   async get(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
     assertNamespaceName(name);
     return (
@@ -747,7 +783,13 @@ export class CloudflareNamespaceClient {
     ).result;
   }
 
-  /** Creates an Agent Memory namespace. */
+  /**
+   * Create an Agent Memory namespace.
+   *
+   * @param name - Validated namespace name.
+   * @param options - Request cancellation.
+   * @returns {Promise<CloudflareNamespace>} The newly created namespace record.
+   */
   async create(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
     assertNamespaceName(name);
     return (
@@ -759,7 +801,13 @@ export class CloudflareNamespaceClient {
     ).result;
   }
 
-  /** Permanently deletes an Agent Memory namespace and all of its contents. */
+  /**
+   * Permanently delete an Agent Memory namespace and all of its contents.
+   *
+   * @param name - Validated namespace name.
+   * @param options - Request cancellation.
+   * @returns {Promise<void>} A promise that settles after the service accepts the deletion.
+   */
   async delete(name: string, options: AbortOptions = {}): Promise<void> {
     assertNamespaceName(name);
     await this.client.request(`/${encodePath(name)}`, parseEmpty, {

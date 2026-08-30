@@ -51,6 +51,9 @@ importers:
       oxlint:
         specifier: 1.78.0
         version: 1.78.0(oxlint-tsgolint@7.0.2001)
+      oxlint-tsgolint:
+        specifier: 7.0.2001
+        version: 7.0.2001
       tsx:
         specifier: 4.23.12
         version: 4.23.12

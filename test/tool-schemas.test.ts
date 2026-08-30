@@ -63,6 +63,45 @@ interface OmpIrValue {
   members?: OmpIrValue[];
 }
 
+function sharedMaximum(value: JsonSchemaValue): number | undefined {
+  return value.maxLength ?? value.maximum ?? value.maxItems;
+}
+
+function sharedMinimum(value: JsonSchemaValue): number | undefined {
+  return value.minLength ?? value.minimum ?? value.minItems;
+}
+
+function sharedLiterals(value: JsonSchemaValue): string[] | undefined {
+  return value.anyOf?.map((variant) => String(variant.const)).sort();
+}
+
+function sharedField(value: JsonSchemaValue, optional: boolean): FieldShape {
+  const field: FieldShape = { optional };
+  const max = sharedMaximum(value);
+  const min = sharedMinimum(value);
+  const literals = sharedLiterals(value);
+  if (max !== undefined) field.max = max;
+  if (min !== undefined) field.min = min;
+  if (value.pattern !== undefined) field.pattern = value.pattern;
+  if (value.description !== undefined) field.description = value.description;
+  if (literals !== undefined) field.literals = literals;
+  return field;
+}
+
+function sharedArrayItem(value: JsonSchemaValue): FieldShape {
+  return sharedField(
+    {
+      maxLength: value.maxLength,
+      maximum: value.maximum,
+      minLength: value.minLength,
+      minimum: value.minimum,
+      pattern: value.pattern,
+      description: value.description,
+    },
+    false,
+  );
+}
+
 /**
  * Flatten a schema to `path -> shape`, descending into objects and array items.
  *
@@ -75,37 +114,36 @@ function sharedShape(schema: unknown, prefix = ""): Record<string, FieldShape> {
   const shape: Record<string, FieldShape> = {};
   for (const [key, value] of Object.entries(object.properties ?? {})) {
     const path = `${prefix}${key}`;
-    const literals = value.anyOf?.map((variant) => variant.const);
-    const max = value.maxLength ?? value.maximum ?? value.maxItems;
-    const min = value.minLength ?? value.minimum ?? value.minItems;
-    shape[path] = {
-      optional: !required.has(key),
-      ...(max === undefined ? {} : { max }),
-      ...(min === undefined ? {} : { min }),
-      ...(value.pattern === undefined ? {} : { pattern: value.pattern }),
-      ...(value.description === undefined ? {} : { description: value.description }),
-      ...(literals === undefined ? {} : { literals: literals.map(String).sort() }),
-    };
+    shape[path] = sharedField(value, !required.has(key));
     if (value.properties) Object.assign(shape, sharedShape(value, `${path}.`));
     if (value.items?.properties) Object.assign(shape, sharedShape(value.items, `${path}[].`));
-    else if (value.items) {
-      /**
-       * Scalar array items carry their own bounds; skipping them would let an
-       * item-level pattern or length drift between the schema copies unnoticed.
-       */
-      const item = value.items;
-      const itemMax = item.maxLength ?? item.maximum;
-      const itemMin = item.minLength ?? item.minimum;
-      shape[`${path}[]`] = {
-        optional: false,
-        ...(itemMax === undefined ? {} : { max: itemMax }),
-        ...(itemMin === undefined ? {} : { min: itemMin }),
-        ...(item.pattern === undefined ? {} : { pattern: item.pattern }),
-        ...(item.description === undefined ? {} : { description: item.description }),
-      };
-    }
+    else if (value.items) shape[`${path}[]`] = sharedArrayItem(value.items);
   }
   return shape;
+}
+
+function ompLiterals(value: OmpIrValue): string[] | undefined {
+  if (value.k !== "union" || !value.members?.every((member) => member.k === "lit")) {
+    return undefined;
+  }
+  return value.members.map((member) => String(member.v)).sort();
+}
+
+function ompField(value: OmpIrValue, optional: boolean): FieldShape {
+  const field: FieldShape = { optional };
+  const literals = ompLiterals(value);
+  if (value.max !== undefined) field.max = value.max;
+  if (value.min !== undefined) field.min = value.min;
+  if (value.k === "sub") field.opaque = true;
+  if (value.desc !== undefined && value.descAuto !== true) field.description = value.desc;
+  if (literals !== undefined) field.literals = literals;
+  return field;
+}
+
+function addOmpChildren(shape: Record<string, FieldShape>, value: OmpIrValue, path: string): void {
+  if (value.props) Object.assign(shape, ompShape(value, `${path}.`));
+  if (value.el?.props) Object.assign(shape, ompShape(value.el, `${path}[].`));
+  else if (value.el) shape[`${path}[]`] = ompField(value.el, false);
 }
 
 function ompShape(schema: unknown, prefix = ""): Record<string, FieldShape> {
@@ -115,31 +153,8 @@ function ompShape(schema: unknown, prefix = ""): Record<string, FieldShape> {
   for (const property of object.props ?? []) {
     const path = `${prefix}${property.key}`;
     const value = property.val ?? {};
-    const literals =
-      value.k === "union" && value.members?.every((member) => member.k === "lit")
-        ? value.members.map((member) => String(member.v)).sort()
-        : undefined;
-    shape[path] = {
-      optional: property.opt,
-      ...(value.max === undefined ? {} : { max: value.max }),
-      ...(value.min === undefined ? {} : { min: value.min }),
-      ...(value.k === "sub" ? { opaque: true } : {}),
-      ...(value.desc === undefined || value.descAuto === true ? {} : { description: value.desc }),
-      ...(literals === undefined ? {} : { literals }),
-    };
-    if (value.props) Object.assign(shape, ompShape(value, `${path}.`));
-    if (value.el?.props) Object.assign(shape, ompShape(value.el, `${path}[].`));
-    else if (value.el) {
-      /** Mirror sharedShape: scalar array items are compared as their own field. */
-      const item = value.el;
-      shape[`${path}[]`] = {
-        optional: false,
-        ...(item.max === undefined ? {} : { max: item.max }),
-        ...(item.min === undefined ? {} : { min: item.min }),
-        ...(item.k === "sub" ? { opaque: true } : {}),
-        ...(item.desc === undefined || item.descAuto === true ? {} : { description: item.desc }),
-      };
-    }
+    shape[path] = ompField(value, property.opt);
+    addOmpChildren(shape, value, path);
   }
   return shape;
 }
@@ -174,6 +189,44 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_delete_session: sharedSchemas.sessionParameters,
   memory_delete_profile: sharedSchemas.profileOnlyParameters,
 };
+
+function expectFieldAlignment(
+  name: string,
+  field: string,
+  sharedField: FieldShape,
+  ompFieldValue: FieldShape | undefined,
+): void {
+  const actual: Partial<FieldShape> = ompFieldValue ?? {};
+  expect(actual.optional, `${name}.${field} optionality`).toBe(sharedField.optional);
+  expect(actual.description, `${name}.${field} description`).toBe(sharedField.description);
+  expect(actual.literals, `${name}.${field} accepted values`).toEqual(sharedField.literals);
+  if (sharedField.pattern !== undefined) {
+    expect(actual.opaque, `${name}.${field} pattern-backed refinement`).toBe(true);
+  }
+  if (actual.opaque === true) {
+    expect(sharedField.pattern, `${name}.${field} opacity explained by a pattern`).toBeTruthy();
+    return;
+  }
+  expect(actual.max, `${name}.${field} upper bound`).toBe(sharedField.max);
+  expect(actual.min, `${name}.${field} lower bound`).toBe(sharedField.min);
+}
+
+function expectSchemaAlignment(
+  name: string,
+  schema: unknown,
+  ompParameters: ReadonlyMap<string, unknown>,
+): void {
+  const omp = ompParameters.get(name);
+  expect(omp, `OMP registers ${name}`).toBeDefined();
+  const ompFields = ompShape(omp);
+  const sharedFields = sharedShape(schema);
+  expect(Object.keys(ompFields).sort(), `OMP fields for ${name}`).toEqual(
+    Object.keys(sharedFields).sort(),
+  );
+  for (const [field, sharedField] of Object.entries(sharedFields)) {
+    expectFieldAlignment(name, field, sharedField, ompFields[field]);
+  }
+}
 
 describe("tool schemas", () => {
   it("publishes the bounds the Cloudflare provider enforces", () => {
@@ -210,44 +263,8 @@ describe("tool schemas", () => {
 
   it("keeps the OMP copies aligned with the shared schemas", () => {
     const ompParameters = ompToolParameters();
-
     for (const [name, schema] of Object.entries(sharedToolSchemas)) {
-      const omp = ompParameters.get(name);
-      expect(omp, `OMP registers ${name}`).toBeDefined();
-
-      const ompFields = ompShape(omp);
-      const sharedFields = sharedShape(schema);
-      expect(Object.keys(ompFields).sort(), `OMP fields for ${name}`).toEqual(
-        Object.keys(sharedFields).sort(),
-      );
-
-      for (const [field, sharedField] of Object.entries(sharedFields)) {
-        const ompField = ompFields[field];
-        expect(ompField?.optional, `${name}.${field} optionality`).toBe(sharedField.optional);
-        expect(ompField?.description, `${name}.${field} description`).toBe(sharedField.description);
-        expect(ompField?.literals, `${name}.${field} accepted values`).toEqual(
-          sharedField.literals,
-        );
-        /**
-         * The IR hides a pattern's text behind a validation closure, so pattern
-         * equality is uncheckable; requiring the refinement to exist at least
-         * catches a pattern dropped from the OMP copy.
-         */
-        if (sharedField.pattern !== undefined) {
-          expect(ompField?.opaque, `${name}.${field} pattern-backed refinement`).toBe(true);
-        }
-        // A pattern turns the OMP field into an opaque refinement that hides its bounds,
-        // so opacity is only acceptable where the shared field declares a pattern.
-        if (ompField?.opaque === true) {
-          expect(
-            sharedField.pattern,
-            `${name}.${field} opacity explained by a pattern`,
-          ).toBeTruthy();
-          continue;
-        }
-        expect(ompField?.max, `${name}.${field} upper bound`).toBe(sharedField.max);
-        expect(ompField?.min, `${name}.${field} lower bound`).toBe(sharedField.min);
-      }
+      expectSchemaAlignment(name, schema, ompParameters);
     }
   });
 
