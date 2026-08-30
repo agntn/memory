@@ -79,6 +79,8 @@ const supersedeAnnotations: Tool["annotations"] = {
   openWorldHint: true,
 };
 const MCP_PROGRESS_INTERVAL_MS = 30_000;
+const MAX_MCP_ERROR_CHAIN_DEPTH = 8;
+const MCP_ERROR_CONTROL_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 function createTools(): MemoryToolDefinition[] {
   const operationalScope = configuredMemoryScope();
@@ -231,6 +233,32 @@ function validationError(schema: TSchema, value: unknown): string {
   return `Invalid arguments at ${first.instancePath || "/"}: ${first.message}`;
 }
 
+function mcpErrorMessage(error: unknown): string {
+  const messages: string[] = [];
+  const seen = new Set<object>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < MAX_MCP_ERROR_CHAIN_DEPTH && current !== null; depth += 1) {
+    if (typeof current === "object") {
+      if (seen.has(current)) break;
+      seen.add(current);
+    }
+
+    const message = (current instanceof Error ? current.message : String(current))
+      .replaceAll(MCP_ERROR_CONTROL_PATTERN, " ")
+      .trim();
+    if (message !== "" && messages.at(-1) !== message) messages.push(message);
+    if (!(current instanceof Error) || current.cause === undefined) break;
+    current = current.cause;
+  }
+
+  return (
+    messages.join(": ") ||
+    String(error).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim() ||
+    "Unknown error"
+  );
+}
+
 /**
  * Convert a shared tool result to the MCP text-result contract.
  *
@@ -324,7 +352,7 @@ export function createMcpServer(): Server {
         content: [
           {
             type: "text",
-            text: `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+            text: `${tool.name} failed: ${mcpErrorMessage(error)}`,
           },
         ],
         isError: true,
