@@ -536,6 +536,36 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([{ type: "text", text: "Unknown memory tool: toString" }]);
   });
 
+  it("includes the network cause in an executor failure", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const networkCause = new Error("getaddrinfo ENOTFOUND api.cloudflare.com");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed", { cause: networkCause });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: {
+        namespace: "mcp-error-test",
+        profile: "agent",
+        content: "one",
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      {
+        type: "text",
+        text: "memory_remember failed: fetch failed: getaddrinfo ENOTFOUND api.cloudflare.com",
+      },
+    ]);
+  });
+
   it("reports an executor failure as a tool error", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
