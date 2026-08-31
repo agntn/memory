@@ -26,6 +26,7 @@ import {
   memoryToolMeta,
   memoryToolProgress,
 } from "../packages/shared/memory-tools.ts";
+import { UNSAFE_TERMINAL_CHARACTER_PATTERN } from "../packages/shared/terminal-text.ts";
 import type {
   GetParams,
   IngestParams,
@@ -80,7 +81,7 @@ const supersedeAnnotations: Tool["annotations"] = {
 };
 const MCP_PROGRESS_INTERVAL_MS = 30_000;
 const MAX_MCP_ERROR_CHAIN_DEPTH = 8;
-const MCP_ERROR_CONTROL_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const MCP_ERROR_CONTROL_PATTERN = new RegExp(UNSAFE_TERMINAL_CHARACTER_PATTERN, "gu");
 
 function createTools(): MemoryToolDefinition[] {
   const operationalScope = configuredMemoryScope();
