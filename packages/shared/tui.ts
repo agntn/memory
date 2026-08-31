@@ -1,4 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
+import { UNSAFE_TERMINAL_CHARACTER_PATTERN } from "./terminal-text.ts";
 
 /**
  * Terminal rendering shared by the Pi and OMP wrappers.
@@ -173,22 +174,22 @@ function clip(text: string, max: number): string {
  * unit. It is not a character, so it has no width the terminal can work with.
  */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-const CONTROL_CHARACTER = /\p{Cc}/gu;
+const UNSAFE_TERMINAL_CHARACTER = new RegExp(UNSAFE_TERMINAL_CHARACTER_PATTERN, "gu");
 
 /*
  * Strip everything that could drive the terminal instead of describing the
  * call. Model arguments and stored memory text cross a trust boundary: the Text
- * component forwards ANSI and OSC sequences and raw control bytes unchanged.
+ * component forwards ANSI and OSC sequences and Unicode layout controls unchanged.
  * `String()` comes first because hostile JSON ignores the declared types.
  * `cap` is where the scan stops and an ellipsis takes over. A caller that needs
  * the line intact raises it.
  */
-function stripControlBytes(value: unknown, cap = LINE_WIDTH_CAP): string {
+function stripTerminalControls(value: unknown, cap = LINE_WIDTH_CAP): string {
   const text = String(value);
   const long = text.length > cap;
   const bounded = long ? cutAt(text, cap) : text;
   const clean = stripVTControlCharacters(bounded)
-    .replaceAll(CONTROL_CHARACTER, " ")
+    .replaceAll(UNSAFE_TERMINAL_CHARACTER, " ")
     .replace(LONE_SURROGATE, " ");
   return long ? `${clean}…` : clean;
 }
@@ -200,7 +201,7 @@ function stripControlBytes(value: unknown, cap = LINE_WIDTH_CAP): string {
  * @returns {string} Plain single-line text safe to interpolate into a status row.
  */
 export function sanitizeTerminalText(value: unknown): string {
-  return stripControlBytes(value).replaceAll(/\s+/g, " ").trim();
+  return stripTerminalControls(value).replaceAll(/\s+/g, " ").trim();
 }
 
 /* Sanitize a value and fit it into one status field. */
@@ -509,8 +510,8 @@ export function renderToolResult(
   );
   const rendered = lines.map((text) => {
     const clean = expanded
-      ? stripControlBytes(text, Number.POSITIVE_INFINITY)
-      : clip(stripControlBytes(text), PREVIEW_LINE_WIDTH);
+      ? stripTerminalControls(text, Number.POSITIVE_INFINITY)
+      : clip(stripTerminalControls(text), PREVIEW_LINE_WIDTH);
     return `  ${paint(theme, "toolOutput", clean)}`;
   });
   if (hidden > 0) {

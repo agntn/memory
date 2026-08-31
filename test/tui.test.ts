@@ -12,6 +12,9 @@ const ESC = String.fromCodePoint(27);
 const NUL = String.fromCodePoint(0);
 const BEL = String.fromCodePoint(7);
 const C1 = String.fromCodePoint(155);
+const UNICODE_LAYOUT_CONTROLS = [0x202e, 0x200b, 0x2028, 0x2029].map((codePoint) =>
+  String.fromCodePoint(codePoint),
+);
 
 /** Both theme methods are optional, so a bare object has to render too. */
 const plain = {};
@@ -336,6 +339,17 @@ describe("result rendering", () => {
     expect(text.split("\n")[1]).toBe("   wiped");
   });
 
+  it("strips Unicode format and separator controls from stored text", () => {
+    const text = renderToolResult(
+      { content: [{ text: `before${UNICODE_LAYOUT_CONTROLS.join("")}after` }] },
+      false,
+      {},
+      plain,
+    );
+
+    expect(text.split("\n")[1]).toBe("  before    after");
+  });
+
   it("skips result parts that carry no text", () => {
     const text = renderToolResult(
       {
@@ -384,6 +398,12 @@ describe("surrogate safety", () => {
 describe("field sanitization", () => {
   it("drops a lone C1 introducer together with the sequence it opens", () => {
     expect(sanitizeTerminalText(`${C1}31mplain`)).toBe("plain");
+  });
+
+  it("strips Unicode format and separator controls", () => {
+    expect(sanitizeTerminalText(`before${UNICODE_LAYOUT_CONTROLS.join("")}after`)).toBe(
+      "before after",
+    );
   });
 
   it("collapses a value into one line", () => {
