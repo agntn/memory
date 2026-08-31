@@ -273,6 +273,22 @@ function assertRecall(query: string, options: RecallOptions): void {
       provider: "cloudflare",
     });
   }
+  if (
+    options.thinkingLevel !== undefined &&
+    !["low", "medium", "high"].includes(options.thinkingLevel)
+  ) {
+    throw new MemoryInputError("Recall thinking level must be low, medium, or high", {
+      provider: "cloudflare",
+    });
+  }
+  if (
+    options.responseLength !== undefined &&
+    !["short", "medium", "long"].includes(options.responseLength)
+  ) {
+    throw new MemoryInputError("Recall response length must be short, medium, or long", {
+      provider: "cloudflare",
+    });
+  }
   if (options.referenceDate !== undefined) {
     const referenceDate =
       options.referenceDate instanceof Date

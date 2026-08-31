@@ -243,6 +243,49 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid recall tuning before calling either transport", async () => {
+    const bindingProfile = {
+      ingest: vi.fn(),
+      remember: vi.fn(),
+      recall: vi.fn(async () => ({ count: 0, candidates: [] })),
+      list: vi.fn(),
+      get: vi.fn(),
+      delete: vi.fn(),
+      deleteSession: vi.fn(),
+      getSummary: vi.fn(),
+    } as unknown as AgentMemoryProfileBinding;
+    const binding = {
+      getProfile: vi.fn(async () => bindingProfile),
+      deleteProfile: vi.fn(),
+    } as unknown as AgentMemoryNamespaceBinding;
+    const bindingProvider = new CloudflareMemoryProvider({ binding });
+    const selectedBindingProfile = await bindingProvider.getProfile("user");
+    const invalidOptions = [{ thinkingLevel: "extreme" }, { responseLength: "verbose" }];
+
+    for (const options of invalidOptions) {
+      expect(() => {
+        Reflect.apply(selectedBindingProfile.recall, selectedBindingProfile, ["question", options]);
+      }).toThrow(MemoryInputError);
+    }
+    expect(bindingProfile.recall).not.toHaveBeenCalled();
+
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse({ count: 0, candidates: [] }));
+    const httpProvider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const selectedHttpProfile = await httpProvider.getProfile("user");
+
+    for (const options of invalidOptions) {
+      await expect(
+        Reflect.apply(selectedHttpProfile.recall, selectedHttpProfile, ["question", options]),
+      ).rejects.toBeInstanceOf(MemoryInputError);
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("normalizes network failures", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => {
       throw new TypeError("network down");
@@ -432,12 +475,17 @@ describe("CloudflareMemoryProvider cancellation", () => {
     const profile = await provider.getProfile("user-1");
     const { signal } = new AbortController();
 
-    await profile.recall("what does the user prefer", { signal, responseLength: "short" });
+    await profile.recall("what does the user prefer", {
+      signal,
+      thinkingLevel: "high",
+      responseLength: "short",
+    });
 
     const init = fetcher.mock.calls[0]?.[1];
     expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({
       query: "what does the user prefer",
+      thinkingLevel: "high",
       responseLength: "short",
     });
   });
