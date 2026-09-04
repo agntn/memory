@@ -635,6 +635,45 @@ describe("memory supersession", () => {
 });
 
 describe("recall result", () => {
+  it.each([
+    "1900-02-29T12:00:00Z",
+    "2023-02-29T12:00:00Z",
+    "2026-04-31T10:00:00+02:00",
+    "2026-02-30",
+  ])("rejects the impossible reference date in %s before recall", async (referenceDate) => {
+    const urls = stubCloudflare({ result: { count: 0, candidates: [] } });
+
+    await expect(
+      memoryToolExecutors.recall({
+        namespace: "recall-date",
+        profile: "agent",
+        query: "What happened yesterday?",
+        referenceDate,
+      }),
+    ).rejects.toThrow("valid calendar date");
+    expect(urls).toEqual([]);
+  });
+
+  it.each(["2000-02-29T12:00:00+02:00", "2000-02-29"])(
+    "keeps the valid leap-day reference %s unchanged",
+    async (referenceDate) => {
+      let requestBody: unknown;
+      stubCloudflare((_url, init) => {
+        requestBody = JSON.parse(String(init?.body));
+        return { result: { count: 0, candidates: [] } };
+      });
+
+      await memoryToolExecutors.recall({
+        namespace: "recall-date",
+        profile: "agent",
+        query: "What happened yesterday?",
+        referenceDate,
+      });
+
+      expect(requestBody).toMatchObject({ referenceDate });
+    },
+  );
+
   it("returns candidate memories alongside the answer", async () => {
     stubCloudflare({
       result: {
