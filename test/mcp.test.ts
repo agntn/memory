@@ -13,6 +13,7 @@ const expectedNames = [
   "memory_namespace_delete",
   "memory_remember",
   "memory_supersede",
+  "memory_resume_supersession",
   "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
@@ -65,6 +66,22 @@ describe("memory MCP server", () => {
       },
       annotations: { destructiveHint: true, idempotentHint: false },
     });
+    expect(response.tools.find((tool) => tool.name === "memory_resume_supersession")).toMatchObject(
+      {
+        inputSchema: {
+          required: expect.arrayContaining([
+            "namespace",
+            "profile",
+            "oldMemoryId",
+            "replacementMemoryId",
+            "content",
+            "query",
+            "timeoutSeconds",
+          ]),
+        },
+        annotations: { destructiveHint: true, idempotentHint: false },
+      },
+    );
     expect(
       response.tools.find((tool) => tool.name === "memory_wait_for_recall")?.annotations
         ?.readOnlyHint,
@@ -185,6 +202,79 @@ describe("memory MCP server", () => {
         path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/remember",
         method: "POST",
       },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-new",
+        method: "GET",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/recall",
+        method: "POST",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
+        method: "DELETE",
+      },
+    ]);
+  });
+
+  it("resumes a supersession through MCP without another write", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const requests: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, method: init?.method ?? "GET" });
+        if (url.endsWith("/recall")) {
+          return Response.json({
+            success: true,
+            result: {
+              count: 1,
+              answer: "ready",
+              candidates: [{ id: "mem-new", summary: "replacement", sessionId: null, score: 1 }],
+            },
+          });
+        }
+        return Response.json({
+          success: true,
+          result: {
+            id: "mem-new",
+            type: "fact",
+            summary: "replacement",
+            content: "new checkpoint",
+            sessionId: null,
+            createdAt: "2026-09-02T00:00:00.000Z",
+            updatedAt: "2026-09-02T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_resume_supersession",
+      arguments: {
+        namespace: "default",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        replacementMemoryId: "mem-new",
+        content: "new checkpoint",
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(response.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining(
+          'Resumed supersession of memory "mem-old" with replacement "mem-new"',
+        ),
+      }),
+    ]);
+    expect(requests.map(({ url, method }) => ({ path: new URL(url).pathname, method }))).toEqual([
       {
         path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-new",
         method: "GET",

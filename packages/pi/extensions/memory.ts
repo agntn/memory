@@ -39,6 +39,7 @@ import type {
   RecallParams,
   RecallVisibilityParams,
   RememberParams,
+  ResumeSupersessionParams,
   SessionParams,
   SummaryParams,
   SupersedeParams,
@@ -69,6 +70,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const {
     rememberParameters,
     supersedeParameters,
+    resumeSupersessionParameters,
     recallVisibilityParameters,
     ingestParameters,
     recallParameters,
@@ -218,6 +220,25 @@ export default function memoryExtension(pi: ExtensionAPI) {
       return memoryToolExecutors.supersede(operationalWriteParams(params, ctx) as SupersedeParams, {
         signal,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_resume_supersession",
+    ...memoryToolMeta.memory_resume_supersession,
+    promptSnippet: "Finish a supersession from the replacement memory already stored.",
+    promptGuidelines: [
+      "Use both ids from the failed memory_supersede call and the same expected content and query.",
+    ],
+    parameters: resumeSupersessionParameters,
+    renderCall: callRenderer("memory_resume_supersession"),
+    renderResult: resultLine,
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_resume_supersession));
+      return memoryToolExecutors.resumeSupersession(
+        operationalParams(params) as ResumeSupersessionParams,
+        { signal },
+      );
     },
   });
 

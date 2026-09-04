@@ -39,6 +39,7 @@ import type {
   RecallParams,
   RecallVisibilityParams,
   RememberParams,
+  ResumeSupersessionParams,
   SessionParams,
   SummaryParams,
   SupersedeParams,
@@ -147,6 +148,16 @@ function createTools(): MemoryToolDefinition[] {
       execute: (args, options) =>
         memoryToolExecutors.supersede(
           operationalWriteParams(args as { sessionId?: string }) as SupersedeParams,
+          options,
+        ),
+    },
+    {
+      name: "memory_resume_supersession",
+      inputSchema: operationalSchemas.resumeSupersessionParameters,
+      annotations: supersedeAnnotations,
+      execute: (args, options) =>
+        memoryToolExecutors.resumeSupersession(
+          operationalParams(args as object) as ResumeSupersessionParams,
           options,
         ),
     },
@@ -291,7 +302,9 @@ function progressSpec(
       ? memoryToolProgress.memory_wait_for_recall
       : name === "memory_supersede"
         ? memoryToolProgress.memory_supersede
-        : undefined;
+        : name === "memory_resume_supersession"
+          ? memoryToolProgress.memory_resume_supersession
+          : undefined;
   if (message === undefined || typeof timeoutSeconds !== "number") return undefined;
   return { message, total: timeoutSeconds * 1_000 };
 }

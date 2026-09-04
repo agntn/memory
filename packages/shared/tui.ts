@@ -77,6 +77,7 @@ export const MEMORY_TOOL_SYMBOLS = {
   memory_namespace_delete: "🗑️",
   memory_remember: "🧠",
   memory_supersede: "♻️",
+  memory_resume_supersession: "▶️",
   memory_wait_for_recall: "⏳",
   memory_ingest: "📥",
   memory_recall: "🔎",

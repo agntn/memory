@@ -23,6 +23,7 @@ import type {
   RecallParams,
   RecallVisibilityParams,
   RememberParams,
+  ResumeSupersessionParams,
   SessionParams,
   SummaryParams,
   SupersedeParams,
@@ -121,6 +122,10 @@ export const memoryToolMeta = {
     label: "Supersede Memory",
     description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
+  memory_resume_supersession: {
+    label: "Resume Memory Supersession",
+    description: `Finish an interrupted memory_supersede call from the replacement it already stored. Confirms the existing replacement by exact id and content and in recall, then deletes the old id without creating another memory. A failed check keeps both records. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+  },
   memory_wait_for_recall: {
     label: "Wait for Recall",
     description:
@@ -167,6 +172,7 @@ export const memoryToolMeta = {
 /** Progress text for calls that can stay pending long enough to need it. */
 export const memoryToolProgress = {
   memory_supersede: "Replacing memory",
+  memory_resume_supersession: "Resuming memory supersession",
   memory_wait_for_recall: "Waiting for memory to reach recall",
   memory_recall: "Searching memories",
   memory_ingest: "Submitting messages for extraction",
@@ -200,6 +206,10 @@ export const memoryFieldDescriptions = {
     "Exact memory id returned by memory_remember. The check succeeds only when this id appears among recall candidates.",
   supersedeOldMemoryId:
     "Exact id of the memory to delete only after the replacement is readable and visible in recall.",
+  supersedeReplacementMemoryId:
+    "Exact id of the replacement already stored by a failed memory_supersede call.",
+  replacementContent:
+    "Exact content the existing replacement must carry before the old memory can be deleted.",
   recallVisibilityQuery:
     "The exact natural-language query the caller will use to retrieve this memory.",
   recallVisibilityTimeout:
@@ -750,15 +760,15 @@ async function waitForRecallCandidate(
 
 async function verifyReplacement(
   profile: MemoryProfile,
-  replacement: Memory,
-  params: SupersedeParams,
+  replacementMemoryId: string,
+  params: Readonly<SupersedeParams | ResumeSupersessionParams>,
   options: AbortOptions,
 ): Promise<{ memory: Memory; visibility: RecallVisibility }> {
-  if (replacement.id === params.oldMemoryId) {
+  if (replacementMemoryId === params.oldMemoryId) {
     throw new Error("Replacement reused the old memory id");
   }
-  const memory = await requireCapability(profile, "get")(replacement.id, options);
-  if (memory.id !== replacement.id || memory.content !== params.content) {
+  const memory = await requireCapability(profile, "get")(replacementMemoryId, options);
+  if (memory.id !== replacementMemoryId || memory.content !== params.content) {
     throw new Error("Exact replacement read did not match the stored id and content");
   }
   const visibility = await waitForRecallCandidate(
@@ -766,7 +776,7 @@ async function verifyReplacement(
     {
       namespace: params.namespace,
       profile: params.profile,
-      memoryId: replacement.id,
+      memoryId: replacementMemoryId,
       query: params.query,
       timeoutSeconds: params.timeoutSeconds,
     },
@@ -808,7 +818,7 @@ export const memoryToolExecutors = {
     );
     let verified: { memory: Memory; visibility: RecallVisibility };
     try {
-      verified = await verifyReplacement(profile, replacement, params, options);
+      verified = await verifyReplacement(profile, replacement.id, params, options);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -835,6 +845,48 @@ export const memoryToolExecutors = {
         {
           type: "text",
           text: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
+        },
+      ],
+      details,
+    };
+  },
+
+  async resumeSupersession(
+    params: Readonly<ResumeSupersessionParams>,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    assertRecallVisibility({ ...params, memoryId: params.oldMemoryId });
+    assertRecallVisibility({ ...params, memoryId: params.replacementMemoryId });
+    const profile = await getProfile(params);
+    let verified: { memory: Memory; visibility: RecallVisibility };
+    try {
+      verified = await verifyReplacement(profile, params.replacementMemoryId, params, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Replacement memory ${quoteToolText(params.replacementMemoryId)} for old memory ${quoteToolText(params.oldMemoryId)} failed verification: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
+        { cause: error },
+      );
+    }
+    try {
+      await requireCapability(profile, "delete")(params.oldMemoryId, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Replacement memory ${quoteToolText(params.replacementMemoryId)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
+        { cause: error },
+      );
+    }
+    const details = {
+      oldMemoryId: params.oldMemoryId,
+      newMemory: verified.memory,
+      ...verified.visibility,
+    };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Resumed supersession of memory ${quoteToolText(params.oldMemoryId)} with replacement ${quoteToolText(params.replacementMemoryId)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
         },
       ],
       details,

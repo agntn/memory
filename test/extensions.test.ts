@@ -40,6 +40,7 @@ const expectedNames = [
   "memory_namespace_delete",
   "memory_remember",
   "memory_supersede",
+  "memory_resume_supersession",
   "memory_wait_for_recall",
   "memory_ingest",
   "memory_recall",
@@ -110,6 +111,7 @@ describe("memory extensions", () => {
     expect(tools.map((tool) => tool.approval)).toEqual([
       "read",
       "read",
+      "write",
       "write",
       "write",
       "write",
