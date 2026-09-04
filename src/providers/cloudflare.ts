@@ -470,6 +470,7 @@ async function cloudflareResponseBody(response: Response): Promise<unknown> {
   try {
     return await response.json();
   } catch (error) {
+    if (!response.ok && error instanceof SyntaxError) return null;
     throw responseError(
       `Cloudflare Agent Memory returned invalid JSON (${response.status})`,
       response.status,
@@ -482,11 +483,8 @@ function responseMessage(value: unknown): string | undefined {
   return isUnknownRecord(value) && typeof value.message === "string" ? value.message : undefined;
 }
 
-function throwCloudflareResponseError(
-  body: Readonly<Record<string, unknown>>,
-  response: Response,
-): never {
-  const errors: unknown[] = Array.isArray(body.errors) ? body.errors : [];
+function throwCloudflareResponseError(body: unknown, response: Response): never {
+  const errors: unknown[] = isUnknownRecord(body) && Array.isArray(body.errors) ? body.errors : [];
   const messages = errors.flatMap((error) => {
     const message = responseMessage(error);
     return message === undefined ? [] : [message];
@@ -507,13 +505,14 @@ function throwCloudflareResponseError(
 }
 
 function requireCloudflareEnvelope(value: unknown, response: Response): Record<string, unknown> {
+  if (!response.ok) throwCloudflareResponseError(value, response);
   if (!isUnknownRecord(value) || typeof value.success !== "boolean") {
     throw responseError(
       "Cloudflare Agent Memory returned an invalid response envelope",
       response.status,
     );
   }
-  if (!response.ok || !value.success) throwCloudflareResponseError(value, response);
+  if (!value.success) throwCloudflareResponseError(value, response);
   return value;
 }
 
