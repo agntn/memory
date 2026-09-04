@@ -6,6 +6,8 @@ import {
   MemoryError,
   MemoryHttpError,
   MemoryInputError,
+  MemoryNotFoundError,
+  MemoryRateLimitError,
   MemoryProfile,
   cloudflareMemoryLimits,
   create,
@@ -182,6 +184,99 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     const error = await profile.get("missing").catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(MemoryAuthError);
     expect(String(error)).not.toContain("do-not-leak");
+  });
+
+  describe.each(["<html>Service unavailable</html>", "", "null", '{"errors":[]}'])(
+    "HTTP errors with body %j",
+    (body) => {
+      it.each([
+        [401, MemoryAuthError],
+        [403, MemoryAuthError],
+        [404, MemoryNotFoundError],
+        [429, MemoryRateLimitError],
+        [502, MemoryHttpError],
+      ] as const)("classifies status %i for profiles and namespaces", async (status, ErrorType) => {
+        const options = {
+          accountId: "account",
+          namespace: "namespace",
+          apiToken: "token",
+          fetch: vi.fn<typeof fetch>(async () => new Response(body, { status })),
+        };
+        const profile = await new CloudflareMemoryProvider(options).getProfile("user");
+        const namespaces = new CloudflareNamespaceClient(options);
+
+        for (const operation of [() => profile.get("memory-1"), () => namespaces.list()]) {
+          const error = await operation().catch((cause: unknown) => cause);
+          expect(error).toBeInstanceOf(ErrorType);
+          expect(error).toMatchObject({
+            provider: "cloudflare",
+            statusCode: status,
+            message: `Cloudflare Agent Memory request failed (${status})`,
+          });
+        }
+      });
+    },
+  );
+
+  it.each([
+    ["not JSON", "Cloudflare Agent Memory returned invalid JSON (200)"],
+    ["null", "Cloudflare Agent Memory returned an invalid response envelope"],
+    ['{"result":[]}', "Cloudflare Agent Memory returned an invalid response envelope"],
+  ])("still rejects malformed success body %j", async (body, message) => {
+    const namespaces = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: vi.fn<typeof fetch>(async () => new Response(body)),
+    });
+
+    await expect(namespaces.list()).rejects.toMatchObject({
+      name: "MemoryHttpError",
+      statusCode: 200,
+      message,
+    });
+  });
+
+  it.each([200, 401])("keeps API error messages with HTTP %i", async (status) => {
+    const namespaces = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: vi.fn<typeof fetch>(async () =>
+        Response.json(
+          { success: false, errors: [{ message: "First error" }, { message: "Second error" }] },
+          { status },
+        ),
+      ),
+    });
+
+    await expect(namespaces.list()).rejects.toMatchObject({
+      name: status === 401 ? "MemoryAuthError" : "MemoryHttpError",
+      statusCode: status,
+      message: "First error; Second error",
+    });
+  });
+
+  it("preserves a body read cancellation instead of reporting a rate limit", async () => {
+    const cause = new DOMException("Body read cancelled", "AbortError");
+    const namespaces = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(cause);
+              },
+            }),
+            { status: 429 },
+          ),
+      ),
+    });
+
+    const error = await namespaces.list().catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(MemoryHttpError);
+    expect(error).not.toBeInstanceOf(MemoryRateLimitError);
+    expect(error).toHaveProperty("cause", cause);
   });
 
   it("rejects malformed provider configuration with a domain error", () => {
