@@ -42,6 +42,7 @@ import type {
   RecallParams,
   RecallVisibilityParams,
   RememberParams,
+  ResumeSupersessionParams,
   SessionParams,
   SummaryParams,
   SupersedeParams,
@@ -136,6 +137,33 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
           maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
         }),
       ),
+    }),
+    resumeSupersessionParameters: Type.Object({
+      ...profileParameters,
+      oldMemoryId: Type.String({
+        description: memoryFieldDescriptions.supersedeOldMemoryId,
+        minLength: 1,
+        pattern: MEMORY_ID_PATTERN,
+      }),
+      replacementMemoryId: Type.String({
+        description: memoryFieldDescriptions.supersedeReplacementMemoryId,
+        minLength: 1,
+        pattern: MEMORY_ID_PATTERN,
+      }),
+      content: Type.String({
+        description: memoryFieldDescriptions.replacementContent,
+        minLength: 1,
+      }),
+      query: Type.String({
+        description: memoryFieldDescriptions.recallVisibilityQuery,
+        minLength: 1,
+        maxLength: MAX_TOOL_QUERY_CHARACTERS,
+      }),
+      timeoutSeconds: Type.Integer({
+        description: memoryFieldDescriptions.recallVisibilityTimeout,
+        minimum: 1,
+        maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
+      }),
     }),
     recallVisibilityParameters: Type.Object({
       ...profileParameters,
@@ -303,6 +331,10 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       "profile",
       "sessionId",
     ]),
+    resumeSupersessionParameters: Type.Omit(parameters.resumeSupersessionParameters, [
+      "namespace",
+      "profile",
+    ]),
     recallVisibilityParameters: Type.Omit(parameters.recallVisibilityParameters, [
       "namespace",
       "profile",
@@ -335,6 +367,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     namespaceListParameters,
     rememberParameters,
     supersedeParameters,
+    resumeSupersessionParameters,
     recallVisibilityParameters,
     ingestParameters,
     recallParameters,
@@ -476,6 +509,22 @@ export default function memoryExtension(omp: ExtensionAPI) {
       return memoryToolExecutors.supersede(operationalWriteParams(params, ctx) as SupersedeParams, {
         signal,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_resume_supersession",
+    ...memoryToolMeta.memory_resume_supersession,
+    approval: "write",
+    parameters: resumeSupersessionParameters,
+    renderCall: callRenderer("memory_resume_supersession"),
+    renderResult: resultLine,
+    execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
+      onUpdate?.(progress(memoryToolProgress.memory_resume_supersession));
+      return memoryToolExecutors.resumeSupersession(
+        operationalParams(params) as ResumeSupersessionParams,
+        { signal },
+      );
     },
   });
 

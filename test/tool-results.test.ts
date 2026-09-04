@@ -106,6 +106,7 @@ describe("memory summary trust", () => {
     for (const name of [
       "memory_remember",
       "memory_supersede",
+      "memory_resume_supersession",
       "memory_recall",
       "memory_list",
       "memory_get",
@@ -403,6 +404,80 @@ describe("memory supersession", () => {
     createdAt: "2026-08-28T00:00:00.000Z",
     updatedAt: "2026-08-28T00:00:00.000Z",
   };
+
+  it("resumes from an existing replacement without creating another memory", async () => {
+    const requests: Array<{ url: string; method: string }> = [];
+    const urls = stubCloudflare((url, init) => {
+      requests.push({ url, method: init?.method ?? "GET" });
+      if (url.endsWith("/recall")) {
+        return {
+          result: {
+            count: 1,
+            answer: "ready",
+            candidates: [
+              { id: replacement.id, summary: replacement.summary, sessionId: null, score: 1 },
+            ],
+          },
+        };
+      }
+      return { result: replacement };
+    });
+    const result = await memoryToolExecutors.resumeSupersession({
+      namespace: "supersede-resume",
+      profile: "agent",
+      oldMemoryId: "mem-old",
+      replacementMemoryId: replacement.id,
+      content: replacement.content,
+      query: "new checkpoint",
+      timeoutSeconds: 30,
+    });
+
+    expect(textOf(result)).toContain(
+      'Resumed supersession of memory "mem-old" with replacement "mem-new"',
+    );
+    expect(urls.some((url) => url.endsWith("/remember"))).toBe(false);
+    expect(requests.map(({ url, method }) => ({ path: new URL(url).pathname, method }))).toEqual([
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/supersede-resume/profiles/agent/memories/mem-new",
+        method: "GET",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/supersede-resume/profiles/agent/recall",
+        method: "POST",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/supersede-resume/profiles/agent/memories/mem-old",
+        method: "DELETE",
+      },
+    ]);
+  });
+
+  it("keeps both memories when a resumed replacement does not match", async () => {
+    const urls = stubCloudflare({
+      result: { ...replacement, content: "different checkpoint" },
+    });
+
+    const error = await memoryToolExecutors
+      .resumeSupersession({
+        namespace: "supersede-resume-mismatch",
+        profile: "agent",
+        oldMemoryId: "mem-old",
+        replacementMemoryId: replacement.id,
+        content: replacement.content,
+        query: "new checkpoint",
+        timeoutSeconds: 30,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("mem-old");
+    expect((error as Error).message).toContain("mem-new");
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/memories/mem-new");
+    expect(urls.some((url) => url.endsWith("/remember"))).toBe(false);
+    expect(urls.some((url) => url.endsWith("/recall"))).toBe(false);
+    expect(urls.some((url) => url.endsWith("/memories/mem-old"))).toBe(false);
+  });
 
   it("rejects an oversized UTF-8 query before creating the replacement", async () => {
     const urls = stubCloudflare({ result: replacement });
