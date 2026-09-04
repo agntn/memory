@@ -25,8 +25,8 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
   memoryToolProgress,
+  singleLineToolText,
 } from "../packages/shared/memory-tools.ts";
-import { UNSAFE_TERMINAL_CHARACTER_PATTERN } from "../packages/shared/terminal-text.ts";
 import type {
   GetParams,
   IngestParams,
@@ -82,7 +82,6 @@ const supersedeAnnotations: Tool["annotations"] = {
 };
 const MCP_PROGRESS_INTERVAL_MS = 30_000;
 const MAX_MCP_ERROR_CHAIN_DEPTH = 8;
-const MCP_ERROR_CONTROL_PATTERN = new RegExp(UNSAFE_TERMINAL_CHARACTER_PATTERN, "gu");
 
 function createTools(): MemoryToolDefinition[] {
   const operationalScope = configuredMemoryScope();
@@ -271,7 +270,7 @@ function mcpErrorMessage(error: unknown): string {
     const currentObject = asObject(current);
     if (currentObject !== undefined && seen.has(currentObject)) break;
     if (currentObject !== undefined) seen.add(currentObject);
-    const message = errorMessagePart(current).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim();
+    const message = singleLineToolText(errorMessagePart(current)).trim();
     if (isDistinctMessage(message, messages.at(-1))) messages.push(message);
     const cause = errorCause(current);
     if (cause === undefined) break;
@@ -279,7 +278,7 @@ function mcpErrorMessage(error: unknown): string {
   }
 
   if (messages.length > 0) return messages.join(": ");
-  const fallback = errorMessagePart(error).replaceAll(MCP_ERROR_CONTROL_PATTERN, " ").trim();
+  const fallback = singleLineToolText(errorMessagePart(error)).trim();
   return fallback === "" ? "Unknown error" : fallback;
 }
 
@@ -338,7 +337,12 @@ export function createMcpServer(): Server {
     const tool = toolsByName.get(request.params.name);
     if (!tool) {
       return {
-        content: [{ type: "text", text: `Unknown memory tool: ${request.params.name}` }],
+        content: [
+          {
+            type: "text",
+            text: `Unknown memory tool: ${singleLineToolText(request.params.name)}`,
+          },
+        ],
         isError: true,
       };
     }

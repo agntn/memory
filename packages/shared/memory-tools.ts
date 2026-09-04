@@ -310,8 +310,17 @@ function json(value: unknown): string {
   return JSON.stringify(value, dateAsIso, 2);
 }
 
+/**
+ * Lossily replace layout controls in tool output; preserve the original value outside prose.
+ * @param value - Untrusted text crossing the tool result boundary.
+ * @returns {string} Display-only text with every layout control replaced by a space.
+ */
+export function singleLineToolText(value: string): string {
+  return value.replaceAll(TOOL_TEXT_CONTROL_PATTERN, " ");
+}
+
 function quoteToolText(value: string): string {
-  return JSON.stringify(value.replaceAll(TOOL_TEXT_CONTROL_PATTERN, " "));
+  return JSON.stringify(singleLineToolText(value));
 }
 
 /* Keep untrusted multiline text visibly below its owning record or header. */
@@ -525,12 +534,14 @@ function listText(
   cursor: string | undefined,
 ): string {
   const target = memoryTarget(params);
+  const cursorText = cursor === undefined ? undefined : singleLineToolText(cursor);
   if (memories.length === 0) {
-    return cursor === undefined
+    return cursorText === undefined
       ? `No memories in ${target}.`
-      : `No memories on this page of ${target}; more pages behind cursor ${cursor}.`;
+      : `No memories on this page of ${target}; more pages behind cursor ${cursorText}.`;
   }
-  const following = cursor === undefined ? "last page" : `more pages behind cursor ${cursor}`;
+  const following =
+    cursorText === undefined ? "last page" : `more pages behind cursor ${cursorText}`;
   const expanded = memories.filter(hasFullContent).length;
   const contentNote = expanded === 0 ? "" : `, full content indented under ${expanded} of them`;
   const header = `Memories in ${target} (${memories.length}), ${following}, one JSON object per line${contentNote}:`;
@@ -942,7 +953,7 @@ export const memoryToolExecutors = {
       ...options,
     });
     const sessionId = optionalString(params.sessionId);
-    const session = sessionId === undefined ? "" : ` in session ${sessionId}`;
+    const session = sessionId === undefined ? "" : ` in session ${singleLineToolText(sessionId)}`;
     return {
       content: [
         {
@@ -1048,7 +1059,9 @@ export const memoryToolExecutors = {
       throw new Error(
         [
           `Every read in ${memoryTarget(params)} failed:`,
-          ...failed.map(([id, { error }]) => `${id}: ${describeReadError(params, error)}`),
+          ...failed.map(
+            ([id, { error }]) => `${singleLineToolText(id)}: ${describeReadError(params, error)}`,
+          ),
         ].join("\n"),
       );
     }
@@ -1060,7 +1073,7 @@ export const memoryToolExecutors = {
     const header =
       failed.length === 0
         ? ""
-        : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => id).join(", ")}.\n`;
+        : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => singleLineToolText(id)).join(", ")}.\n`;
     return {
       content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
       details: { memories },
@@ -1108,9 +1121,10 @@ export const memoryToolExecutors = {
     const profile = await getProfile(params);
     const removed = await countMemories(profile, options, params.sessionId);
     await requireCapability(profile, "deleteSession")(params.sessionId, options);
+    const sessionId = singleLineToolText(params.sessionId);
     const text = emptyCascade(removed)
-      ? `No memory in ${memoryTarget(params)} carried session ${params.sessionId}; nothing was removed. Check the session id against memory_list.`
-      : `Deleted session ${params.sessionId} in ${memoryTarget(params)}, holding ${removedText(removed)}.`;
+      ? `No memory in ${memoryTarget(params)} carried session ${sessionId}; nothing was removed. Check the session id against memory_list.`
+      : `Deleted session ${sessionId} in ${memoryTarget(params)}, holding ${removedText(removed)}.`;
     return {
       content: [{ type: "text", text }],
       details: {
