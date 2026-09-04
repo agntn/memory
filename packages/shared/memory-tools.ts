@@ -66,6 +66,7 @@ const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
  */
 export const ISO_INSTANT_PATTERN =
   "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:\\d{2})$";
+const isoInstantPattern = new RegExp(ISO_INSTANT_PATTERN);
 export const MAX_TOOL_QUERY_CHARACTERS = 1_024;
 export const MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS = 300;
 const MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS = 10_000;
@@ -259,6 +260,39 @@ function getCredentials(): { accountId: string; apiToken: string } {
 
 function optionalString(value: string | undefined): string | undefined {
   return value === "" ? undefined : value;
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return leapYear ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * Parses an instant without letting Date silently move an impossible source day.
+ * @param value - Timestamp text from a tool call.
+ * @returns {Date} The exact represented instant.
+ */
+function messageTimestamp(value: string): Date {
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const timestamp = new Date(value);
+  if (
+    !isoInstantPattern.test(value) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    Number.isNaN(timestamp.getTime())
+  ) {
+    throw new Error(
+      "Message timestamp must be an ISO-8601 instant with an explicit offset and valid calendar date",
+    );
+  }
+  return timestamp;
 }
 
 async function getNamespaceClient(): Promise<
@@ -945,7 +979,7 @@ export const memoryToolExecutors = {
       return {
         role: message.role,
         content: message.content,
-        ...(timestamp === undefined ? {} : { timestamp: new Date(timestamp) }),
+        ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
       };
     });
     await requireCapability(profile, "ingest")(messages, {

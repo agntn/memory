@@ -1047,6 +1047,40 @@ describe("namespace get result", () => {
 });
 
 describe("ingest result", () => {
+  it.each(["1900-02-29T12:00:00Z", "2023-02-29T12:00:00Z", "2026-04-31T10:00:00+02:00"])(
+    "rejects the impossible calendar date in %s before ingestion",
+    async (timestamp) => {
+      const urls = stubCloudflare({ result: null });
+
+      await expect(
+        memoryToolExecutors.ingest({
+          namespace: "ingest-date",
+          profile: "agent",
+          messages: [{ role: "user", content: "Dated event.", timestamp }],
+        }),
+      ).rejects.toThrow("valid calendar date");
+      expect(urls).toEqual([]);
+    },
+  );
+
+  it("keeps a valid leap day instant", async () => {
+    let requestBody: unknown;
+    stubCloudflare((_url, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return { result: null };
+    });
+
+    await memoryToolExecutors.ingest({
+      namespace: "ingest-date",
+      profile: "agent",
+      messages: [{ role: "user", content: "Leap day event.", timestamp: "2000-02-29T12:00:00Z" }],
+    });
+
+    expect(requestBody).toMatchObject({
+      messages: [{ timestamp: "2000-02-29T12:00:00.000Z" }],
+    });
+  });
+
   it("states that extraction is asynchronous", async () => {
     stubCloudflare({ result: null });
 
