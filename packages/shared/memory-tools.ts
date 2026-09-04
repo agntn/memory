@@ -270,22 +270,25 @@ function daysInMonth(year: number, month: number): number {
   return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
+function hasValidCalendarDate(value: string): boolean {
+  const date = /^(\d{4})-(\d{2})-(\d{2})(?:T|$)/.exec(value);
+  if (!date) return true;
+  const year = Number(date[1]);
+  const month = Number(date[2]);
+  const day = Number(date[3]);
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+}
+
 /**
  * Parses an instant without letting Date silently move an impossible source day.
  * @param value - Timestamp text from a tool call.
  * @returns {Date} The exact represented instant.
  */
 function messageTimestamp(value: string): Date {
-  const year = Number(value.slice(0, 4));
-  const month = Number(value.slice(5, 7));
-  const day = Number(value.slice(8, 10));
   const timestamp = new Date(value);
   if (
     !isoInstantPattern.test(value) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > daysInMonth(year, month) ||
+    !hasValidCalendarDate(value) ||
     Number.isNaN(timestamp.getTime())
   ) {
     throw new Error(
@@ -1014,11 +1017,15 @@ export const memoryToolExecutors = {
   async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     assertCount(params.candidates, "Candidates");
     assertCount(params.expand, "Expand");
+    const referenceDate = optionalString(params.referenceDate);
+    if (referenceDate !== undefined && !hasValidCalendarDate(referenceDate)) {
+      throw new Error("Recall reference date must contain a valid calendar date");
+    }
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
       responseLength: params.responseLength,
-      referenceDate: optionalString(params.referenceDate),
+      referenceDate,
       ...options,
     });
     const shown = trimCandidates(result.candidates, params.candidates);
