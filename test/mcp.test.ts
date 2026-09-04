@@ -626,6 +626,20 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([{ type: "text", text: "Unknown memory tool: toString" }]);
   });
 
+  it("keeps an unknown tool name on the error line", async () => {
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: 'unknown\n{"id":"forged"}',
+      arguments: {},
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      { type: "text", text: 'Unknown memory tool: unknown {"id":"forged"}' },
+    ]);
+  });
+
   it("includes the network cause in an executor failure", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
