@@ -1,7 +1,10 @@
+import type { TSchema } from "typebox";
+import { toolErrorMessage } from "../../shared/tool-errors.ts";
 import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
@@ -66,6 +69,25 @@ function resultLine(
 }
 
 export default function memoryExtension(pi: ExtensionAPI) {
+  /**
+   * Pi marks thrown failures as errors but only displays their message.
+   * @param tool - Definition whose execution errors need their cause chain formatted.
+   */
+  function registerTool<TParams extends TSchema>(
+    tool: ToolDefinition<TParams, Record<string, unknown>>,
+  ) {
+    pi.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          throw new Error(toolErrorMessage(error), { cause: error });
+        }
+      },
+    });
+  }
+
   const operationalScope = configuredPiMemoryScope();
   const {
     rememberParameters,
@@ -114,7 +136,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
       return new Text(renderStatusLine(line, theme), 0, 0);
     };
   }
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_list",
     ...memoryToolMeta.memory_namespace_list,
     promptSnippet: "List available Agent Memory namespaces.",
@@ -131,7 +153,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_get",
     ...memoryToolMeta.memory_namespace_get,
     promptSnippet: "Get one exact Agent Memory namespace.",
@@ -148,7 +170,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_create",
     ...memoryToolMeta.memory_namespace_create,
     promptSnippet: "Create an Agent Memory namespace.",
@@ -165,7 +187,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_delete",
     ...memoryToolMeta.memory_namespace_delete,
     promptSnippet: "Delete one exact Agent Memory namespace.",
@@ -184,7 +206,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_remember",
     ...memoryToolMeta.memory_remember,
     promptSnippet: "Store a durable fact or instruction in agent memory.",
@@ -205,7 +227,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_supersede",
     ...memoryToolMeta.memory_supersede,
     promptSnippet: "Replace a durable memory without deleting the old record first.",
@@ -223,7 +245,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_resume_supersession",
     ...memoryToolMeta.memory_resume_supersession,
     promptSnippet: "Finish a supersession from the replacement memory already stored.",
@@ -242,7 +264,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_wait_for_recall",
     ...memoryToolMeta.memory_wait_for_recall,
     promptSnippet: "Wait until one stored memory can be found through recall.",
@@ -261,7 +283,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_ingest",
     ...memoryToolMeta.memory_ingest,
     promptSnippet: "Ingest conversation messages into agent memory.",
@@ -279,7 +301,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_recall",
     ...memoryToolMeta.memory_recall,
     promptSnippet: "Recall durable context before answering or acting.",
@@ -293,7 +315,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_list",
     ...memoryToolMeta.memory_list,
     promptSnippet: "List memories by session or type.",
@@ -306,7 +328,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_get",
     ...memoryToolMeta.memory_get,
     promptSnippet: memoryToolMeta.memory_get.description,
@@ -319,7 +341,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete",
     ...memoryToolMeta.memory_delete,
     promptSnippet: memoryToolMeta.memory_delete.description,
@@ -334,7 +356,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_summary",
     ...memoryToolMeta.memory_summary,
     promptSnippet: "Summarize a profile or session when there is no specific question to ask.",
@@ -347,7 +369,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete_session",
     ...memoryToolMeta.memory_delete_session,
     promptSnippet: "Delete one exact memory session.",
@@ -362,7 +384,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete_profile",
     ...memoryToolMeta.memory_delete_profile,
     promptSnippet: "Delete one exact memory profile.",
