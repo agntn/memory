@@ -27,8 +27,8 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
   memoryToolProgress,
-  singleLineToolText,
 } from "../packages/shared/memory-tools.ts";
+import { singleLineToolText } from "../packages/shared/terminal-text.ts";
 import type {
   GetParams,
   IngestParams,
