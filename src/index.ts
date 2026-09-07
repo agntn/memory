@@ -34,5 +34,8 @@ export type {
   CloudflareNamespace,
   CloudflareNamespaceListOptions,
   CloudflareNamespaceListResult,
+  CloudflareProfile,
+  CloudflareProfileListOptions,
+  CloudflareProfileListResult,
 } from "./providers/index.ts";
 export type { MnemopiClient, MnemopiMemoryOptions } from "./providers/index.ts";

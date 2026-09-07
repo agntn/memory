@@ -1062,6 +1062,30 @@ describe("paged results", () => {
 
     expect(JSON.parse(textOf(result))).toMatchObject({ cursor: "ns-next", hasMore: true });
   });
+
+  it("names the namespace on a page of its profiles", async () => {
+    const urls = stubCloudflare({
+      result: [{ name: "agent", createdAt: "2026-08-17T18:10:09.388Z" }],
+      resultInfo: { cursor: "p-next" },
+    });
+
+    const result = await memoryToolExecutors.listProfiles({
+      namespace: "probe",
+      limit: 5,
+      cursor: "p-prev",
+    });
+
+    expect(urls).toEqual([
+      "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/probe/profiles?per_page=5&cursor=p-prev",
+    ]);
+    expect(JSON.parse(textOf(result))).toEqual({
+      namespace: "probe",
+      profiles: [{ name: "agent", createdAt: "2026-08-17T18:10:09.388Z" }],
+      cursor: "p-next",
+      hasMore: true,
+    });
+    expect(result.details).toMatchObject({ namespace: "probe", hasMore: true });
+  });
 });
 
 describe("namespace get result", () => {

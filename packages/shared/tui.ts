@@ -75,6 +75,7 @@ export const MEMORY_TOOL_SYMBOLS = {
   memory_namespace_get: "📂",
   memory_namespace_create: "➕",
   memory_namespace_delete: "🗑️",
+  memory_profile_list: "👤",
   memory_remember: "🧠",
   memory_supersede: "♻️",
   memory_resume_supersession: "▶️",
@@ -124,6 +125,7 @@ const RESULT_COUNT_LABELS = {
   candidates: ["candidate", "candidates"],
   memories: ["memory", "memories"],
   namespaces: ["namespace", "namespaces"],
+  profiles: ["profile", "profiles"],
 } as const;
 
 const SUBJECT_WIDTH = 72;

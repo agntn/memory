@@ -64,6 +64,17 @@ export const namespaceListParameters = Type.Object({
     }),
   ),
 });
+export const profileListParameters = Type.Object({
+  namespace: namespaceName,
+  limit: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: MAX_TOOL_LIST_LIMIT,
+      description: memoryFieldDescriptions.profilesPerPage,
+    }),
+  ),
+  cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
+});
 export const rememberParameters = Type.Object({
   ...profileParameters,
   content: Type.String({

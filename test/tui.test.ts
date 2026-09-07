@@ -137,6 +137,15 @@ describe("result lines", () => {
     expect(line.meta).toEqual(["2 memories", "more pages"]);
   });
 
+  it("counts the profiles a namespace page holds", () => {
+    const line = describeToolResult(
+      { content: [], details: { namespace: "default", profiles: [{ name: "agent" }] } },
+      false,
+    );
+
+    expect(line.meta).toEqual(["1 profile"]);
+  });
+
   it("leaves the delete count to the sentence the tool already wrote", () => {
     const line = describeToolResult(
       {

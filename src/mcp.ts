@@ -13,6 +13,7 @@ import {
   createOperationalMemoryToolSchemas,
   namespaceListParameters,
   namespaceParameters,
+  profileListParameters,
   profileOnlyParameters,
 } from "../packages/shared/memory-tool-schemas.ts";
 import {
@@ -36,6 +37,7 @@ import type {
   MemoryToolResult,
   NamespaceListParams,
   NamespaceParams,
+  ProfileListParams,
   ProfileParams,
   RecallParams,
   RecallVisibilityParams,
@@ -129,6 +131,13 @@ function createTools(): MemoryToolDefinition[] {
       annotations: destructiveAnnotations,
       execute: (args, options) =>
         memoryToolExecutors.deleteNamespace(args as NamespaceParams, options),
+    },
+    {
+      name: "memory_profile_list",
+      inputSchema: profileListParameters,
+      annotations: readAnnotations,
+      execute: (args, options) =>
+        memoryToolExecutors.listProfiles(args as ProfileListParams, options),
     },
     {
       name: "memory_remember",

@@ -26,4 +26,7 @@ export type {
   CloudflareNamespace,
   CloudflareNamespaceListOptions,
   CloudflareNamespaceListResult,
+  CloudflareProfile,
+  CloudflareProfileListOptions,
+  CloudflareProfileListResult,
 } from "./cloudflare.ts";

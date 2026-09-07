@@ -543,7 +543,105 @@ describe("CloudflareNamespaceClient", () => {
 
     await expect(client.create("Invalid Namespace")).rejects.toBeInstanceOf(MemoryInputError);
     await expect(client.get("Invalid Namespace")).rejects.toBeInstanceOf(MemoryInputError);
+    await expect(client.listProfiles("Invalid Namespace")).rejects.toBeInstanceOf(MemoryInputError);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("lists the profiles a namespace holds, one page at a time", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        result: [{ name: "agent", createdAt: "2026-08-17T18:10:09.388Z" }],
+        success: true,
+        errors: [],
+        result_info: { count: 1, cursor: "next", per_page: 20 },
+      }),
+    );
+    const client = new CloudflareNamespaceClient({
+      accountId: "account/id",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+
+    await expect(
+      client.listProfiles("support-agent", { limit: 20, cursor: "cursor" }),
+    ).resolves.toEqual({
+      profiles: [{ name: "agent", createdAt: new Date("2026-08-17T18:10:09.388Z") }],
+      cursor: "next",
+    });
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "https://api.cloudflare.com/client/v4/accounts/account%2Fid/agent-memory/namespaces/support-agent/profiles?per_page=20&cursor=cursor",
+    );
+  });
+
+  it("pages profiles up to the cap the profiles endpoint publishes", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse([]));
+    const client = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+
+    await expect(
+      client.listProfiles("namespace", { limit: cloudflareMemoryLimits.profileListLimit }),
+    ).resolves.toEqual({ profiles: [] });
+    await expect(
+      client.listProfiles("namespace", { limit: cloudflareMemoryLimits.profileListLimit + 1 }),
+    ).rejects.toBeInstanceOf(MemoryInputError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CloudflareMemoryProvider profile listing", () => {
+  const profilePage = (names: string[], cursor?: string) =>
+    Response.json({
+      result: names.map((name) => ({ name, createdAt: "2026-08-17T18:10:09.388Z" })),
+      success: true,
+      errors: [],
+      result_info: { count: names.length, cursor: cursor ?? null, per_page: 500 },
+    });
+
+  it("enumerates every profile name of its namespace over HTTP", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes("cursor=")
+        ? profilePage(["default"])
+        : profilePage(["aei", "agent"], "p2"),
+    );
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "support-agent",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+
+    expect(provider.capabilities.listProfiles).toBe(true);
+    await expect(provider.listProfiles?.()).resolves.toEqual(["aei", "agent", "default"]);
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/support-agent/profiles?per_page=500",
+      "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/support-agent/profiles?per_page=500&cursor=p2",
+    ]);
+  });
+
+  it("stops a listing whose page repeats its own cursor", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => profilePage(["aei"], "same"));
+    const provider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "support-agent",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+
+    await expect(provider.listProfiles?.()).rejects.toBeInstanceOf(MemoryHttpError);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the listing absent on a binding, which has no such call", async () => {
+    const provider = new CloudflareMemoryProvider({
+      binding: { getProfile: vi.fn(), deleteProfile: vi.fn() },
+    });
+
+    expect(provider.capabilities.listProfiles).toBe(false);
+    expect(provider.listProfiles).toBeUndefined();
+    expect("listProfiles" in provider).toBe(false);
   });
 });
 describe("abstract capability contract", () => {

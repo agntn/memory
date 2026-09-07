@@ -38,6 +38,7 @@ import type {
   MemoryParams,
   NamespaceListParams,
   NamespaceParams,
+  ProfileListParams,
   ProfileParams,
   RecallParams,
   RecallVisibilityParams,
@@ -96,6 +97,17 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
           description: memoryFieldDescriptions.sortDirection,
         }),
       ),
+    }),
+    profileListParameters: Type.Object({
+      namespace: namespaceName,
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TOOL_LIST_LIMIT,
+          description: memoryFieldDescriptions.profilesPerPage,
+        }),
+      ),
+      cursor: Type.Optional(Type.String({ description: memoryFieldDescriptions.cursor })),
     }),
     rememberParameters: Type.Object({
       ...profileParameters,
@@ -365,6 +377,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
   const {
     namespaceParameters,
     namespaceListParameters,
+    profileListParameters,
     rememberParameters,
     supersedeParameters,
     resumeSupersessionParameters,
@@ -474,6 +487,22 @@ export default function memoryExtension(omp: ExtensionAPI) {
       signal,
     ): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteNamespace(params, { signal });
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_profile_list",
+    ...memoryToolMeta.memory_profile_list,
+    approval: "read",
+    parameters: profileListParameters,
+    renderCall: callRenderer("memory_profile_list", false),
+    renderResult: resultLine,
+    execute(
+      _id,
+      params: ProfileListParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.listProfiles(params, { signal });
     },
   });
 

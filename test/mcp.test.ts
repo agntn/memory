@@ -11,6 +11,7 @@ const expectedNames = [
   "memory_namespace_get",
   "memory_namespace_create",
   "memory_namespace_delete",
+  "memory_profile_list",
   "memory_remember",
   "memory_supersede",
   "memory_resume_supersession",

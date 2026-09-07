@@ -1,6 +1,6 @@
 # @agntn/memory
 
-One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same sixteen tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
+One interface over agent memory systems. Cloudflare Agent Memory over Workers bindings or HTTP, Mnemopi for local OMP setups, and the same seventeen tools wired into Pi, OMP and MCP so an agent gets memory without you writing the plumbing three times.
 
 ## Install
 
@@ -26,7 +26,10 @@ const provider = new CloudflareMemoryProvider({
   namespace: "my-agent",
   apiToken: process.env.CLOUDFLARE_API_TOKEN!,
 });
+const profileNames = await provider.listProfiles!();
 ```
+
+Over HTTP the provider can also say which profiles its namespace holds. The Workers binding has no such call, so a binding-backed provider leaves `listProfiles` absent and reports `capabilities.listProfiles: false`.
 
 Namespaces live at account level, so they get their own client:
 
@@ -39,8 +42,11 @@ const namespaces = new CloudflareNamespaceClient({
 await namespaces.create("my-agent");
 const page = await namespaces.list({ limit: 20, order: "name" });
 const one = await namespaces.get("my-agent");
+const profiles = await namespaces.listProfiles("my-agent", { limit: 20 });
 await namespaces.delete("my-agent");
 ```
+
+A profile shows up in that listing once something has been written to it, ordered by name, with the time it was first recorded.
 
 There is no update or rename endpoint, so renaming means creating the new namespace, writing the memories again, and deleting the old one.
 
@@ -90,7 +96,7 @@ Over HTTP the signal goes straight to `fetch` and kills the request in flight. A
 
 ## Pi and OMP extensions
 
-Pi and OMP each get a native extension with all sixteen tools. They talk to Cloudflare over HTTP, so the host needs credentials:
+Pi and OMP each get a native extension with all seventeen tools. They talk to Cloudflare over HTTP, so the host needs credentials:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID="..."
@@ -121,7 +127,7 @@ Pi loads `packages/pi/extensions/memory.ts`, OMP loads `packages/omp/extensions/
 
 ## MCP server
 
-Same sixteen tools over the Model Context Protocol, same credentials, stdio transport:
+Same seventeen tools over the Model Context Protocol, same credentials, stdio transport:
 
 ```bash
 memory mcp
@@ -161,7 +167,7 @@ When Claude Code launches the MCP server, its injected `CLAUDE_PROJECT_DIR` and 
 
 Three Cloudflare behaviours will bite you otherwise. An unknown memory id comes back as a generic 500, not a 404, so `memory_get` adds a line saying the id may simply not exist. Deleting a session that never existed succeeds quietly, which is why the delete counts what it found first. And a durable write can take a while to appear in recall. The visibility check reports its measured wait, while timeout or host cancellation changes no memory.
 
-What Cloudflare does not give you: editing a memory, listing profiles, batch reads, or any handle on the asynchronous ingest job. The tool descriptions say so instead of staying silent. `memory_get` with several ids, `memory_supersede`, and `memory_resume_supersession` are compositions inside this package, not service batch or update endpoints.
+What Cloudflare does not give you: editing a memory, batch reads, or any handle on the asynchronous ingest job. The tool descriptions say so instead of staying silent. `memory_get` with several ids, `memory_supersede`, and `memory_resume_supersession` are compositions inside this package, not service batch or update endpoints.
 
 ## License
 
