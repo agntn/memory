@@ -19,6 +19,7 @@ import type {
   MemoryToolResult,
   NamespaceListParams,
   NamespaceParams,
+  ProfileListParams,
   ProfileParams,
   RecallParams,
   RecallVisibilityParams,
@@ -115,6 +116,11 @@ export const memoryToolMeta = {
     description:
       "Permanently delete one Cloudflare Agent Memory namespace with every profile and memory inside it. There is no dry run, no undo, and no count of what was removed.",
   },
+  memory_profile_list: {
+    label: "List Memory Profiles",
+    description:
+      "List the profiles one Cloudflare Agent Memory namespace holds, ordered by name, each with the time it was first recorded. A profile is listed once something has been written to it, so this is how to find which profiles exist before reading or deleting one. A namespace that does not exist returns a not-found error.",
+  },
   memory_remember: {
     label: "Remember",
     description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
@@ -190,7 +196,7 @@ export const memoryFieldDescriptions = {
   namespace:
     "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
   profile:
-    "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; there is no profile listing.",
+    "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; memory_profile_list shows the ones a namespace holds.",
   writeSessionId:
     "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.",
   cursor:
@@ -234,6 +240,7 @@ export const memoryFieldDescriptions = {
   sessionToDelete: "Exact session identifier. Every memory carrying it is removed.",
   summarySessionId: "Summarize only this session instead of the whole profile.",
   namespacesPerPage: `Namespaces per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+  profilesPerPage: `Profiles per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
   sortField: "Sort field.",
   sortDirection: "Sort direction.",
 } as const;
@@ -1216,6 +1223,31 @@ export const memoryToolExecutors = {
       ...options,
     });
     const page = paged(result);
+    return {
+      content: [{ type: "text", text: json(page) }],
+      details: page,
+    };
+  },
+
+  /**
+   * List one page of the profiles a namespace holds.
+   *
+   * @param params - Validated namespace and pagination arguments.
+   * @param options - Request cancellation.
+   * @returns {Promise<MemoryToolResult>} The serialized page, naming its namespace and whether another page waits.
+   */
+  async listProfiles(
+    params: ProfileListParams,
+    options: AbortOptions = {},
+  ): Promise<MemoryToolResult> {
+    const result = await (
+      await getNamespaceClient()
+    ).listProfiles(params.namespace, {
+      limit: params.limit,
+      cursor: optionalString(params.cursor),
+      ...options,
+    });
+    const page = paged({ namespace: params.namespace, ...result });
     return {
       content: [{ type: "text", text: json(page) }],
       details: page,

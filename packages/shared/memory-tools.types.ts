@@ -13,6 +13,11 @@ export interface NamespaceResult {
   updatedAt: Date;
 }
 
+export interface ProfileResult {
+  name: string;
+  createdAt: Date;
+}
+
 export interface MemoryModule {
   registerAll(): void;
   create<TOptions>(name: string, options: TOptions): MemoryProvider;
@@ -24,6 +29,10 @@ export interface MemoryModule {
     get(name: string, options?: AbortOptions): Promise<NamespaceResult>;
     create(name: string, options?: AbortOptions): Promise<NamespaceResult>;
     delete(name: string, options?: AbortOptions): Promise<void>;
+    listProfiles(
+      name: string,
+      options?: { limit?: number; cursor?: string } & AbortOptions,
+    ): Promise<{ profiles: ProfileResult[]; cursor?: string }>;
   };
 }
 
@@ -41,6 +50,11 @@ export interface NamespaceListParams {
   cursor?: string;
   order?: "id" | "name";
   direction?: "asc" | "desc";
+}
+
+export interface ProfileListParams extends NamespaceParams {
+  limit?: number;
+  cursor?: string;
 }
 
 export interface RememberParams extends ProfileParams {

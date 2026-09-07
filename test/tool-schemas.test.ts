@@ -177,6 +177,7 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_namespace_get: sharedSchemas.namespaceParameters,
   memory_namespace_create: sharedSchemas.namespaceParameters,
   memory_namespace_delete: sharedSchemas.namespaceParameters,
+  memory_profile_list: sharedSchemas.profileListParameters,
   memory_remember: sharedSchemas.rememberParameters,
   memory_supersede: sharedSchemas.supersedeParameters,
   memory_resume_supersession: sharedSchemas.resumeSupersessionParameters,

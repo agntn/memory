@@ -98,6 +98,23 @@ export interface CloudflareNamespaceListResult {
   cursor?: string;
 }
 
+/** One profile of a namespace, as the profile listing reports it. */
+export interface CloudflareProfile {
+  name: string;
+  /** When the profile was first recorded in the namespace index. */
+  createdAt: Date;
+}
+
+export interface CloudflareProfileListOptions extends AbortOptions {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface CloudflareProfileListResult {
+  profiles: CloudflareProfile[];
+  cursor?: string;
+}
+
 export type CloudflareMemoryOptions = CloudflareBindingOptions | CloudflareHttpOptions;
 
 const CLOUDFLARE_API_URL = "https://api.cloudflare.com/client/v4";
@@ -113,6 +130,8 @@ const MAX_BINDING_LIST_LIMIT = 500;
 const MAX_HTTP_LIST_LIMIT = 500;
 /** The namespaces endpoint takes twice that, and answers 1001 with 400. The two caps are separate. */
 const MAX_NAMESPACE_LIST_LIMIT = 1000;
+/** The profiles endpoint shares the memories cap and answers 501 with the same 400. */
+const MAX_PROFILE_LIST_LIMIT = 500;
 
 /** Input limits this provider enforces, so tool schemas can publish the same bounds. */
 export const cloudflareMemoryLimits = Object.freeze({
@@ -128,9 +147,11 @@ export const cloudflareMemoryLimits = Object.freeze({
   httpListLimit: MAX_HTTP_LIST_LIMIT,
   /** Page size for a listing of namespaces, which the service caps higher. */
   namespaceListLimit: MAX_NAMESPACE_LIST_LIMIT,
+  /** Page size for a listing of profiles. */
+  profileListLimit: MAX_PROFILE_LIST_LIMIT,
 });
 
-const capabilities: Readonly<MemoryCapabilities> = Object.freeze({
+const bindingCapabilities: Readonly<MemoryCapabilities> = Object.freeze({
   ingest: true,
   remember: true,
   recall: true,
@@ -141,6 +162,12 @@ const capabilities: Readonly<MemoryCapabilities> = Object.freeze({
   summary: true,
   deleteProfile: true,
   listProfiles: false,
+});
+
+/** The HTTP API lists the profiles of a namespace; the Workers binding has no such call. */
+const httpCapabilities: Readonly<MemoryCapabilities> = Object.freeze({
+  ...bindingCapabilities,
+  listProfiles: true,
 });
 
 /*
@@ -234,6 +261,11 @@ function assertNamespaceListOptions(options: CloudflareNamespaceListOptions): vo
       provider: "cloudflare",
     });
   }
+}
+
+function assertProfileListOptions(options: CloudflareProfileListOptions): void {
+  assertListLimit(options.limit, MAX_PROFILE_LIST_LIMIT);
+  if (options.cursor !== undefined) assertString(options.cursor, "Profile cursor");
 }
 
 function assertSessionId(sessionId: string | null | undefined): void {
@@ -466,6 +498,19 @@ function parseNamespaces(value: unknown): CloudflareNamespace[] {
   return value.map(parseNamespace);
 }
 
+function parseProfile(value: unknown): CloudflareProfile {
+  if (!isUnknownRecord(value)) throw responseError("Invalid Cloudflare response: profile");
+  return {
+    name: parseString(value.name, "profile name"),
+    createdAt: parseDate(value.createdAt, "profile createdAt"),
+  };
+}
+
+function parseProfiles(value: unknown): CloudflareProfile[] {
+  if (!Array.isArray(value)) throw responseError("Invalid Cloudflare response: profile list");
+  return value.map(parseProfile);
+}
+
 async function cloudflareResponseBody(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -555,8 +600,67 @@ class CloudflareHttpClient {
   }
 }
 
+function profilesPath(namespace: string): string {
+  return `/namespaces/${encodePath(namespace)}/profiles`;
+}
+
 function profilePath(namespace: string, profileName: string): string {
-  return `/namespaces/${encodePath(namespace)}/profiles/${encodePath(profileName)}`;
+  return `${profilesPath(namespace)}/${encodePath(profileName)}`;
+}
+
+/*
+ * Read one page of the profiles a namespace holds.
+ *
+ * The service orders the page by name and lists a profile once something has
+ * been written to it, so an empty page from an existing namespace means nothing
+ * was stored under it yet. A namespace that does not exist answers 404.
+ */
+async function requestProfilePage(
+  client: CloudflareHttpClient,
+  path: string,
+  options: CloudflareProfileListOptions,
+): Promise<CloudflareProfileListResult> {
+  assertProfileListOptions(options);
+  const query = new URLSearchParams();
+  if (options.limit !== undefined) query.set("per_page", String(options.limit));
+  if (options.cursor !== undefined) query.set("cursor", options.cursor);
+  const suffix = query.size === 0 ? "" : `?${query}`;
+  const response = await client.request(`${path}${suffix}`, parseProfiles, {
+    signal: options.signal,
+  });
+  return {
+    profiles: response.result,
+    ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
+  };
+}
+
+/*
+ * Enumerate every profile name in the namespace an HTTP provider is bound to.
+ *
+ * The contract returns names alone while the service pages at 500, so the pages
+ * are drained here. A page that hands back the cursor it was asked with would
+ * never end, so it is reported as a malformed response instead.
+ */
+async function listHttpProfiles(
+  options: CloudflareHttpOptions,
+  abort: AbortOptions,
+): Promise<string[]> {
+  const client = new CloudflareHttpClient(options, profilesPath(options.namespace));
+  const names: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await requestProfilePage(client, "", {
+      limit: MAX_PROFILE_LIST_LIMIT,
+      ...(cursor === undefined ? {} : { cursor }),
+      signal: abort.signal,
+    });
+    names.push(...page.profiles.map((profile) => profile.name));
+    if (page.cursor !== undefined && page.cursor === cursor) {
+      throw responseError("Invalid Cloudflare response: profile cursor repeated");
+    }
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return names;
 }
 
 /**
@@ -799,6 +903,21 @@ export class CloudflareNamespaceClient {
   }
 
   /**
+   * List the profiles one Agent Memory namespace holds, ordered by name.
+   *
+   * @param name - Validated namespace name.
+   * @param options - Pagination options plus cancellation.
+   * @returns {Promise<CloudflareProfileListResult>} One page of profiles and the cursor to the next.
+   */
+  async listProfiles(
+    name: string,
+    options: CloudflareProfileListOptions = {},
+  ): Promise<CloudflareProfileListResult> {
+    assertNamespaceName(name);
+    return await requestProfilePage(this.client, `/${encodePath(name)}/profiles`, options);
+  }
+
+  /**
    * Create an Agent Memory namespace.
    *
    * @param name - Validated namespace name.
@@ -834,7 +953,7 @@ export class CloudflareNamespaceClient {
 
 export class CloudflareMemoryProvider extends MemoryProvider {
   override readonly name = "cloudflare";
-  override readonly capabilities = capabilities;
+  override readonly capabilities: Readonly<MemoryCapabilities>;
   private readonly options: CloudflareMemoryOptions;
 
   constructor(options: CloudflareMemoryOptions) {
@@ -857,6 +976,17 @@ export class CloudflareMemoryProvider extends MemoryProvider {
       assertNamespaceName(options.namespace);
     }
     this.options = options;
+    if (isBindingOptions(options)) {
+      this.capabilities = bindingCapabilities;
+    } else {
+      this.capabilities = httpCapabilities;
+      /*
+       * The Workers binding has no profile listing, so the method is attached
+       * to an HTTP provider only and stays absent on a binding-backed one
+       * instead of failing at call time.
+       */
+      this.listProfiles = (abort = {}) => listHttpProfiles(options, abort);
+    }
   }
 
   override async getProfile(profileName: string): Promise<CloudflareMemoryProfile> {

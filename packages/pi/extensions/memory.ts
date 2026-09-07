@@ -11,6 +11,7 @@ import {
   createOperationalMemoryToolSchemas,
   namespaceListParameters,
   namespaceParameters,
+  profileListParameters,
   profileOnlyParameters,
 } from "../../shared/memory-tool-schemas.ts";
 import {
@@ -38,6 +39,7 @@ import type {
   MemoryParams,
   NamespaceListParams,
   NamespaceParams,
+  ProfileListParams,
   ProfileParams,
   RecallParams,
   RecallVisibilityParams,
@@ -203,6 +205,23 @@ export default function memoryExtension(pi: ExtensionAPI) {
       signal,
     ): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteNamespace(params, { signal });
+    },
+  });
+
+  registerTool({
+    name: "memory_profile_list",
+    ...memoryToolMeta.memory_profile_list,
+    promptSnippet: "List the profiles one Agent Memory namespace holds.",
+    promptGuidelines: ["Use cursor to page through results."],
+    parameters: profileListParameters,
+    renderCall: callRenderer("memory_profile_list", false),
+    renderResult: resultLine,
+    execute(
+      _id,
+      params: ProfileListParams,
+      signal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> {
+      return memoryToolExecutors.listProfiles(params, { signal });
     },
   });
 
