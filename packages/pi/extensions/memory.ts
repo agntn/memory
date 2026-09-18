@@ -337,8 +337,10 @@ export default function memoryExtension(pi: ExtensionAPI) {
   registerTool({
     name: "memory_list",
     ...memoryToolMeta.memory_list,
-    promptSnippet: "List memories by session or type.",
-    promptGuidelines: ["Use cursor to page through results."],
+    promptSnippet: "List memories by session or type, oldest first.",
+    promptGuidelines: [
+      "Pages run from the oldest memory up and cannot be reversed. Use cursor to page forward, sessionId to see one session, memory_recall for recent facts.",
+    ],
     parameters: listParameters,
     renderCall: callRenderer("memory_list"),
     renderResult: resultLine,

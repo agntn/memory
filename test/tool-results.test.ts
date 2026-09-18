@@ -1022,11 +1022,26 @@ describe("listing format", () => {
 
     const [header, ...body] = textOf(result).split("\n");
     expect(header).toBe(
-      "Memories in listing/agent (2), more pages behind cursor next, one JSON object per line:",
+      "Memories in listing/agent (2), oldest first, more pages behind cursor next, one JSON object per line:",
     );
     expect(body).toHaveLength(2);
     expect(body.every((line) => !line.includes("\n") && line.startsWith("{"))).toBe(true);
     expect(JSON.parse(body[0] ?? "{}")).toMatchObject({ id: "mem-1", sessionId: "s1" });
+  });
+
+  it("says the pages run oldest first, on the last page as well", async () => {
+    stubCloudflare({ result: [memoryEntry("mem-1", null)] });
+
+    const result = await memoryToolExecutors.list({ namespace: "listing", profile: "agent" });
+
+    expect(textOf(result)).toMatch(
+      /^Memories in listing\/agent \(1\), oldest first, last page, one JSON object per line:\n/,
+    );
+    expect(memoryToolMeta.memory_list.description).toContain(
+      "Pages run from the oldest memory to the newest",
+    );
+    expect(memoryToolMeta.memory_list.description).not.toContain("nowhere else");
+    expect(memoryFieldDescriptions.memoriesPerPage).toContain("oldest first");
   });
 });
 

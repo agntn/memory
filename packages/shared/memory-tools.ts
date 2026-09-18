@@ -149,7 +149,7 @@ export const memoryToolMeta = {
   },
   memory_list: {
     label: "List Memories",
-    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Session ids appear here and nowhere else, so this is also how to find what memory_delete_session can remove.`,
+    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Pages run from the oldest memory to the newest, by id, and the service offers no way to start from the newest, so a busy profile keeps its recent memories on the last pages; pass sessionId to see one session, memory_summary names the most recent one, or ask memory_recall for recent facts. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. ${MEMORY_SUMMARY_TRUST_GUIDANCE} There is no session listing, so the session ids on these records are how to find what memory_delete_session can remove.`,
   },
   memory_get: {
     label: "Get Memories",
@@ -231,7 +231,7 @@ export const memoryFieldDescriptions = {
     "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
   listExpand:
     "How many memories from the top of the page to return with full content, one extra read each. The rest of the page keeps summaries only, and a read that fails shows content: null.",
-  memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}.`,
+  memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}, oldest first.`,
   listSessionId: "Return only memories from this session.",
   memoryType: "Filter by the type the service assigned when the memory was written.",
   memoryId: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
@@ -571,7 +571,9 @@ function recallText(
  *
  * The records go out one per line, so the header is the only place left to say
  * whether another page waits. Dropping that would leave a caller unable to tell
- * a finished listing from a truncated one.
+ * a finished listing from a truncated one. The header also says the page runs
+ * oldest first: the service pages by id upward and takes no order, so without
+ * that word the first page of a busy profile reads as its newest memories.
  */
 function listText(
   params: ProfileParams,
@@ -589,7 +591,7 @@ function listText(
     cursorText === undefined ? "last page" : `more pages behind cursor ${cursorText}`;
   const expanded = memories.filter(hasFullContent).length;
   const contentNote = expanded === 0 ? "" : `, full content indented under ${expanded} of them`;
-  const header = `Memories in ${target} (${memories.length}), ${following}, one JSON object per line${contentNote}:`;
+  const header = `Memories in ${target} (${memories.length}), oldest first, ${following}, one JSON object per line${contentNote}:`;
   return `${header}\n${recordLines(memories)}`;
 }
 

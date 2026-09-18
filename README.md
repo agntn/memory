@@ -107,7 +107,7 @@ Seventeen tools across MCP, Pi and OMP, one executor table behind them. Pi does 
 
 ## 🚫 What this does not do
 
-It does not edit a memory in place, run Bun, or speak Mnemopi over MCP. Durable wiki files are `@agntn/wiki`, session transcripts are `@agntn/sessions`, and Cloudflare Agent Memory is still private beta.
+It does not edit a memory in place, list memories newest first, run Bun, or speak Mnemopi over MCP. Durable wiki files are `@agntn/wiki`, session transcripts are `@agntn/sessions`, and Cloudflare Agent Memory is still private beta.
 
 ## 🛠️ Development
 
