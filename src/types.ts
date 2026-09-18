@@ -36,10 +36,12 @@ export interface AbortOptions {
 }
 
 export interface IngestOptions extends AbortOptions {
+  /** Left out or null, Cloudflare derives one from the message content, the same for the same messages in every profile. */
   sessionId?: string | null;
 }
 export interface RememberInput {
   content: string;
+  /** Left out or null, Cloudflare stores the memory with `sessionId: null`. */
   sessionId?: string | null;
 }
 export interface RecallOptions extends AbortOptions {
