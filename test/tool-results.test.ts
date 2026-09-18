@@ -105,6 +105,29 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("supersession", () => {
+  it("says in every affected description that a newer memory on a topic hides the older one", () => {
+    for (const name of [
+      "memory_remember",
+      "memory_supersede",
+      "memory_wait_for_recall",
+      "memory_recall",
+      "memory_list",
+      "memory_get",
+      "memory_delete",
+      "memory_delete_session",
+      "memory_delete_profile",
+    ] as const) {
+      expect(memoryToolMeta[name].description, name).toMatch(/supersed/i);
+    }
+    expect(memoryToolMeta.memory_remember.description).toContain("Events accumulate");
+    expect(memoryToolMeta.memory_supersede.description).toContain("Never retry a failed call");
+    expect(memoryToolMeta.memory_get.description).toContain(
+      "updatedAt is later than its createdAt",
+    );
+  });
+});
+
 describe("memory summary trust", () => {
   it("marks generated summaries as untrusted in every tool description that returns records", () => {
     for (const name of [
@@ -1211,12 +1234,14 @@ describe("cascade delete results", () => {
       sessionId: "s-3",
     });
 
-    expect(textOf(result)).toBe("Deleted session s-3 in cascade-count/agent, holding 2 memories.");
+    expect(textOf(result)).toBe(
+      "Deleted session s-3 in cascade-count/agent, holding 2 listed memories.",
+    );
     expect(result.details).toMatchObject({ removedMemories: 2, removedAtLeast: false });
     expect(urls[0]).toContain("session_id=s-3");
   });
 
-  it("says plainly when a session id matched nothing", async () => {
+  it("does not claim nothing went when the listing showed nothing for a session", async () => {
     stubCloudflare((url) => (url.includes("/memories") ? { result: [] } : { result: null }));
 
     const result = await memoryToolExecutors.deleteSession({
@@ -1225,7 +1250,9 @@ describe("cascade delete results", () => {
       sessionId: "typo",
     });
 
-    expect(textOf(result)).toContain("No memory in cascade-empty/agent carried session typo");
+    expect(textOf(result)).toBe(
+      "No listed memory in cascade-empty/agent carried session typo; the delete removed only superseded memories tagged with it, if there were any. Check the session id against memory_list.",
+    );
     expect(result.details).toMatchObject({ removedMemories: 0 });
   });
 
@@ -1254,7 +1281,20 @@ describe("cascade delete results", () => {
       profile: "agent",
     });
 
-    expect(textOf(result)).toBe("Deleted profile cascade-profile/agent, holding 1 memory.");
+    expect(textOf(result)).toBe("Deleted profile cascade-profile/agent, holding 1 listed memory.");
+  });
+
+  it("names the superseded memories an empty profile listing hides", async () => {
+    stubCloudflare((url) => (url.includes("/memories") ? { result: [] } : { result: null }));
+
+    const result = await memoryToolExecutors.deleteProfile({
+      namespace: "cascade-profile-empty",
+      profile: "agent",
+    });
+
+    expect(textOf(result)).toBe(
+      "Deleted profile cascade-profile-empty/agent, which held no listed memories; superseded ones, if there were any, went with it. A profile name that was never written to reports the same result.",
+    );
   });
 });
 
