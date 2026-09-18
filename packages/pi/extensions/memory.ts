@@ -378,8 +378,11 @@ export default function memoryExtension(pi: ExtensionAPI) {
   registerTool({
     name: "memory_summary",
     ...memoryToolMeta.memory_summary,
-    promptSnippet: "Summarize a profile or session when there is no specific question to ask.",
-    promptGuidelines: ["Pass sessionId only when a session-scoped summary is needed."],
+    promptSnippet:
+      "Summarize everything a profile holds when there is no specific question to ask.",
+    promptGuidelines: [
+      "The summary always covers the whole profile; sessionId only picks the session named on its Current session line. Use memory_list with sessionId to see one session.",
+    ],
     parameters: summaryParameters,
     renderCall: callRenderer("memory_summary"),
     renderResult: resultLine,
