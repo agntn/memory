@@ -1218,10 +1218,10 @@ describe("ingest result", () => {
     expect(text).toContain("derives one from the message content");
     expect(text).toContain("hash-");
     expect(result.details).not.toHaveProperty("sessionId");
-    expect(memoryToolMeta.memory_ingest.description).toContain(
-      "derives one from the message content",
-    );
+    expect(memoryToolMeta.memory_ingest.description).toContain("derived from the message content");
     expect(memoryToolMeta.memory_ingest.description).toContain("Ingesting the same messages again");
+    expect(memoryToolMeta.memory_ingest.description).toContain("host's conversation session");
+    expect(memoryFieldDescriptions.writeSessionId).toContain("host's conversation session");
     expect(memoryFieldDescriptions.writeSessionId).toContain("derives");
   });
 
