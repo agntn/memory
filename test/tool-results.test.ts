@@ -1237,7 +1237,7 @@ describe("cascade delete results", () => {
     expect(textOf(result)).toBe(
       "Deleted session s-3 in cascade-count/agent, holding 2 listed memories.",
     );
-    expect(result.details).toMatchObject({ removedMemories: 2, removedAtLeast: false });
+    expect(result.details).toMatchObject({ listedMemories: 2, listedAtLeast: false });
     expect(urls[0]).toContain("session_id=s-3");
   });
 
@@ -1253,7 +1253,7 @@ describe("cascade delete results", () => {
     expect(textOf(result)).toBe(
       "No listed memory in cascade-empty/agent carried session typo; the delete removed only superseded memories tagged with it, if there were any. Check the session id against memory_list.",
     );
-    expect(result.details).toMatchObject({ removedMemories: 0 });
+    expect(result.details).toMatchObject({ listedMemories: 0, listedAtLeast: false });
   });
 
   it("keeps a deleted session id on the result line", async () => {
@@ -1344,7 +1344,7 @@ describe("delete resilience", () => {
     expect(textOf(result)).toBe(
       "Deleted session s-1 in count-fails/agent, holding an unknown number of memories.",
     );
-    expect(result.details).toMatchObject({ removedMemories: null });
+    expect(result.details).toMatchObject({ listedMemories: null, listedAtLeast: null });
   });
 
   it("keeps an authentication failure free of not-found guidance", async () => {

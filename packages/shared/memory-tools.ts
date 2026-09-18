@@ -595,7 +595,7 @@ function listText(
   return `${header}\n${recordLines(memories)}`;
 }
 
-/** How much a cascade delete removed, or `undefined` when it could not be read. */
+/** How much the listing showed before a cascade delete, or `undefined` when it could not be read. */
 type RemovedCount = { count: number; atLeast: boolean } | undefined;
 
 /*
@@ -1185,8 +1185,8 @@ export const memoryToolExecutors = {
         namespace: params.namespace,
         profile: params.profile,
         sessionId: params.sessionId,
-        removedMemories: removed?.count ?? null,
-        removedAtLeast: removed?.atLeast ?? null,
+        listedMemories: removed?.count ?? null,
+        listedAtLeast: removed?.atLeast ?? null,
       },
     };
   },
@@ -1209,8 +1209,8 @@ export const memoryToolExecutors = {
       details: {
         namespace: params.namespace,
         profile: params.profile,
-        removedMemories: removed?.count ?? null,
-        removedAtLeast: removed?.atLeast ?? null,
+        listedMemories: removed?.count ?? null,
+        listedAtLeast: removed?.atLeast ?? null,
       },
     };
   },
