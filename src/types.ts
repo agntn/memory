@@ -65,6 +65,7 @@ export interface ListOptions extends AbortOptions {
   type?: MemoryType;
 }
 export interface ListResult {
+  /** One page in the provider's order; Cloudflare pages by id from the oldest memory up and takes no order option. */
   memories: MemoryListEntry[];
   cursor?: string;
 }
