@@ -117,6 +117,7 @@ describe("supersession", () => {
       "memory_delete",
       "memory_delete_session",
       "memory_delete_profile",
+      "memory_ingest",
     ] as const) {
       expect(memoryToolMeta[name].description, name).toMatch(/supersed/i);
     }
@@ -1201,6 +1202,27 @@ describe("ingest result", () => {
     expect(text).toContain("session s-9");
     expect(text).toContain("asynchronously");
     expect(result.details).toMatchObject({ messageCount: 1, sessionId: "s-9" });
+  });
+
+  it("names the session the service derives when none was passed", async () => {
+    stubCloudflare({ result: null });
+
+    const result = await memoryToolExecutors.ingest({
+      namespace: "ingest-derived",
+      profile: "agent",
+      messages: [{ role: "user", content: "I deploy with pnpm." }],
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("into ingest-derived/agent with no session id");
+    expect(text).toContain("derives one from the message content");
+    expect(text).toContain("hash-");
+    expect(result.details).not.toHaveProperty("sessionId");
+    expect(memoryToolMeta.memory_ingest.description).toContain("derived from the message content");
+    expect(memoryToolMeta.memory_ingest.description).toContain("Ingesting the same messages again");
+    expect(memoryToolMeta.memory_ingest.description).toContain("host's conversation session");
+    expect(memoryFieldDescriptions.writeSessionId).toContain("host's conversation session");
+    expect(memoryFieldDescriptions.writeSessionId).toContain("derives");
   });
 
   it("keeps an untrusted session id on the result line", async () => {

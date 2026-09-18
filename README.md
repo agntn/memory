@@ -15,6 +15,7 @@ You want an agent that keeps facts between turns. Cloudflare speaks HTTP in one 
 - 🤖 **Seventeen tools an agent can call.** MCP, Pi and OMP, Cloudflare HTTP behind each. Mnemopi stays in the library.
 - 🏷️ **Summaries are gossip.** The service writes them. Tools mark `summaryTrust: "service-generated-untrusted"`, and you decide from `content`.
 - 🔁 **New facts bury old ones.** A fact or instruction on a topic the profile already holds supersedes it. The old memory leaves list and recall, `memory_get` still reads it by id.
+- 🧵 **Ingest without a session still gets one.** The tools stamp the host's conversation session when they know it. Past that, Cloudflare derives one from the messages, `hash-` and then the id, the same for the same messages. Ingest the same messages twice and the second extraction supersedes the first, new ids under the same session. `remember` without a session stays `null`.
 - 🛑 **Abort stops HTTP in flight.** Binding and Mnemopi check the signal at the door. Once they start, they finish.
 - 🔐 **Bind one namespace and profile.** `AGNTN_MEMORY_NAMESPACE` and `AGNTN_MEMORY_PROFILE` together. The model cannot wander.
 - ♻️ **Replace without a blind delete.** `memory_supersede` writes, waits for recall, then deletes. A failed check keeps both.

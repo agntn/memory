@@ -308,6 +308,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     promptSnippet: "Ingest conversation messages into agent memory.",
     promptGuidelines: [
       "Use for conversation history; use memory_remember for one explicit memory.",
+      "Ingesting the same messages again runs extraction again and supersedes what it extracted before, so read the ids from memory_list afresh afterwards.",
     ],
     parameters: ingestParameters,
     renderCall: callRenderer("memory_ingest"),

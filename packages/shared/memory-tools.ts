@@ -142,7 +142,7 @@ export const memoryToolMeta = {
   memory_ingest: {
     label: "Ingest Messages",
     description:
-      "Hand a bounded sequence of conversation messages to the extraction service. Extraction is asynchronous and decides on its own how many memories the messages produce, so the new memories show up in memory_list and memory_recall only after it finishes. Use memory_remember when one exact memory has to exist.",
+      "Hand a bounded sequence of conversation messages to the extraction service. Extraction is asynchronous and decides on its own how many memories the messages produce, so the new memories show up in memory_list and memory_recall only after it finishes. A call without a sessionId carries the host's conversation session when the host knows one, as Pi and OMP always do and the MCP server does under Claude Code or Grok. Only a call that reaches the service with no session at all gets one derived from the message content, the same for the same messages in every profile; the call returns no id, so memory_list is where it shows, on the extracted memories as an id under the hash- prefix. Ingesting the same messages again runs extraction again: each fact or instruction it extracts supersedes the stored version on its topic, so the ids memory_list showed before leave it even when the count stays the same. Use memory_remember when one exact memory has to exist.",
   },
   memory_recall: {
     label: "Recall",
@@ -199,7 +199,7 @@ export const memoryFieldDescriptions = {
   profile:
     "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; memory_profile_list shows the ones a namespace holds.",
   writeSessionId:
-    "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together.",
+    "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together. Left out, the host's conversation session applies when the host knows one; with no session at all, memory_remember and memory_supersede store the memory with no session, while memory_ingest gets one the service derives from the message content.",
   cursor:
     "Cursor copied from the previous response. A response without a cursor was the last page.",
   rememberContent: `Memory content to store. The service writes it verbatim, assigns the memory type itself, and rejects content over ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes, the same cap as one ingested message.`,
@@ -1002,7 +1002,11 @@ export const memoryToolExecutors = {
       ...options,
     });
     const sessionId = optionalString(params.sessionId);
-    const session = sessionId === undefined ? "" : ` in session ${singleLineToolText(sessionId)}`;
+    /** The service answers with no session, so the text names the one it will derive when the caller passed none. */
+    const session =
+      sessionId === undefined
+        ? " with no session id; the service derives one from the message content, and memory_list shows it on the extracted memories as an id under the hash- prefix"
+        : ` in session ${singleLineToolText(sessionId)}`;
     return {
       content: [
         {
