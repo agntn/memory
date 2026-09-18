@@ -6,6 +6,7 @@ import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
 import * as sharedSchemas from "../packages/shared/memory-tool-schemas.ts";
 import {
   MAX_TOOL_LIST_LIMIT,
+  MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
   MAX_TOOL_MESSAGE_CHARACTERS,
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
@@ -253,6 +254,16 @@ describe("tool schemas", () => {
     expect(MEMORY_NAME_PATTERN).toBe(cloudflareMemoryLimits.namePattern);
     expect(MAX_TOOL_NAMESPACE_CHARACTERS).toBe(cloudflareMemoryLimits.namespaceNameCharacters);
     expect(MAX_TOOL_LIST_LIMIT).toBeLessThanOrEqual(cloudflareMemoryLimits.httpListLimit);
+  });
+
+  it("caps stored memory content where the service does", () => {
+    expect(MAX_TOOL_MEMORY_CONTENT_CHARACTERS).toBeLessThanOrEqual(
+      cloudflareMemoryLimits.memoryContentBytes,
+    );
+    const remember = sharedShape(sharedSchemas.rememberParameters);
+    const supersede = sharedShape(sharedSchemas.supersedeParameters);
+    expect(remember.content?.max).toBe(MAX_TOOL_MEMORY_CONTENT_CHARACTERS);
+    expect(supersede.content?.max).toBe(MAX_TOOL_MEMORY_CONTENT_CHARACTERS);
   });
 
   it("reports the package version", async () => {

@@ -4,6 +4,7 @@ import {
   ISO_INSTANT_PATTERN,
   MAX_TOOL_INGEST_MESSAGES,
   MAX_TOOL_LIST_LIMIT,
+  MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
   MAX_TOOL_MESSAGE_CHARACTERS,
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
@@ -114,6 +115,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       content: Type.String({
         description: memoryFieldDescriptions.rememberContent,
         minLength: 1,
+        maxLength: MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
       }),
       sessionId: Type.Optional(
         Type.String({
@@ -132,6 +134,7 @@ function createParameters(Type: ExtensionAPI["typebox"]["Type"], scoped: boolean
       content: Type.String({
         description: memoryFieldDescriptions.rememberContent,
         minLength: 1,
+        maxLength: MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
       }),
       query: Type.String({
         description: memoryFieldDescriptions.recallVisibilityQuery,

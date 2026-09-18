@@ -300,6 +300,40 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it("bounds remembered content at the bytes the service accepts", async () => {
+    const bindingProfile = { remember: vi.fn() } as unknown as AgentMemoryProfileBinding;
+    const binding = {
+      getProfile: vi.fn(async () => bindingProfile),
+      deleteProfile: vi.fn(),
+    } as unknown as AgentMemoryNamespaceBinding;
+    const selectedBindingProfile = await new CloudflareMemoryProvider({ binding }).getProfile(
+      "user",
+    );
+
+    expect(() => selectedBindingProfile.remember({ content: "a".repeat(32_769) })).toThrow(
+      "Memory content must not exceed 32768 UTF-8 bytes",
+    );
+    expect(bindingProfile.remember).not.toHaveBeenCalled();
+
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(memory));
+    const httpProvider = new CloudflareMemoryProvider({
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    });
+    const selectedHttpProfile = await httpProvider.getProfile("user");
+
+    /** 16,385 two-byte characters pass a character count and still exceed the byte cap. */
+    await expect(
+      selectedHttpProfile.remember({ content: "ł".repeat(16_385) }),
+    ).rejects.toBeInstanceOf(MemoryInputError);
+    expect(fetcher).not.toHaveBeenCalled();
+
+    await selectedHttpProfile.remember({ content: "ł".repeat(16_384) });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a missing session ID before calling either transport", async () => {
     const bindingProfile = {
       ingest: vi.fn(),
