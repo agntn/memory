@@ -123,11 +123,11 @@ export const memoryToolMeta = {
   },
   memory_remember: {
     label: "Remember",
-    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersede: {
     label: "Supersede Memory",
-    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_resume_supersession and the ids the failure reported. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_resume_supersession: {
     label: "Resume Memory Supersession",
@@ -136,7 +136,7 @@ export const memoryToolMeta = {
   memory_wait_for_recall: {
     label: "Wait for Recall",
     description:
-      "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits.",
+      "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits. A memory that a newer fact or instruction on its topic superseded never appears, so a timeout can mean a newer memory won rather than a slow index.",
   },
   memory_ingest: {
     label: "Ingest Messages",
@@ -145,19 +145,19 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
-    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Pages run from the oldest memory to the newest, by id, and the service offers no way to start from the newest, so a busy profile keeps its recent memories on the last pages; pass sessionId to see one session, memory_summary names the most recent one, or ask memory_recall for recent facts. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. ${MEMORY_SUMMARY_TRUST_GUIDANCE} There is no session listing, so the session ids on these records are how to find what memory_delete_session can remove.`,
+    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Pages run from the oldest memory to the newest, by id, and the service offers no way to start from the newest, so a busy profile keeps its recent memories on the last pages; pass sessionId to see one session, memory_summary names the most recent one, or ask memory_recall for recent facts. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. Superseded versions of facts and instructions are hidden from every page; memory_get still reads them by id. ${MEMORY_SUMMARY_TRUST_GUIDANCE} There is no session listing, so the session ids on these records are how to find what memory_delete_session can remove.`,
   },
   memory_get: {
     label: "Get Memories",
-    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content and summaryTrust marker, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
+    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content and summaryTrust marker, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
   },
   memory_delete: {
     label: "Delete Memory",
-    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
+    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. Deleting the newest version of a fact or instruction does not bring back the version it superseded; that one stays hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
   },
   memory_summary: {
     label: "Memory Summary",
@@ -167,12 +167,12 @@ export const memoryToolMeta = {
   memory_delete_session: {
     label: "Delete Memory Session",
     description:
-      "Delete every memory carrying one session id, which memory_list reports per memory. This is the only bulk deletion below profile level. The result counts what the session held, and says so explicitly when the session held nothing, because the service accepts a delete for a session that does not exist.",
+      "Delete every memory carrying one session id, which memory_list reports per memory. This is the only bulk deletion below profile level. The result counts the memories memory_list showed for the session and says so when it showed none, because the service accepts a delete for a session that does not exist; superseded memories tagged with the session are hidden from that count and removed all the same.",
   },
   memory_delete_profile: {
     label: "Delete Memory Profile",
     description:
-      "Delete an entire memory profile and everything stored in it. There is no dry run and no undo; the result counts what the profile held.",
+      "Delete an entire memory profile and everything stored in it. There is no dry run and no undo; the result counts the memories memory_list showed, and superseded versions go uncounted.",
   },
 } as const;
 
@@ -595,7 +595,7 @@ function listText(
   return `${header}\n${recordLines(memories)}`;
 }
 
-/** How much a cascade delete removed, or `undefined` when it could not be read. */
+/** How much the listing showed before a cascade delete, or `undefined` when it could not be read. */
 type RemovedCount = { count: number; atLeast: boolean } | undefined;
 
 /*
@@ -604,7 +604,9 @@ type RemovedCount = { count: number; atLeast: boolean } | undefined;
  * Cloudflare accepts a delete for a session that holds nothing and answers it
  * exactly like a real one, so without this the caller cannot tell a typo from a
  * successful removal. One page is enough to make that distinction, and a failed
- * read must never stop the delete the caller actually asked for.
+ * read must never stop the delete the caller actually asked for. The listing
+ * leaves superseded memories out while the delete removes them too, so the
+ * count is of listed memories and an empty page does not prove nothing went.
  */
 async function countMemories(
   profile: MemoryProfile,
@@ -626,8 +628,8 @@ async function countMemories(
 
 function removedText(removed: RemovedCount): string {
   if (removed === undefined) return "an unknown number of memories";
-  if (removed.atLeast) return `at least ${removed.count} memories`;
-  return removed.count === 1 ? "1 memory" : `${removed.count} memories`;
+  if (removed.atLeast) return `at least ${removed.count} listed memories`;
+  return removed.count === 1 ? "1 listed memory" : `${removed.count} listed memories`;
 }
 
 /* Whether a failure could mean the addressed memory simply is not there. */
@@ -1175,7 +1177,7 @@ export const memoryToolExecutors = {
     await requireCapability(profile, "deleteSession")(params.sessionId, options);
     const sessionId = singleLineToolText(params.sessionId);
     const text = emptyCascade(removed)
-      ? `No memory in ${memoryTarget(params)} carried session ${sessionId}; nothing was removed. Check the session id against memory_list.`
+      ? `No listed memory in ${memoryTarget(params)} carried session ${sessionId}; the delete removed only superseded memories tagged with it, if there were any. Check the session id against memory_list.`
       : `Deleted session ${sessionId} in ${memoryTarget(params)}, holding ${removedText(removed)}.`;
     return {
       content: [{ type: "text", text }],
@@ -1183,8 +1185,8 @@ export const memoryToolExecutors = {
         namespace: params.namespace,
         profile: params.profile,
         sessionId: params.sessionId,
-        removedMemories: removed?.count ?? null,
-        removedAtLeast: removed?.atLeast ?? null,
+        listedMemories: removed?.count ?? null,
+        listedAtLeast: removed?.atLeast ?? null,
       },
     };
   },
@@ -1200,15 +1202,15 @@ export const memoryToolExecutors = {
     const removed = await countMemories(await getProfile(params), options);
     await provider.deleteProfile(params.profile, options);
     const text = emptyCascade(removed)
-      ? `Deleted profile ${memoryTarget(params)}, which held no memories. A profile name that was never written to reports the same result.`
+      ? `Deleted profile ${memoryTarget(params)}, which held no listed memories; superseded ones, if there were any, went with it. A profile name that was never written to reports the same result.`
       : `Deleted profile ${memoryTarget(params)}, holding ${removedText(removed)}.`;
     return {
       content: [{ type: "text", text }],
       details: {
         namespace: params.namespace,
         profile: params.profile,
-        removedMemories: removed?.count ?? null,
-        removedAtLeast: removed?.atLeast ?? null,
+        listedMemories: removed?.count ?? null,
+        listedAtLeast: removed?.atLeast ?? null,
       },
     };
   },

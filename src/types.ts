@@ -10,6 +10,7 @@ export interface Memory {
   content: string;
   sessionId: string | null;
   createdAt: Date;
+  /** Cloudflare moves it to the moment a newer fact or instruction on the same topic superseded this memory. */
   updatedAt: Date;
 }
 
@@ -65,7 +66,7 @@ export interface ListOptions extends AbortOptions {
   type?: MemoryType;
 }
 export interface ListResult {
-  /** One page in the provider's order; Cloudflare pages by id from the oldest memory up and takes no order option. */
+  /** One page in the provider's order; Cloudflare pages by id from the oldest memory up, takes no order option and leaves superseded memories out. */
   memories: MemoryListEntry[];
   cursor?: string;
 }
