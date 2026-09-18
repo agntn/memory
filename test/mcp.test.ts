@@ -600,6 +600,20 @@ describe("memory MCP server", () => {
     ]);
   });
 
+  it("rejects memory content the service would refuse for its size", async () => {
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: { namespace: "size-check", profile: "agent", content: "a".repeat(32_769) },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      { type: "text", text: expect.stringContaining("Invalid arguments at /content") },
+    ]);
+  });
+
   it("rejects an ingest timestamp without a time zone", async () => {
     const client = await connectTestClient();
 

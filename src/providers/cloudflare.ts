@@ -120,6 +120,8 @@ export type CloudflareMemoryOptions = CloudflareBindingOptions | CloudflareHttpO
 const CLOUDFLARE_API_URL = "https://api.cloudflare.com/client/v4";
 const MAX_INGEST_MESSAGES = 500;
 const MAX_MESSAGE_BYTES = 32_768;
+/** Measured live on 2026-09-18: `remember` answers 32,769 bytes with 400 "content must not exceed 32768 bytes". The limits page names only the message cap. */
+const MAX_MEMORY_CONTENT_BYTES = 32_768;
 const MAX_QUERY_BYTES = 1_024;
 const MAX_SESSION_ID_CHARACTERS = 64;
 const MAX_PROFILE_NAME_CHARACTERS = 100;
@@ -137,6 +139,8 @@ const MAX_PROFILE_LIST_LIMIT = 500;
 export const cloudflareMemoryLimits = Object.freeze({
   ingestMessages: MAX_INGEST_MESSAGES,
   messageBytes: MAX_MESSAGE_BYTES,
+  /** Size of one remembered memory, which the service caps like one ingested message. */
+  memoryContentBytes: MAX_MEMORY_CONTENT_BYTES,
   queryBytes: MAX_QUERY_BYTES,
   sessionIdCharacters: MAX_SESSION_ID_CHARACTERS,
   profileNameCharacters: MAX_PROFILE_NAME_CHARACTERS,
@@ -215,6 +219,20 @@ function assertString(value: string, label: string, maximumCharacters?: number):
       provider: "cloudflare",
     });
   }
+}
+
+/* The service measures text in UTF-8 bytes, so a character count is not enough here. */
+function assertByteLength(value: string, label: string, maximumBytes: number): void {
+  if (new TextEncoder().encode(value).byteLength > maximumBytes) {
+    throw new MemoryInputError(`${label} must not exceed ${maximumBytes} UTF-8 bytes`, {
+      provider: "cloudflare",
+    });
+  }
+}
+
+function assertMemoryContent(content: string): void {
+  assertString(content, "Memory content");
+  assertByteLength(content, "Memory content", MAX_MEMORY_CONTENT_BYTES);
 }
 
 function assertNamespaceName(namespace: string): void {
@@ -300,11 +318,7 @@ function assertListOptions(options: ListOptions, maximum: number): void {
 
 function assertRecall(query: string, options: RecallOptions): void {
   assertString(query, "Recall query");
-  if (new TextEncoder().encode(query).byteLength > MAX_QUERY_BYTES) {
-    throw new MemoryInputError(`Recall query must not exceed ${MAX_QUERY_BYTES} UTF-8 bytes`, {
-      provider: "cloudflare",
-    });
-  }
+  assertByteLength(query, "Recall query", MAX_QUERY_BYTES);
   if (
     options.thinkingLevel !== undefined &&
     !["low", "medium", "high"].includes(options.thinkingLevel)
@@ -342,11 +356,7 @@ function assertMessage(message: Readonly<MemoryMessage>): void {
     });
   }
   assertString(message.content, "Message content");
-  if (new TextEncoder().encode(message.content).byteLength > MAX_MESSAGE_BYTES) {
-    throw new MemoryInputError(`Message content must not exceed ${MAX_MESSAGE_BYTES} UTF-8 bytes`, {
-      provider: "cloudflare",
-    });
-  }
+  assertByteLength(message.content, "Message content", MAX_MESSAGE_BYTES);
   if (
     message.timestamp !== undefined &&
     (!(message.timestamp instanceof Date) || Number.isNaN(message.timestamp.getTime()))
@@ -692,7 +702,7 @@ class CloudflareBindingProfile extends MemoryProfile implements CloudflareMemory
   }
 
   override remember(memory: RememberInput, options: AbortOptions = {}): Promise<Memory> {
-    assertString(memory.content, "Memory content");
+    assertMemoryContent(memory.content);
     assertSessionId(memory.sessionId);
     return withCloudflareError(() => {
       options.signal?.throwIfAborted();
@@ -771,7 +781,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   }
 
   override async remember(memory: RememberInput, options: AbortOptions = {}): Promise<Memory> {
-    assertString(memory.content, "Memory content");
+    assertMemoryContent(memory.content);
     assertSessionId(memory.sessionId);
     return (
       await this.client.request("/remember", parseMemory, {
