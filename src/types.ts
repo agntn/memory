@@ -69,6 +69,7 @@ export interface ListResult {
   cursor?: string;
 }
 export interface SummaryOptions extends AbortOptions {
+  /** Session named on the summary's Current session line; the summary itself always covers the whole profile. */
   sessionId?: string | null;
 }
 export interface SummaryResult {
