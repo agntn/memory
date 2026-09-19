@@ -701,13 +701,14 @@ function mayMeanMissing(error: unknown): boolean {
 
 /*
  * Render one failed read, naming the missing-id ambiguity when it applies: Cloudflare answers an
- * unknown id with a generic server error, and a raw ingested message id fails the same way.
+ * unknown id with a generic server error, and a raw ingested message id fails the same way, so
+ * an id no memory could carry gets the message reading first and the missing one beside it.
  */
 function describeReadError(params: ProfileParams, id: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (!mayMeanMissing(error)) return message;
   if (isIngestedMessageId(id)) {
-    return `${message} (this id names a raw ingested message, which memory_recall ranks next to memories: its text is on the candidate line, nothing reads or deletes it by id, and memory_delete_session removes it with its session)`;
+    return `${message} (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_delete_session removes with its session; an id that does not exist fails this way too)`;
   }
   return `${message} (an id that does not exist in ${memoryTarget(params)} fails this way too; confirm it with memory_list)`;
 }

@@ -1253,7 +1253,7 @@ describe("recall message candidates", () => {
     );
   });
 
-  it("names the message behind a read or delete that fails by its id", async () => {
+  it("reads a failed get or delete on a message-shaped id as a message or a missing id", async () => {
     stubCloudflare({
       failure: { status: 500, message: "An error occurred processing your request." },
     });
@@ -1265,7 +1265,7 @@ describe("recall message candidates", () => {
         memoryIds: [messageId],
       }),
     ).rejects.toThrow(
-      "An error occurred processing your request. (this id names a raw ingested message, which memory_recall ranks next to memories: its text is on the candidate line, nothing reads or deletes it by id, and memory_delete_session removes it with its session)",
+      "An error occurred processing your request. (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_delete_session removes with its session; an id that does not exist fails this way too)",
     );
     await expect(
       memoryToolExecutors.deleteMemory({
@@ -1273,7 +1273,7 @@ describe("recall message candidates", () => {
         profile: "agent",
         memoryId: messageId,
       }),
-    ).rejects.toThrow("this id names a raw ingested message");
+    ).rejects.toThrow("no memory carries an id of this shape");
   });
 
   it("says in every affected description what a message candidate is", () => {
