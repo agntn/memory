@@ -10,6 +10,7 @@
 - Every operation takes an `AbortSignal`. A transport that cannot interrupt itself checks the signal at the call boundary, and a signal never reaches a request body.
 - Local harness sources and remote API providers stay separate concerns.
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
+- `src/commands/mcp.ts` imports the server and the SDK inside `run()`, because citty resolves the subcommand for `--help` and for an unknown command too. `test/cli.test.ts` runs those usage paths under a load hook.
 - Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
 - Pi and MCP share the schemas in `packages/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
 
