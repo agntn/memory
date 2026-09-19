@@ -732,8 +732,6 @@ describe("recall result", () => {
         summary: "Uses pnpm",
         sessionId: "s-1",
         score: 0.82,
-        namespace: "recall-candidates",
-        profile: "agent",
         summaryTrust: "service-generated-untrusted",
       },
       {
@@ -741,11 +739,44 @@ describe("recall result", () => {
         summary: "Uses obuild",
         sessionId: null,
         score: 0.41,
-        namespace: "recall-candidates",
-        profile: "agent",
         summaryTrust: "service-generated-untrusted",
       },
     ]);
+    expect(memoryToolMeta.memory_recall.description).toContain(
+      "the header names the profile they came from",
+    );
+  });
+
+  it("prints the score to three significant digits and keeps the raw one in details", async () => {
+    const scores = [0.7718031406402588, 0.0000783266659709625, 1];
+    stubCloudflare({
+      result: {
+        count: scores.length,
+        answer: "Oritwoen builds with pnpm.",
+        candidates: scores.map((score, index) => ({
+          id: `mem-${index}`,
+          summary: "truncated",
+          sessionId: null,
+          score,
+        })),
+      },
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-score",
+      profile: "agent",
+      query: "build tooling",
+    });
+
+    expect(records<{ score: number }>(result).map((candidate) => candidate.score)).toEqual([
+      0.772, 0.0000783, 1,
+    ]);
+    expect(
+      (result.details as { candidates: Array<{ score: number }> }).candidates.map(
+        (candidate) => candidate.score,
+      ),
+    ).toEqual(scores);
+    expect(memoryToolMeta.memory_recall.description).toContain("printed to 3 significant digits");
   });
 
   it("expands the best-scoring candidates with full content", async () => {

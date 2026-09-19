@@ -91,6 +91,8 @@ export const MAX_TOOL_INGEST_MESSAGES = 500;
 export const MAX_TOOL_EXPAND = 30;
 /** Recall candidates kept when the call names no cap; on a busy profile the tail past ten is near-zero scores. */
 export const DEFAULT_TOOL_RECALL_CANDIDATES = 10;
+/** Significant digits of the score on a candidate line: three keep the order, the raw double spells out to 17. */
+const RECALL_SCORE_DIGITS = 3;
 
 /**
  * Names and descriptions shared by the Pi, OMP, and MCP tool surfaces.
@@ -148,7 +150,7 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
@@ -541,7 +543,10 @@ function expandCandidates(
   );
 }
 
-/* Put the trust marker before the answer; returned candidates carry no claim mapping. */
+/*
+ * Put the trust marker before the answer; returned candidates carry no claim mapping.
+ * The header names the profile once, so the lines do not repeat it, and the score goes out short.
+ */
 function recallText(
   params: ProfileParams,
   result: RecallResult,
@@ -555,8 +560,7 @@ function recallText(
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
   const records = shown.map((candidate) => ({
     ...candidate,
-    namespace: params.namespace,
-    profile: params.profile,
+    score: Number(candidate.score.toPrecision(RECALL_SCORE_DIGITS)),
     ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
   }));
   const trimmed = result.candidates.length - shown.length;
