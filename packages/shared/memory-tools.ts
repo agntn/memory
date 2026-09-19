@@ -9,6 +9,7 @@ import type {
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
+import { isIngestedMessageId } from "./memory-ids.ts";
 import { UNSAFE_TERMINAL_CHARACTER_PATTERN } from "./terminal-text.ts";
 import type {
   GetParams,
@@ -146,11 +147,11 @@ export const memoryToolMeta = {
   memory_ingest: {
     label: "Ingest Messages",
     description:
-      "Hand a bounded sequence of conversation messages to the extraction service. Extraction is asynchronous and decides on its own how many memories the messages produce, so the new memories show up in memory_list and memory_recall only after it finishes. A call without a sessionId carries the host's conversation session when the host knows one, as Pi and OMP always do and the MCP server does under Claude Code or Grok. Only a call that reaches the service with no session at all gets one derived from the message content, the same for the same messages in every profile; the call returns no id, so memory_list is where it shows, on the extracted memories as an id under the hash- prefix. Ingesting the same messages again runs extraction again: each fact or instruction it extracts supersedes the stored version on its topic, so the ids memory_list showed before leave it even when the count stays the same. Use memory_remember when one exact memory has to exist.",
+      "Hand a bounded sequence of conversation messages to the extraction service. Extraction is asynchronous and decides on its own how many memories the messages produce, so the new memories show up in memory_list and memory_recall only after it finishes. A call without a sessionId carries the host's conversation session when the host knows one, as Pi and OMP always do and the MCP server does under Claude Code or Grok. Only a call that reaches the service with no session at all gets one derived from the message content, the same for the same messages in every profile; the call returns no id, so memory_list is where it shows, on the extracted memories as an id under the hash- prefix. Ingesting the same messages again runs extraction again: each fact or instruction it extracts supersedes the stored version on its topic, so the ids memory_list showed before leave it even when the count stays the same. The messages themselves stay stored verbatim, and memory_recall ranks them next to the memories extracted from them. Use memory_remember when one exact memory has to exist.",
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The candidates are the memories the profile holds and the raw messages memory_ingest stored next to them: a message candidate carries kind: message and its text indented under the line in place of a summary, cut by the service at about 3,500 characters. It has no memory record, so memory_get and memory_delete answer its id with a server error, memory_list never shows it, and memory_delete_session removes it with its session. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring memory candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
@@ -158,11 +159,11 @@ export const memoryToolMeta = {
   },
   memory_get: {
     label: "Get Memories",
-    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content and summaryTrust marker, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
+    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content and summaryTrust marker, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does a memory_recall candidate marked kind: message, which is a raw ingested message with no memory record behind it.`,
   },
   memory_delete: {
     label: "Delete Memory",
-    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. Deleting the newest version of a fact or instruction does not bring back the version it superseded; that one stays hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result.`,
+    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. Deleting the newest version of a fact or instruction does not bring back the version it superseded; that one stays hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does the id of a memory_recall candidate marked kind: message; a raw ingested message goes only with its session, through memory_delete_session.`,
   },
   memory_summary: {
     label: "Memory Summary",
@@ -172,7 +173,7 @@ export const memoryToolMeta = {
   memory_delete_session: {
     label: "Delete Memory Session",
     description:
-      "Delete every memory carrying one session id, which memory_list reports per memory. This is the only bulk deletion below profile level. The result counts the memories memory_list showed for the session and says so when it showed none, because the service accepts a delete for a session that does not exist; superseded memories tagged with the session are hidden from that count and removed all the same.",
+      "Delete every memory carrying one session id, which memory_list reports per memory, and the raw messages ingested under it, which memory_recall ranks as candidates marked kind: message. This is the only bulk deletion below profile level. The result counts the memories memory_list showed for the session and says so when it showed none, because the service accepts a delete for a session that does not exist; superseded memories tagged with the session and the ingested messages are hidden from that count and removed all the same.",
   },
   memory_delete_profile: {
     label: "Delete Memory Profile",
@@ -231,7 +232,7 @@ export const memoryFieldDescriptions = {
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
   candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to expand when that is larger; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged, and the result header counts them.`,
   expand:
-    "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
+    "How many of the best-scoring memory candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on. Candidates marked kind: message are skipped: they have no record to read, and their text is already on the line.",
   listExpand:
     "How many memories from the top of the page to return with full content, one extra read each. The rest of the page keeps summaries only, and a read that fails shows content: null.",
   memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}, oldest first.`,
@@ -506,6 +507,14 @@ function rankByScore(candidates: readonly RecallCandidate[]): readonly RecallCan
   return candidates.slice().sort((a, b) => b.score - a.score);
 }
 
+/** What a recall candidate is: an extracted memory, or a raw message ingest stored next to them. */
+type CandidateKind = "memory" | "message";
+
+/* Tell a message from a memory by the id alone; the other three fields look the same on both. */
+function candidateKind(candidate: RecallCandidate): CandidateKind {
+  return isIngestedMessageId(candidate.id) ? "message" : "memory";
+}
+
 /*
  * Keep the best-scoring candidates, in the order the service ranked them.
  *
@@ -527,7 +536,7 @@ function trimCandidates(
   return candidates.filter((candidate) => kept.has(candidate.id));
 }
 
-/* Read the full content behind the best-scoring recall candidates. */
+/* Read the full content behind the best-scoring memory candidates; a message has no record. */
 function expandCandidates(
   profile: MemoryProfile,
   candidates: readonly RecallCandidate[],
@@ -535,7 +544,9 @@ function expandCandidates(
   options: AbortOptions = {},
 ): Promise<Map<string, string | null>> {
   if (expand === undefined) return Promise.resolve(new Map<string, string | null>());
-  const top = rankByScore(candidates).slice(0, expand);
+  const top = rankByScore(candidates)
+    .filter((candidate) => candidateKind(candidate) === "memory")
+    .slice(0, expand);
   return readContents(
     profile,
     top.map((candidate) => candidate.id),
@@ -544,9 +555,34 @@ function expandCandidates(
 }
 
 /*
- * Put the trust marker before the answer; returned candidates carry no claim mapping.
- * The lines run best score first, so the order is the ranking and the score can go out short;
- * the header names the profile once, so the lines do not repeat it.
+ * One result line per candidate, the score shortened. A message hands its text over as content,
+ * so it goes indented under the line with its newlines intact and takes no summary trust marker.
+ */
+function candidateRecord(
+  candidate: RecallCandidate,
+  expanded: ReadonlyMap<string, string | null>,
+): Record<string, unknown> {
+  const score = Number(candidate.score.toPrecision(RECALL_SCORE_DIGITS));
+  if (candidateKind(candidate) === "message") {
+    return {
+      id: candidate.id,
+      kind: "message",
+      sessionId: candidate.sessionId,
+      score,
+      content: candidate.summary,
+    };
+  }
+  return {
+    ...candidate,
+    score,
+    ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
+  };
+}
+
+/*
+ * Put the trust marker before the answer; returned candidates carry no claim mapping. The lines
+ * run best score first, so the order is the ranking and the score can go out short; the header
+ * names the profile once and counts the message candidates, because only their lines say so.
  */
 function recallText(
   params: ProfileParams,
@@ -559,22 +595,23 @@ function recallText(
     : "No answer returned.";
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
-  const records = rankByScore(shown).map((candidate) => ({
-    ...candidate,
-    score: Number(candidate.score.toPrecision(RECALL_SCORE_DIGITS)),
-    ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
-  }));
+  const records = rankByScore(shown).map((candidate) => candidateRecord(candidate, expanded));
   const trimmed = result.candidates.length - shown.length;
   const count =
     trimmed === 0
       ? `${shown.length}`
       : `${shown.length} of ${result.candidates.length}, the ${trimmed} lowest-scoring trimmed`;
+  const messages = shown.filter((candidate) => candidateKind(candidate) === "message").length;
+  const messageNote =
+    messages === 0
+      ? ""
+      : `, ${messages} of them raw ingested ${messages === 1 ? "message" : "messages"} (kind: message) with the message text indented below`;
   const failed = [...expanded.values()].some((content) => content === null);
   const expansion =
     expanded.size === 0
       ? ""
-      : `, full content indented under the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
-  return `${header}\n\n${answer}\n\nCandidates (${count}), best score first, one JSON object per line${expansion}:\n${recordLines(records)}`;
+      : `, full content indented under the ${expanded.size} best-scoring ${expanded.size === 1 ? "memory" : "memories"}${failed ? " (null where the read failed)" : ""}`;
+  return `${header}\n\n${answer}\n\nCandidates (${count}), best score first, one JSON object per line${messageNote}${expansion}:\n${recordLines(records)}`;
 }
 
 /*
@@ -650,21 +687,22 @@ function mayMeanMissing(error: unknown): boolean {
 }
 
 /*
- * Render one failed read, naming the missing-id ambiguity when it applies.
- *
- * Cloudflare answers an unknown id with a generic server error, so say so here,
- * but only for failures that could actually mean the id is not there.
+ * Render one failed read, naming the missing-id ambiguity when it applies: Cloudflare answers an
+ * unknown id with a generic server error, and a raw ingested message id fails the same way.
  */
-function describeReadError(params: ProfileParams, error: unknown): string {
+function describeReadError(params: ProfileParams, id: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (!mayMeanMissing(error)) return message;
+  if (isIngestedMessageId(id)) {
+    return `${message} (this id names a raw ingested message, which memory_recall ranks next to memories: its text is on the candidate line, nothing reads or deletes it by id, and memory_delete_session removes it with its session)`;
+  }
   return `${message} (an id that does not exist in ${memoryTarget(params)} fails this way too; confirm it with memory_list)`;
 }
 
 /* Restate a failure that could mean the addressed id is absent. */
-function explainMissing(params: ProfileParams, error: unknown): unknown {
+function explainMissing(params: ProfileParams, id: string, error: unknown): unknown {
   if (!mayMeanMissing(error)) return error;
-  return new Error(describeReadError(params, error), { cause: error });
+  return new Error(describeReadError(params, id, error), { cause: error });
 }
 
 /*
@@ -1062,7 +1100,7 @@ export const memoryToolExecutors = {
       details: {
         ...result,
         ...(result.answer ? { answerTrust: SERVICE_GENERATED_UNTRUSTED } : {}),
-        candidates: shown,
+        candidates: shown.map((candidate) => ({ ...candidate, kind: candidateKind(candidate) })),
       },
     };
   },
@@ -1123,12 +1161,13 @@ export const memoryToolExecutors = {
     if (failed.length === entries.length) {
       const first = failed[0];
       /** A single-id total failure keeps memory_delete's flat error shape instead of a one-entry listing. */
-      if (first && entries.length === 1) throw explainMissing(params, first[1].error);
+      if (first && entries.length === 1) throw explainMissing(params, first[0], first[1].error);
       throw new Error(
         [
           `Every read in ${memoryTarget(params)} failed:`,
           ...failed.map(
-            ([id, { error }]) => `${singleLineToolText(id)}: ${describeReadError(params, error)}`,
+            ([id, { error }]) =>
+              `${singleLineToolText(id)}: ${describeReadError(params, id, error)}`,
           ),
         ].join("\n"),
       );
@@ -1136,7 +1175,7 @@ export const memoryToolExecutors = {
     const memories = entries.map(([id, reading]) =>
       "memory" in reading
         ? reading.memory
-        : { id, error: describeReadError(params, reading.error) },
+        : { id, error: describeReadError(params, id, reading.error) },
     );
     const header =
       failed.length === 0
@@ -1152,7 +1191,7 @@ export const memoryToolExecutors = {
     const profile = await getProfile(params);
     const result = await requireCapability(profile, "delete")(params.memoryId, options).catch(
       (error: unknown) => {
-        throw explainMissing(params, error);
+        throw explainMissing(params, params.memoryId, error);
       },
     );
     return {

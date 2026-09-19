@@ -325,7 +325,10 @@ export default function memoryExtension(pi: ExtensionAPI) {
     name: "memory_recall",
     ...memoryToolMeta.memory_recall,
     promptSnippet: "Recall durable context before answering or acting.",
-    promptGuidelines: ["Use a focused natural-language query."],
+    promptGuidelines: [
+      "Use a focused natural-language query.",
+      "A candidate marked kind: message is a raw ingested message with its text under the line; no memory record answers its id.",
+    ],
     parameters: recallParameters,
     renderCall: callRenderer("memory_recall"),
     renderResult: resultLine,

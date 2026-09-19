@@ -807,7 +807,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (3), best score first, one JSON object per line, full content indented under the 2 best-scoring:",
+      "Candidates (3), best score first, one JSON object per line, full content indented under the 2 best-scoring memories:",
     );
     expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
       "mem-top",
@@ -938,7 +938,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (12), best score first, one JSON object per line, full content indented under the 12 best-scoring:",
+      "Candidates (12), best score first, one JSON object per line, full content indented under the 12 best-scoring memories:",
     );
     expect(contentUnder(result, "mem-11")).toEqual(["full content of mem-11"]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(12);
@@ -972,7 +972,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (2 of 3, the 1 lowest-scoring trimmed), best score first, one JSON object per line, full content indented under the 2 best-scoring:",
+      "Candidates (2 of 3, the 1 lowest-scoring trimmed), best score first, one JSON object per line, full content indented under the 2 best-scoring memories:",
     );
     expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
     expect(contentUnder(result, "mem-mid")).toEqual(["full content of mem-mid"]);
@@ -1036,7 +1036,7 @@ describe("recall result", () => {
 
     const text = textOf(result);
     expect(text).toContain(
-      "full content indented under the 1 best-scoring (null where the read failed):",
+      "full content indented under the 1 best-scoring memory (null where the read failed):",
     );
     expect(JSON.parse(text.split("\n").at(-1) ?? "{}")).toMatchObject({
       id: "mem-gone",
@@ -1056,6 +1056,154 @@ describe("recall result", () => {
     expect(textOf(result)).toBe(
       'Recall from recall-empty/agent:\n\nAnswer (answerTrust: "service-generated-untrusted". The service does not identify which candidate IDs support the answer; verify claims against full candidate content):\n  Nothing stored about that.',
     );
+  });
+});
+
+describe("recall message candidates", () => {
+  /** A message id the live service ranked; its time part decodes to the year 33975. */
+  const messageId = "WPK4H0ERRS691YY0C2H523XNS8";
+
+  it("marks a raw ingested message and indents its text under the line", async () => {
+    stubCloudflare({
+      result: {
+        count: 2,
+        answer: "Zephyr deploys to eu-west-1.",
+        candidates: [
+          {
+            id: "mem-1",
+            summary: "Project Zephyr deploys to eu-west-1.",
+            sessionId: "probe-ingest",
+            score: 0.99,
+          },
+          {
+            id: messageId,
+            summary: "Which region does Zephyr deploy to?\nAnd who owns the runbook?",
+            sessionId: "probe-ingest",
+            score: 0.92,
+          },
+        ],
+      },
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-messages",
+      profile: "agent",
+      query: "Zephyr region",
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (2), best score first, one JSON object per line, 1 of them raw ingested message (kind: message) with the message text indented below:",
+    );
+    expect(records(result)).toEqual([
+      {
+        id: "mem-1",
+        summary: "Project Zephyr deploys to eu-west-1.",
+        sessionId: "probe-ingest",
+        score: 0.99,
+        summaryTrust: "service-generated-untrusted",
+      },
+      { id: messageId, kind: "message", sessionId: "probe-ingest", score: 0.92 },
+    ]);
+    expect(contentUnder(result, messageId)).toEqual([
+      "Which region does Zephyr deploy to?",
+      "And who owns the runbook?",
+    ]);
+    expect(result.details.candidates).toEqual([
+      {
+        id: "mem-1",
+        summary: "Project Zephyr deploys to eu-west-1.",
+        sessionId: "probe-ingest",
+        score: 0.99,
+        kind: "memory",
+      },
+      {
+        id: messageId,
+        summary: "Which region does Zephyr deploy to?\nAnd who owns the runbook?",
+        sessionId: "probe-ingest",
+        score: 0.92,
+        kind: "message",
+      },
+    ]);
+  });
+
+  it("expands memory candidates only, past a message that outscores them", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 3,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [
+            { id: "mem-low", summary: "truncated", sessionId: null, score: 0.4 },
+            { id: messageId, summary: "the ingested message", sessionId: "s-1", score: 0.9 },
+            { id: "mem-top", summary: "truncated", sessionId: null, score: 0.8 },
+          ],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-messages-expand",
+      profile: "agent",
+      query: "build tooling",
+      expand: 1,
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (3), best score first, one JSON object per line, 1 of them raw ingested message (kind: message) with the message text indented below, full content indented under the 1 best-scoring memory:",
+    );
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      messageId,
+      "mem-top",
+      "mem-low",
+    ]);
+    expect(contentUnder(result, messageId)).toEqual(["the ingested message"]);
+    expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
+    expect(contentUnder(result, "mem-low")).toEqual([]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toEqual([
+      "https://api.cloudflare.com/client/v4/accounts/account/agent-memory/namespaces/recall-messages-expand/profiles/agent/memories/mem-top",
+    ]);
+  });
+
+  it("names the message behind a read or delete that fails by its id", async () => {
+    stubCloudflare({
+      failure: { status: 500, message: "An error occurred processing your request." },
+    });
+
+    await expect(
+      memoryToolExecutors.get({
+        namespace: "recall-messages",
+        profile: "agent",
+        memoryIds: [messageId],
+      }),
+    ).rejects.toThrow(
+      "An error occurred processing your request. (this id names a raw ingested message, which memory_recall ranks next to memories: its text is on the candidate line, nothing reads or deletes it by id, and memory_delete_session removes it with its session)",
+    );
+    await expect(
+      memoryToolExecutors.deleteMemory({
+        namespace: "recall-messages",
+        profile: "agent",
+        memoryId: messageId,
+      }),
+    ).rejects.toThrow("this id names a raw ingested message");
+  });
+
+  it("says in every affected description what a message candidate is", () => {
+    expect(memoryToolMeta.memory_recall.description).toContain(
+      "a message candidate carries kind: message and its text indented under the line",
+    );
+    expect(memoryToolMeta.memory_get.description).toContain("kind: message");
+    expect(memoryToolMeta.memory_delete.description).toContain("kind: message");
+    expect(memoryToolMeta.memory_delete_session.description).toContain(
+      "the raw messages ingested under it",
+    );
+    expect(memoryToolMeta.memory_ingest.description).toContain(
+      "memory_recall ranks them next to the memories",
+    );
+    expect(memoryFieldDescriptions.expand).toContain("Candidates marked kind: message are skipped");
   });
 });
 

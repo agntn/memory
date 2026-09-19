@@ -49,6 +49,11 @@ export interface RecallOptions extends AbortOptions {
   responseLength?: ResponseLength;
   referenceDate?: Date | string;
 }
+/**
+ * One ranked recall hit as the service returns it. Cloudflare also ranks the raw messages `ingest`
+ * stored, so a candidate can be a message: its `summary` is then the message text, cut at about
+ * 3,500 characters, and its id has no memory record for `get`, `delete` or `list` to find.
+ */
 export interface RecallCandidate {
   id: string;
   summary: string;
