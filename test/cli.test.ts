@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
@@ -8,20 +10,26 @@ const hook = resolve(root, "test/record-loads.ts");
 
 /**
  * Run `src/cli.ts` under the load hook, not the built bin: Publish runs the suite before any build.
- * citty exits the process itself, so the hook reports at exit.
+ * citty exits the process itself, so the hook reports at exit, into a file owned by this call.
  */
 function runCli(args: readonly string[], input?: string) {
-  const result = spawnSync(process.execPath, ["--import", hook, cli, ...args], {
-    cwd: root,
-    encoding: "utf8",
-    input,
-    timeout: 20_000,
-  });
-  const report = /^@loaded (\[.*\])$/mu.exec(result.stderr)?.[1];
-  expect(report, `the load hook reported nothing:\n${result.stderr}`).toBeDefined();
-  const loaded: unknown = JSON.parse(report ?? "[]");
-  expect(Array.isArray(loaded)).toBe(true);
-  return { ...result, loaded: (loaded as unknown[]).map(String) };
+  const directory = mkdtempSync(join(tmpdir(), "memory-loads-"));
+  const report = join(directory, "loaded.json");
+  try {
+    const result = spawnSync(process.execPath, ["--import", hook, cli, ...args], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, MEMORY_RECORD_LOADS: report },
+      input,
+      timeout: 20_000,
+    });
+    expect(existsSync(report), `the load hook wrote no report:\n${result.stderr}`).toBe(true);
+    const loaded: unknown = JSON.parse(readFileSync(report, "utf8"));
+    expect(Array.isArray(loaded)).toBe(true);
+    return { ...result, loaded: (loaded as unknown[]).map(String) };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /** pnpm's store paths carry peer hashes in their names, so only the package directory itself counts. */
