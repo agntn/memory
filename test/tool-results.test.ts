@@ -1168,6 +1168,91 @@ describe("recall message candidates", () => {
     ]);
   });
 
+  it("keeps enough lines for every memory an expand above the default reads", async () => {
+    /* Two messages ranked first, then twelve memories: expand 12 needs fourteen lines. */
+    const messages = [messageId, "24N6TBDN9QEH7PXP4N4V42XC18"].map((id, index) => ({
+      id,
+      summary: `message ${index}`,
+      sessionId: "s-1",
+      score: 1 - index / 100,
+    }));
+    const memories = Array.from({ length: 12 }, (_, index) => ({
+      id: `mem-${index}`,
+      summary: "truncated",
+      sessionId: null,
+      score: 0.9 - index / 100,
+    }));
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 14,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [...messages, ...memories],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-messages-default",
+      profile: "agent",
+      query: "build tooling",
+      expand: 12,
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (14), best score first, one JSON object per line, 2 of them raw ingested messages (kind: message) with the message text indented below, full content indented under the 12 best-scoring memories:",
+    );
+    expect(records(result)).toHaveLength(14);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(12);
+    expect(memoryFieldDescriptions.candidates).toContain(
+      "as many lines as it takes to reach the memory candidates expand reads",
+    );
+  });
+
+  it("stops widening the default at the last memory when messages fill the tail", async () => {
+    const trailing = ["24N6TBDN9QEH7PXP4N4V42XC18", "CCRRV1QMJ8X4TH9H2CNDBN16Z0"].map((id) => ({
+      id,
+      summary: "trailing message",
+      sessionId: "s-1",
+      score: 0.01,
+    }));
+    const memories = Array.from({ length: 11 }, (_, index) => ({
+      id: `mem-${index}`,
+      summary: "truncated",
+      sessionId: null,
+      score: 0.9 - index / 100,
+    }));
+    stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 13,
+          answer: "Oritwoen builds with pnpm.",
+          candidates: [...memories, ...trailing],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-messages-tail",
+      profile: "agent",
+      query: "build tooling",
+      expand: 20,
+    });
+
+    expect(textOf(result)).toContain("Candidates (11 of 13, the 2 lowest-scoring trimmed)");
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual(
+      memories.map((memory) => memory.id),
+    );
+  });
+
   it("names the message behind a read or delete that fails by its id", async () => {
     stubCloudflare({
       failure: { status: 500, message: "An error occurred processing your request." },

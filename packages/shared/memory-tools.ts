@@ -230,7 +230,7 @@ export const memoryFieldDescriptions = {
     "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
   responseLength: "Requested length of the prose answer. Defaults to medium.",
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
-  candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to expand when that is larger; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged, and the result header counts them.`,
+  candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to as many lines as it takes to reach the memory candidates expand reads when that is more; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged, and the result header counts them.`,
   expand:
     "How many of the best-scoring memory candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on. Candidates marked kind: message are skipped: they have no record to read, and their text is already on the line.",
   listExpand:
@@ -497,11 +497,6 @@ async function readContents(
   );
 }
 
-/* The cap a recall keeps: the caller's, else the default raised to cover an explicit expand. */
-function keptCandidates(params: RecallParams): number {
-  return params.candidates ?? Math.max(DEFAULT_TOOL_RECALL_CANDIDATES, params.expand ?? 0);
-}
-
 /* Best score first; a stable sort keeps the service's order between equal scores. */
 function rankByScore(candidates: readonly RecallCandidate[]): readonly RecallCandidate[] {
   return candidates.slice().sort((a, b) => b.score - a.score);
@@ -513,6 +508,24 @@ type CandidateKind = "memory" | "message";
 /* Tell a message from a memory by the id alone; the other three fields look the same on both. */
 function candidateKind(candidate: RecallCandidate): CandidateKind {
   return isIngestedMessageId(candidate.id) ? "message" : "memory";
+}
+
+/*
+ * The cap a recall keeps: the caller's, else the default widened until the lines hold the memory
+ * candidates an explicit expand reads, because the messages ranked among them take lines too.
+ */
+function keptCandidates(params: RecallParams, candidates: readonly RecallCandidate[]): number {
+  if (params.candidates !== undefined) return params.candidates;
+  const expand = params.expand ?? 0;
+  let memories = 0;
+  let lines = 0;
+  for (const [index, candidate] of rankByScore(candidates).entries()) {
+    if (memories === expand) break;
+    if (candidateKind(candidate) !== "memory") continue;
+    memories += 1;
+    lines = index + 1;
+  }
+  return Math.max(DEFAULT_TOOL_RECALL_CANDIDATES, lines);
 }
 
 /*
@@ -1093,7 +1106,7 @@ export const memoryToolExecutors = {
       referenceDate,
       ...options,
     });
-    const shown = trimCandidates(result.candidates, keptCandidates(params));
+    const shown = trimCandidates(result.candidates, keptCandidates(params, result.candidates));
     const expanded = await expandCandidates(profile, shown, params.expand, options);
     return {
       content: [{ type: "text", text: recallText(params, result, shown, expanded) }],
