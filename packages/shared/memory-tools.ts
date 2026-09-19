@@ -91,6 +91,8 @@ export const MAX_TOOL_INGEST_MESSAGES = 500;
 export const MAX_TOOL_EXPAND = 30;
 /** Recall candidates kept when the call names no cap; on a busy profile the tail past ten is near-zero scores. */
 export const DEFAULT_TOOL_RECALL_CANDIDATES = 10;
+/** Significant digits of the score on a candidate line; the line order carries the rank, the raw double spells out to 17. */
+const RECALL_SCORE_DIGITS = 3;
 
 /**
  * Names and descriptions shared by the Pi, OMP, and MCP tool surfaces.
@@ -148,7 +150,7 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
@@ -499,6 +501,11 @@ function keptCandidates(params: RecallParams): number {
   return params.candidates ?? Math.max(DEFAULT_TOOL_RECALL_CANDIDATES, params.expand ?? 0);
 }
 
+/* Best score first; a stable sort keeps the service's order between equal scores. */
+function rankByScore(candidates: readonly RecallCandidate[]): readonly RecallCandidate[] {
+  return candidates.slice().sort((a, b) => b.score - a.score);
+}
+
 /*
  * Keep the best-scoring candidates, in the order the service ranked them.
  *
@@ -513,9 +520,7 @@ function trimCandidates(
 ): readonly RecallCandidate[] {
   if (candidates.length <= limit) return candidates;
   const kept = new Set(
-    candidates
-      .slice()
-      .sort((a, b) => b.score - a.score)
+    rankByScore(candidates)
       .slice(0, limit)
       .map((candidate) => candidate.id),
   );
@@ -530,10 +535,7 @@ function expandCandidates(
   options: AbortOptions = {},
 ): Promise<Map<string, string | null>> {
   if (expand === undefined) return Promise.resolve(new Map<string, string | null>());
-  const top = candidates
-    .slice()
-    .sort((a, b) => b.score - a.score)
-    .slice(0, expand);
+  const top = rankByScore(candidates).slice(0, expand);
   return readContents(
     profile,
     top.map((candidate) => candidate.id),
@@ -541,7 +543,11 @@ function expandCandidates(
   );
 }
 
-/* Put the trust marker before the answer; returned candidates carry no claim mapping. */
+/*
+ * Put the trust marker before the answer; returned candidates carry no claim mapping.
+ * The lines run best score first, so the order is the ranking and the score can go out short;
+ * the header names the profile once, so the lines do not repeat it.
+ */
 function recallText(
   params: ProfileParams,
   result: RecallResult,
@@ -553,10 +559,9 @@ function recallText(
     : "No answer returned.";
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
-  const records = shown.map((candidate) => ({
+  const records = rankByScore(shown).map((candidate) => ({
     ...candidate,
-    namespace: params.namespace,
-    profile: params.profile,
+    score: Number(candidate.score.toPrecision(RECALL_SCORE_DIGITS)),
     ...(expanded.has(candidate.id) ? { content: expanded.get(candidate.id) ?? null } : {}),
   }));
   const trimmed = result.candidates.length - shown.length;
@@ -569,7 +574,7 @@ function recallText(
     expanded.size === 0
       ? ""
       : `, full content indented under the ${expanded.size} best-scoring${failed ? " (null where the read failed)" : ""}`;
-  return `${header}\n\n${answer}\n\nCandidates (${count}), one JSON object per line${expansion}:\n${recordLines(records)}`;
+  return `${header}\n\n${answer}\n\nCandidates (${count}), best score first, one JSON object per line${expansion}:\n${recordLines(records)}`;
 }
 
 /*
