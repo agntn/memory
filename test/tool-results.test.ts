@@ -1114,7 +1114,6 @@ describe("recall message candidates", () => {
         summary: "Project Zephyr deploys to eu-west-1.",
         sessionId: "probe-ingest",
         score: 0.99,
-        kind: "memory",
       },
       {
         id: messageId,

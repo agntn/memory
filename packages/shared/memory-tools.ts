@@ -1114,7 +1114,9 @@ export const memoryToolExecutors = {
       details: {
         ...result,
         ...(result.answer ? { answerTrust: SERVICE_GENERATED_UNTRUSTED } : {}),
-        candidates: shown.map((candidate) => ({ ...candidate, kind: candidateKind(candidate) })),
+        candidates: shown.map((candidate) =>
+          candidateKind(candidate) === "message" ? { ...candidate, kind: "message" } : candidate,
+        ),
       },
     };
   },
