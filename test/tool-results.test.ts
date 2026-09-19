@@ -852,6 +852,65 @@ describe("recall result", () => {
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
   });
 
+  it("keeps the ten best-scoring candidates when no cap is passed", async () => {
+    const tail = Array.from({ length: 12 }, (_, index) => ({
+      id: `mem-${index}`,
+      summary: "truncated",
+      sessionId: null,
+      score: index === 3 ? 0.9 : 0.1 / (index + 1),
+    }));
+    const urls = stubCloudflare({
+      result: { count: tail.length, answer: "Oritwoen builds with pnpm.", candidates: tail },
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-default",
+      profile: "agent",
+      query: "build tooling",
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (10 of 12, the 2 lowest-scoring trimmed), one JSON object per line:",
+    );
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual(
+      tail.slice(0, 10).map((candidate) => candidate.id),
+    );
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
+    expect(memoryToolMeta.memory_recall.description).toContain("keeps the 10 best-scoring ones");
+    expect(memoryFieldDescriptions.candidates).toContain("Defaults to 10");
+  });
+
+  it("keeps every candidate an expand above the default asks to read", async () => {
+    const candidates = Array.from({ length: 12 }, (_, index) => ({
+      id: `mem-${index}`,
+      summary: "truncated",
+      sessionId: null,
+      score: 1 / (index + 1),
+    }));
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: { count: candidates.length, answer: "Oritwoen builds with pnpm.", candidates },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-default-expand",
+      profile: "agent",
+      query: "build tooling",
+      expand: 12,
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (12), one JSON object per line, full content indented under the 12 best-scoring:",
+    );
+    expect(contentUnder(result, "mem-11")).toEqual(["full content of mem-11"]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(12);
+  });
+
   it("expands only the candidates the cap kept", async () => {
     const urls = stubCloudflare((url) => {
       if (url.includes("/memories/")) {
