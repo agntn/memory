@@ -237,7 +237,7 @@ describe("recall answer trust", () => {
     const lines = textOf(result).split("\n");
 
     expect(lines.filter((line) => line.startsWith("Candidates ("))).toEqual([
-      "Candidates (1), one JSON object per line:",
+      "Candidates (1), best score first, one JSON object per line:",
     ]);
     expect(lines.filter((line) => line.startsWith("{"))).toHaveLength(1);
     expect(textOf(result)).not.toContain("\r");
@@ -724,7 +724,7 @@ describe("recall result", () => {
     expect(lines[0]).toBe("Recall from recall-candidates/agent:");
     expect(lines[2]).toContain('answerTrust: "service-generated-untrusted"');
     expect(lines[3]).toBe("  Oritwoen builds with pnpm and obuild.");
-    expect(textOf(result)).toContain("Candidates (2), one JSON object per line:");
+    expect(textOf(result)).toContain("Candidates (2), best score first, one JSON object per line:");
     const candidates: unknown[] = lines.slice(-2).map((line) => JSON.parse(line) as unknown);
     expect(candidates).toEqual([
       {
@@ -747,8 +747,8 @@ describe("recall result", () => {
     );
   });
 
-  it("prints the score to three significant digits and keeps the raw one in details", async () => {
-    const scores = [0.7718031406402588, 0.0000783266659709625, 1];
+  it("prints the score to three significant digits and ranks the lines by the raw one", async () => {
+    const scores = [0.7716, 0.0000783266659709625, 0.7718031406402588, 1];
     stubCloudflare({
       result: {
         count: scores.length,
@@ -768,15 +768,16 @@ describe("recall result", () => {
       query: "build tooling",
     });
 
-    expect(records<{ score: number }>(result).map((candidate) => candidate.score)).toEqual([
-      0.772, 0.0000783, 1,
-    ]);
+    const lines = records<{ id: string; score: number }>(result);
+    expect(lines.map((candidate) => candidate.score)).toEqual([1, 0.772, 0.772, 0.0000783]);
+    expect(lines.map((candidate) => candidate.id)).toEqual(["mem-3", "mem-2", "mem-0", "mem-1"]);
     expect(
       (result.details as { candidates: Array<{ score: number }> }).candidates.map(
         (candidate) => candidate.score,
       ),
     ).toEqual(scores);
     expect(memoryToolMeta.memory_recall.description).toContain("printed to 3 significant digits");
+    expect(memoryToolMeta.memory_recall.description).toContain("the lines run best score first");
   });
 
   it("expands the best-scoring candidates with full content", async () => {
@@ -806,12 +807,12 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (3), one JSON object per line, full content indented under the 2 best-scoring:",
+      "Candidates (3), best score first, one JSON object per line, full content indented under the 2 best-scoring:",
     );
     expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
-      "mem-low",
       "mem-top",
       "mem-mid",
+      "mem-low",
     ]);
     expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
     expect(contentUnder(result, "mem-mid")).toEqual(["full content of mem-mid"]);
@@ -874,7 +875,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (2 of 4, the 2 lowest-scoring trimmed), one JSON object per line:",
+      "Candidates (2 of 4, the 2 lowest-scoring trimmed), best score first, one JSON object per line:",
     );
     expect(records(result).map((candidate) => (candidate as { id: string }).id)).toEqual([
       "mem-top",
@@ -901,11 +902,12 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (10 of 12, the 2 lowest-scoring trimmed), one JSON object per line:",
+      "Candidates (10 of 12, the 2 lowest-scoring trimmed), best score first, one JSON object per line:",
     );
-    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual(
-      tail.slice(0, 10).map((candidate) => candidate.id),
-    );
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      "mem-3",
+      ...tail.slice(0, 10).flatMap((candidate) => (candidate.id === "mem-3" ? [] : [candidate.id])),
+    ]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
     expect(memoryToolMeta.memory_recall.description).toContain("keeps the 10 best-scoring ones");
     expect(memoryFieldDescriptions.candidates).toContain("Defaults to 10");
@@ -936,7 +938,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (12), one JSON object per line, full content indented under the 12 best-scoring:",
+      "Candidates (12), best score first, one JSON object per line, full content indented under the 12 best-scoring:",
     );
     expect(contentUnder(result, "mem-11")).toEqual(["full content of mem-11"]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(12);
@@ -970,7 +972,7 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (2 of 3, the 1 lowest-scoring trimmed), one JSON object per line, full content indented under the 2 best-scoring:",
+      "Candidates (2 of 3, the 1 lowest-scoring trimmed), best score first, one JSON object per line, full content indented under the 2 best-scoring:",
     );
     expect(contentUnder(result, "mem-top")).toEqual(["full content of mem-top"]);
     expect(contentUnder(result, "mem-mid")).toEqual(["full content of mem-mid"]);
