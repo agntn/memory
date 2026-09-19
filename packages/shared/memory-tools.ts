@@ -89,6 +89,8 @@ export const MAX_TOOL_INGEST_MESSAGES = 500;
  * cap, so it reuses this constant.
  */
 export const MAX_TOOL_EXPAND = 30;
+/** Recall candidates kept when the call names no cap; on a busy profile the tail past ten is near-zero scores. */
+export const DEFAULT_TOOL_RECALL_CANDIDATES = 10;
 
 /**
  * Names and descriptions shared by the Pi, OMP, and MCP tool surfaces.
@@ -146,7 +148,7 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; pass candidates to keep only that many of the best-scoring ones in the result. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, namespace, profile, and summaryTrust. ${RECALL_ANSWER_TRUST_GUIDANCE} The score comes from the service's rank fusion: higher is more relevant, but it is not a calibrated similarity, so use it for ordering and not as a confidence threshold. The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
@@ -225,8 +227,7 @@ export const memoryFieldDescriptions = {
     "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
   responseLength: "Requested length of the prose answer. Defaults to medium.",
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
-  candidates:
-    "How many of the best-scoring candidates to keep in the result. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged.",
+  candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to expand when that is larger; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged, and the result header counts them.`,
   expand:
     "How many of the best-scoring candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on.",
   listExpand:
@@ -493,6 +494,11 @@ async function readContents(
   );
 }
 
+/* The cap a recall keeps: the caller's, else the default raised to cover an explicit expand. */
+function keptCandidates(params: RecallParams): number {
+  return params.candidates ?? Math.max(DEFAULT_TOOL_RECALL_CANDIDATES, params.expand ?? 0);
+}
+
 /*
  * Keep the best-scoring candidates, in the order the service ranked them.
  *
@@ -503,9 +509,9 @@ async function readContents(
  */
 function trimCandidates(
   candidates: readonly RecallCandidate[],
-  limit: number | undefined,
+  limit: number,
 ): readonly RecallCandidate[] {
-  if (limit === undefined || candidates.length <= limit) return candidates;
+  if (candidates.length <= limit) return candidates;
   const kept = new Set(
     candidates
       .slice()
@@ -1044,7 +1050,7 @@ export const memoryToolExecutors = {
       referenceDate,
       ...options,
     });
-    const shown = trimCandidates(result.candidates, params.candidates);
+    const shown = trimCandidates(result.candidates, keptCandidates(params));
     const expanded = await expandCandidates(profile, shown, params.expand, options);
     return {
       content: [{ type: "text", text: recallText(params, result, shown, expanded) }],
