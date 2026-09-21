@@ -579,3 +579,30 @@ describe("memory tool renderers", () => {
     }
   });
 });
+
+describe("OMP execution errors", () => {
+  it("keeps the network cause in a thrown failure", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error("getaddrinfo ENOTFOUND example.invalid"),
+        });
+      }),
+    );
+    const recall = tool(ompTools(), "memory_recall") as RegisteredTool & {
+      execute(...args: unknown[]): Promise<unknown>;
+    };
+
+    await expect(
+      recall.execute(
+        "call-1",
+        { namespace: "test", profile: "agent", query: "synthetic" },
+        new AbortController().signal,
+        undefined,
+      ),
+    ).rejects.toThrow("fetch failed: getaddrinfo ENOTFOUND example.invalid");
+  });
+});

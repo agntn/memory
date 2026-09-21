@@ -1,5 +1,11 @@
-import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@oh-my-pi/pi-coding-agent";
 import { Text } from "@oh-my-pi/pi-tui";
+import { toolErrorMessage } from "../../shared/tool-errors.ts";
 import {
   ISO_INSTANT_PATTERN,
   MAX_TOOL_INGEST_MESSAGES,
@@ -394,7 +400,6 @@ export default function memoryExtension(omp: ExtensionAPI) {
     summaryParameters,
     profileOnlyParameters,
   } = createParameters(omp.typebox.Type, Boolean(operationalScope));
-  const pi = omp;
 
   function operationalParams<T extends object>(params: T): T & ProfileParams {
     return applyMemoryScope(params, operationalScope);
@@ -429,7 +434,27 @@ export default function memoryExtension(omp: ExtensionAPI) {
       return new Text(renderStatusLine(line, theme), 0, 0);
     };
   }
-  pi.registerTool({
+
+  /**
+   * OMP keeps a thrown failure as its message alone, the same way Pi does.
+   * @param tool - Definition whose execution errors need their cause chain formatted.
+   */
+  function registerTool<TParams extends ToolDefinition["parameters"]>(
+    tool: ToolDefinition<TParams, Record<string, unknown>>,
+  ): void {
+    omp.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          throw new Error(toolErrorMessage(error), { cause: error });
+        }
+      },
+    });
+  }
+
+  registerTool({
     name: "memory_namespace_list",
     ...memoryToolMeta.memory_namespace_list,
     approval: "read",
@@ -445,7 +470,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_get",
     ...memoryToolMeta.memory_namespace_get,
     approval: "read",
@@ -461,7 +486,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_create",
     ...memoryToolMeta.memory_namespace_create,
     approval: "write",
@@ -477,7 +502,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_namespace_delete",
     ...memoryToolMeta.memory_namespace_delete,
     approval: "write",
@@ -493,7 +518,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_profile_list",
     ...memoryToolMeta.memory_profile_list,
     approval: "read",
@@ -509,7 +534,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_remember",
     ...memoryToolMeta.memory_remember,
     approval: "write",
@@ -529,7 +554,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_supersede",
     ...memoryToolMeta.memory_supersede,
     approval: "write",
@@ -544,7 +569,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_resume_supersession",
     ...memoryToolMeta.memory_resume_supersession,
     approval: "write",
@@ -560,7 +585,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_wait_for_recall",
     ...memoryToolMeta.memory_wait_for_recall,
     approval: "read",
@@ -576,7 +601,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_ingest",
     ...memoryToolMeta.memory_ingest,
     approval: "write",
@@ -591,7 +616,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_recall",
     ...memoryToolMeta.memory_recall,
     approval: "read",
@@ -604,7 +629,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_list",
     ...memoryToolMeta.memory_list,
     approval: "read",
@@ -616,7 +641,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_get",
     ...memoryToolMeta.memory_get,
     approval: "read",
@@ -628,7 +653,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete",
     ...memoryToolMeta.memory_delete,
     approval: "write",
@@ -642,7 +667,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_summary",
     ...memoryToolMeta.memory_summary,
     approval: "read",
@@ -654,7 +679,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete_session",
     ...memoryToolMeta.memory_delete_session,
     approval: "write",
@@ -668,7 +693,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: "memory_delete_profile",
     ...memoryToolMeta.memory_delete_profile,
     approval: "write",
