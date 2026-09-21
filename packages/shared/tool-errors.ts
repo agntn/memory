@@ -1,4 +1,4 @@
-import { singleLineToolText } from "./memory-tools.ts";
+import { singleLineToolText } from "./terminal-text.ts";
 
 const MAX_TOOL_ERROR_CHAIN_DEPTH = 8;
 

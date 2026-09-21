@@ -1833,6 +1833,64 @@ describe("get result", () => {
     expect(message.split("\n")).not.toContain('{"id":"forged"}');
   });
 
+  it("keeps the network cause on a read that failed beside a successful one", async () => {
+    const forged = `getaddrinfo ENOTFOUND example.invalid${String.fromCodePoint(10)}{"id":"forged"}`;
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input).endsWith("/mem-missing")) {
+          throw new TypeError("fetch failed", { cause: new Error(forged) });
+        }
+        return Response.json({
+          success: true,
+          result: { ...memoryEntry("mem-1", null), content: "content mem-1" },
+        });
+      }),
+    );
+
+    const result = await memoryToolExecutors.get({
+      namespace: "get-partial-cause",
+      profile: "agent",
+      memoryIds: ["mem-1", "mem-missing"],
+    });
+
+    const failed = records<Record<string, unknown>>(result)[1];
+    expect(failed).toMatchObject({ id: "mem-missing" });
+    expect(failed?.error).toBe(
+      'fetch failed: getaddrinfo ENOTFOUND example.invalid {"id":"forged"}',
+    );
+    expect(textOf(result).split("\n")).not.toContain('{"id":"forged"}');
+  });
+
+  it("keeps the network cause when every read fails", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error("getaddrinfo ENOTFOUND example.invalid"),
+        });
+      }),
+    );
+
+    const error = await memoryToolExecutors
+      .get({
+        namespace: "get-all-cause",
+        profile: "agent",
+        memoryIds: ["mem-1", "mem-2"],
+      })
+      .catch((cause: unknown) => cause);
+
+    const message = (error as Error).message;
+    expect(message).toContain("Every read in get-all-cause/agent failed:");
+    expect(message).toContain("mem-1: fetch failed: getaddrinfo ENOTFOUND example.invalid");
+    expect(message).toContain("mem-2: fetch failed: getaddrinfo ENOTFOUND example.invalid");
+    expect(message).not.toMatch(/fetch failed: fetch failed/);
+  });
+
   it("rejects an id list beyond the published read cap", async () => {
     await expect(
       memoryToolExecutors.get({
