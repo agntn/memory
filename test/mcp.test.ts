@@ -6,6 +6,18 @@ import { memorySessionId } from "../packages/shared/memory-scope.ts";
 
 const openConnections: Array<{ close(): Promise<void> }> = [];
 
+function storedMemory(id: string): Record<string, unknown> {
+  return {
+    id,
+    type: "fact",
+    summary: `summary ${id}`,
+    content: `content ${id}`,
+    sessionId: null,
+    createdAt: "2026-08-17T00:00:00.000Z",
+    updatedAt: "2026-08-17T00:00:00.000Z",
+  };
+}
+
 const expectedNames = [
   "memory_namespace_list",
   "memory_namespace_get",
@@ -102,7 +114,10 @@ describe("memory MCP server", () => {
     const bodies: unknown[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/memories/mem-1")) {
+          return Response.json({ success: true, result: storedMemory("mem-1") });
+        }
         bodies.push(JSON.parse(String(init?.body)) as unknown);
         return Response.json({
           success: true,
@@ -299,7 +314,10 @@ describe("memory MCP server", () => {
     let recalls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input).endsWith("/memories/mem-progress")) {
+          return Response.json({ success: true, result: storedMemory("mem-progress") });
+        }
         recalls += 1;
         const ready = performance.now() - startedAt >= 65_000;
         return Response.json({
