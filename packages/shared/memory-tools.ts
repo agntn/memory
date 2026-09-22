@@ -161,7 +161,7 @@ export const memoryToolMeta = {
   memory_wait_for_recall: {
     label: "Wait for Recall",
     description:
-      "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits. A memory that a newer fact or instruction on its topic superseded never appears, so a timeout can mean a newer memory won rather than a slow index.",
+      "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits. The id is read exactly before recall is polled: an id that cannot be read fails at once, and a timeout on a stored one says the record is there and the query did not return it. A memory that a newer fact or instruction on its topic superseded stays readable by id but never appears, so a timeout can mean a newer memory won rather than a slow index.",
   },
   memory_ingest: {
     label: "Ingest Messages",
@@ -881,53 +881,112 @@ function rethrowRecallFailure(
   );
 }
 
+/*
+ * Read one id exactly before recall is polled for it.
+ *
+ * A failed read comes back as a value so the caller can report it apart from a
+ * recall failure. Cancellation and the deadline still throw. Without a reader
+ * the caller has already read the id.
+ */
+async function exactReadFailure(
+  get: MemoryProfile["get"],
+  memoryId: string,
+  signal: AbortSignal,
+): Promise<{ error: unknown } | undefined> {
+  if (get === undefined) return undefined;
+  try {
+    await get(memoryId, { signal });
+    return undefined;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { error };
+  }
+}
+
+async function pollRecall(
+  recall: NonNullable<MemoryProfile["recall"]>,
+  params: RecallVisibilityParams,
+  signal: AbortSignal,
+  clock: Readonly<{ startedAt: number; timeoutMilliseconds: number }>,
+  nextAttempt: () => number,
+): Promise<RecallVisibility | undefined> {
+  while (true) {
+    signal.throwIfAborted();
+    const attempts = nextAttempt();
+    const result = await recall(params.query, {
+      thinkingLevel: "low",
+      responseLength: "short",
+      signal,
+    });
+    signal.throwIfAborted();
+    const waitMilliseconds = Math.round(performance.now() - clock.startedAt);
+    if (candidateIsVisible(result, params.memoryId, waitMilliseconds, clock.timeoutMilliseconds)) {
+      return { attempts, waitMilliseconds };
+    }
+    const remaining = clock.timeoutMilliseconds - waitMilliseconds;
+    if (remaining <= 0) return undefined;
+    const backoff = Math.min(attempts * 2_000, MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS);
+    await delay(Math.min(backoff, remaining), signal);
+  }
+}
+
+/*
+ * Poll recall until one exact id comes back for the caller's query.
+ *
+ * A miss only says the query did not return the id, so the id is read first
+ * unless the caller already read it. A read that fails ends the wait before any
+ * recall is paid, and a timeout on a stored record names the query, not the
+ * record, as what came up empty.
+ */
 async function waitForRecallCandidate(
   profile: MemoryProfile,
   params: RecallVisibilityParams,
   options: AbortOptions = {},
+  stored = false,
 ): Promise<RecallVisibility> {
   assertRecallVisibility(params);
   const recall = requireCapability(profile, "recall");
+  const get = stored ? undefined : requireCapability(profile, "get");
   const timeoutMilliseconds = params.timeoutSeconds * 1_000;
-  const startedAt = performance.now();
+  const clock = { startedAt: performance.now(), timeoutMilliseconds };
   const timeoutController = new AbortController();
   const timeout = setTimeout(() => timeoutController.abort(), timeoutMilliseconds);
   const signal = recallVisibilitySignal(options.signal, timeoutController.signal);
   let attempts = 0;
+  let failure: { error: unknown } | undefined;
 
   try {
-    while (true) {
-      signal.throwIfAborted();
-      attempts += 1;
-      const result = await recall(params.query, {
-        thinkingLevel: "low",
-        responseLength: "short",
-        signal,
-      });
-      signal.throwIfAborted();
-      const waitMilliseconds = Math.round(performance.now() - startedAt);
-      if (candidateIsVisible(result, params.memoryId, waitMilliseconds, timeoutMilliseconds)) {
-        return { attempts, waitMilliseconds };
-      }
-      const remaining = timeoutMilliseconds - waitMilliseconds;
-      if (remaining <= 0) break;
-      const backoff = Math.min(attempts * 2_000, MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS);
-      await delay(Math.min(backoff, remaining), signal);
-    }
+    failure = await exactReadFailure(get, params.memoryId, signal);
+    const visibility =
+      failure === undefined
+        ? await pollRecall(recall, params, signal, clock, () => (attempts += 1))
+        : undefined;
+    if (visibility !== undefined) return visibility;
   } catch (error) {
     rethrowRecallFailure(
       error,
       options.signal,
       timeoutController.signal,
-      startedAt,
+      clock.startedAt,
       params.memoryId,
     );
   } finally {
     clearTimeout(timeout);
   }
 
+  const memory = quoteToolText(params.memoryId);
+  if (failure !== undefined) {
+    throw new Error(
+      `Memory ${memory} could not be read by id, so recall was not polled: ${describeReadError(params, params.memoryId, failure.error)}.`,
+    );
+  }
+  if (attempts === 0) {
+    throw new Error(
+      `Memory ${memory} was not read back by id within ${timeoutMilliseconds} ms, so recall was not polled.`,
+    );
+  }
   throw new Error(
-    `Memory ${quoteToolText(params.memoryId)} did not appear in recall within ${timeoutMilliseconds} ms after ${attempts} attempts.`,
+    `Memory ${memory} is stored, but recall for this query did not return it within ${timeoutMilliseconds} ms after ${attemptsText(attempts)}. The exact read found the record, so the query does not retrieve it, a newer memory on its topic superseded it, or recall has not caught up with the write yet.`,
   );
 }
 
@@ -954,6 +1013,7 @@ async function verifyReplacement(
       timeoutSeconds: params.timeoutSeconds,
     },
     options,
+    true,
   );
   return { memory, visibility };
 }

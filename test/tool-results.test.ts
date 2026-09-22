@@ -46,15 +46,25 @@ function stubCloudflare(
   return urls;
 }
 
-function stubPendingRecall(): { signal?: AbortSignal } {
+function storedMemory(id: string): Record<string, unknown> {
+  return { ...memoryEntry(id, null), content: `content ${id}` };
+}
+
+/* Hold recall open; the exact read before it answers too, unless it should hang as well. */
+function stubPendingRecall({ pendingRead = false } = {}): { signal?: AbortSignal } {
   const request: { signal?: AbortSignal } = {};
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
   vi.stubGlobal(
     "fetch",
-    vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!pendingRead && url.includes("/memories/")) {
+        const id = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+        return Response.json({ success: true, result: storedMemory(id) });
+      }
       request.signal = init?.signal ?? undefined;
-      return new Promise<Response>((_resolve, reject) => {
+      return await new Promise<Response>((_resolve, reject) => {
         request.signal?.addEventListener("abort", () => reject(request.signal?.reason), {
           once: true,
         });
@@ -250,7 +260,8 @@ describe("recall visibility", () => {
     vi.useFakeTimers();
     let recalls = 0;
     const bodies: unknown[] = [];
-    const urls = stubCloudflare((_url, init) => {
+    const urls = stubCloudflare((url, init) => {
+      if (url.endsWith("/memories/mem-new")) return { result: storedMemory("mem-new") };
       bodies.push(JSON.parse(String(init?.body)) as unknown);
       recalls += 1;
       return {
@@ -279,8 +290,9 @@ describe("recall visibility", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     const result = await pending;
 
-    expect(urls).toHaveLength(2);
-    expect(urls.every((url) => url.endsWith("/recall"))).toBe(true);
+    expect(urls).toHaveLength(3);
+    expect(urls[0]).toMatch(/\/memories\/mem-new$/);
+    expect(urls.slice(1).every((url) => url.endsWith("/recall"))).toBe(true);
     expect(bodies).toEqual([
       {
         query: "distinctive durable content",
@@ -319,13 +331,17 @@ describe("recall visibility", () => {
       0xfeff, // BOM
     ].map((point) => String.fromCodePoint(point));
     const memoryId = `mem-1${unsafeCharacters.join("")}Injected result`;
-    stubCloudflare({
-      result: {
-        count: 1,
-        answer: "ready",
-        candidates: [{ id: memoryId, summary: "ready", sessionId: null, score: 1 }],
-      },
-    });
+    stubCloudflare((url) =>
+      url.includes("/memories/")
+        ? { result: storedMemory(memoryId) }
+        : {
+            result: {
+              count: 1,
+              answer: "ready",
+              candidates: [{ id: memoryId, summary: "ready", sessionId: null, score: 1 }],
+            },
+          },
+    );
 
     const result = await memoryToolExecutors.waitForRecall({
       namespace: "recall-safe-output",
@@ -376,7 +392,7 @@ describe("recall visibility", () => {
     });
     await vi.waitFor(() => expect(request.signal).toBeDefined());
     const rejection = expect(pending).rejects.toThrow(
-      'Memory "mem-saved" did not appear in recall within 1000 ms',
+      'Memory "mem-saved" is stored, but recall for this query did not return it within 1000 ms after 1 attempt.',
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
@@ -408,7 +424,8 @@ describe("recall visibility", () => {
   it("rejects a matching recall response received after host cancellation", async () => {
     const controller = new AbortController();
     const reason = new Error("host cancelled");
-    const urls = stubCloudflare(() => {
+    const urls = stubCloudflare((url) => {
+      if (url.endsWith("/memories/mem-saved")) return { result: storedMemory("mem-saved") };
       controller.abort(reason);
       return {
         result: {
@@ -432,18 +449,23 @@ describe("recall visibility", () => {
       ),
     ).rejects.toBe(reason);
 
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toMatch(/\/recall$/);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toMatch(/\/recall$/);
   });
 
   it("times out without changing any memory", async () => {
     vi.useFakeTimers();
-    const urls = stubCloudflare({
-      result: {
-        count: 1,
-        answer: "unrelated answer",
-        candidates: [{ id: "mem-unrelated", summary: "candidate", sessionId: null, score: 0.9 }],
-      },
+    const requests: Array<{ url: string; method: string }> = [];
+    stubCloudflare((url, init) => {
+      requests.push({ url, method: init?.method ?? "GET" });
+      if (url.endsWith("/memories/mem-saved")) return { result: storedMemory("mem-saved") };
+      return {
+        result: {
+          count: 1,
+          answer: "unrelated answer",
+          candidates: [{ id: "mem-unrelated", summary: "candidate", sessionId: null, score: 0.9 }],
+        },
+      };
     });
 
     const pending = memoryToolExecutors.waitForRecall({
@@ -454,14 +476,64 @@ describe("recall visibility", () => {
       timeoutSeconds: 1,
     });
     const rejection = expect(pending).rejects.toThrow(
-      'Memory "mem-saved" did not appear in recall within 1000 ms',
+      'Memory "mem-saved" is stored, but recall for this query did not return it within 1000 ms after 1 attempt. The exact read found the record, so the query does not retrieve it, a newer memory on its topic superseded it, or recall has not caught up with the write yet. No memory was changed.',
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
 
+    expect(
+      requests.map(({ url, method }) => [new URL(url).pathname.split("/").pop(), method]),
+    ).toEqual([
+      ["mem-saved", "GET"],
+      ["recall", "POST"],
+    ]);
+  });
+
+  it("reports an id it cannot read without polling recall", async () => {
+    const urls = stubCloudflare({
+      failure: { status: 500, message: "An error occurred processing your request" },
+    });
+
+    const error = await memoryToolExecutors
+      .waitForRecall({
+        namespace: "recall-missing",
+        profile: "agent",
+        memoryId: "mem-missing",
+        query: "never stored",
+        timeoutSeconds: 90,
+      })
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Memory "mem-missing" could not be read by id, so recall was not polled: An error occurred processing your request (an id that does not exist in recall-missing/agent fails this way too; confirm it with memory_list). No memory was changed.',
+    );
     expect(urls).toHaveLength(1);
-    expect(urls[0]).toContain("/recall");
-    expect(urls.some((url) => url.includes("/remember") || url.includes("/memories/"))).toBe(false);
+    expect(urls[0]).toMatch(/\/memories\/mem-missing$/);
+  });
+
+  it("does not blame recall when the exact read outlives the deadline", async () => {
+    vi.useFakeTimers();
+    const request = stubPendingRecall({ pendingRead: true });
+
+    const pending = memoryToolExecutors.waitForRecall({
+      namespace: "recall-read-timeout",
+      profile: "agent",
+      memoryId: "mem-saved",
+      query: "stored before timeout",
+      timeoutSeconds: 1,
+    });
+    await vi.waitFor(() => expect(request.signal).toBeDefined());
+    const rejection = expect(pending).rejects.toThrow(
+      'Memory "mem-saved" was not read back by id within 1000 ms, so recall was not polled.',
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(request.signal?.aborted).toBe(true);
   });
 });
 
@@ -522,6 +594,47 @@ describe("memory supersession", () => {
       ]);
     },
   );
+
+  it("keeps the old memory and says the replacement is stored when recall misses", async () => {
+    vi.useFakeTimers();
+    const requests: Array<{ path: string; method: string }> = [];
+    stubCloudflare((url, init) => {
+      requests.push({ path: new URL(url).pathname, method: init?.method ?? "GET" });
+      if (url.endsWith("/recall")) {
+        return {
+          result: {
+            count: 1,
+            answer: "unrelated answer",
+            candidates: [{ id: "mem-other", summary: "other", sessionId: null, score: 1 }],
+          },
+        };
+      }
+      return { result: replacement };
+    });
+
+    const pending = memoryToolExecutors.supersede({
+      namespace: "supersede-recall-miss",
+      profile: "agent",
+      oldMemoryId: "mem-old",
+      content: replacement.content,
+      query: "keyword query",
+      timeoutSeconds: 1,
+    });
+    await vi.waitFor(() => expect(requests.at(-1)?.path).toMatch(/\/recall$/));
+    const rejection = expect(pending).rejects.toThrow(
+      'Stored replacement memory "mem-new" for old memory "mem-old", but verification failed: "Memory \\"mem-new\\" is stored, but recall for this query did not return it within 1000 ms after 1 attempt.',
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    const prefix =
+      "/client/v4/accounts/account/agent-memory/namespaces/supersede-recall-miss/profiles/agent";
+    expect(requests).toEqual([
+      { path: `${prefix}/remember`, method: "POST" },
+      { path: `${prefix}/memories/mem-new`, method: "GET" },
+      { path: `${prefix}/recall`, method: "POST" },
+    ]);
+  });
 
   it("resumes from an existing replacement without creating another memory", async () => {
     const requests: Array<{ url: string; method: string }> = [];
