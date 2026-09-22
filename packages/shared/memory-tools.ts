@@ -94,6 +94,23 @@ export const MAX_TOOL_INGEST_MESSAGES = 500;
 export const MAX_TOOL_EXPAND = 30;
 /** Recall candidates kept when the call names no cap; on a busy profile the tail past ten is near-zero scores. */
 export const DEFAULT_TOOL_RECALL_CANDIDATES = 10;
+/**
+ * Share of the best score a candidate has to reach to be worth a line.
+ *
+ * The service ranks its whole candidate set and returns it, so a query with one
+ * real hit answers with that hit and a tail of fusion scores orders of magnitude
+ * below it. Measured against the live API on 2026-09-22, over a 24-candidate
+ * profile: a query answered from one memory scored 0.98 on the first line and
+ * 0.0011 on the second, and an unanswerable query put every line within a
+ * thousandth of its own top score. A hundredth of the best score keeps the
+ * candidates a real answer rests on, including the nine within one order of
+ * magnitude a well-matched query returns, and drops the tail that only costs
+ * tokens to read. The score is not calibrated, so the best one sets the scale
+ * instead of a fixed threshold, and a call that names a candidates cap keeps
+ * the whole ranked tail.
+ */
+const RECALL_RELEVANCE_FLOOR = 0.01;
+const RECALL_RELEVANCE_FLOOR_TEXT = `${RECALL_RELEVANCE_FLOOR * 100}% of the best score`;
 /** Significant digits of the score on a candidate line; the line order carries the rank, the raw double spells out to 17. */
 const RECALL_SCORE_DIGITS = 3;
 
@@ -153,7 +170,7 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The candidates are the memories the profile holds and the raw messages memory_ingest stored next to them: a message candidate carries kind: message and its text indented under the line in place of a summary, cut by the service at about 3,500 characters. It has no memory record, so memory_get and memory_delete answer its id with a server error, memory_list never shows it, and memory_delete_session removes it with its session. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring ones unless candidates says how many to keep, up to ${MAX_TOOL_EXPAND}, and its header says how many were trimmed. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring memory candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The candidates are the memories the profile holds and the raw messages memory_ingest stored next to them: a message candidate carries kind: message and its text indented under the line in place of a summary, cut by the service at about 3,500 characters. It has no memory record, so memory_get and memory_delete answer its id with a server error, memory_list never shows it, and memory_delete_session removes it with its session. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result drops the ones scoring below ${RECALL_RELEVANCE_FLOOR_TEXT}, then keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring of what is left, and its header says how many went and why. Pass candidates to take that cap yourself, up to ${MAX_TOOL_EXPAND}, which also keeps the whole ranked tail. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring memory candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
@@ -232,9 +249,8 @@ export const memoryFieldDescriptions = {
     "Retrieval breadth. Higher levels search more candidates and take longer. Defaults to low.",
   responseLength: "Requested length of the prose answer. Defaults to medium.",
   referenceDate: "ISO-8601 date the service treats as now when the query is time-relative.",
-  candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to as many lines as it takes to reach the memory candidates expand reads when that is more; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores; trimmed candidates are dropped, not paged, and the result header counts them.`,
-  expand:
-    "How many of the best-scoring memory candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on. Candidates marked kind: message are skipped: they have no record to read, and their text is already on the line.",
+  candidates: `How many of the best-scoring candidates to keep in the result. Defaults to ${DEFAULT_TOOL_RECALL_CANDIDATES}, or to as many lines as it takes to reach the memory candidates expand reads when that is more; ${MAX_TOOL_EXPAND} keeps everything. The service does not take this cap itself and ranks everything it found, so a busy profile answers with a long tail of near-zero scores. Left out, candidates scoring below ${RECALL_RELEVANCE_FLOOR_TEXT} are dropped before the cap applies; passing it keeps that tail and caps the ranking alone. Trimmed candidates are dropped, not paged, and the result header counts them by reason.`,
+  expand: `How many of the best-scoring memory candidates to return with full content, one extra read each. Candidate summaries are capped by the service, so expand the ones a conclusion will rest on. Candidates marked kind: message are skipped: they have no record to read, and their text is already on the line. A candidate the relevance floor dropped is not read either; pass candidates to keep the tail and expand into it.`,
   listExpand:
     "How many memories from the top of the page to return with full content, one extra read each. The rest of the page keeps summaries only, and a read that fails shows content: null.",
   memoriesPerPage: `Memories per page, 1-${MAX_TOOL_LIST_LIMIT}, oldest first.`,
@@ -522,6 +538,24 @@ function keptCandidates(params: RecallParams, candidates: readonly RecallCandida
 }
 
 /*
+ * Drop the candidates that score orders of magnitude under the best one.
+ *
+ * Cloudflare ranks its whole candidate set, so a profile answers every recall
+ * with the same number of lines whether or not it holds anything on the topic.
+ * The fused score is not calibrated, which rules out a fixed threshold, but the
+ * best score of the same call is a usable scale: a candidate that reaches less
+ * than `RECALL_RELEVANCE_FLOOR` of it never carried the answer in the measured
+ * responses and costs a line to read. An empty set and a zero top score leave
+ * the candidates alone: there is no scale to measure them against.
+ */
+function relevantCandidates(candidates: readonly RecallCandidate[]): readonly RecallCandidate[] {
+  const top = rankByScore(candidates)[0]?.score ?? 0;
+  if (!(top > 0)) return candidates;
+  const floor = top * RECALL_RELEVANCE_FLOOR;
+  return candidates.filter((candidate) => candidate.score >= floor);
+}
+
+/*
  * Keep the best-scoring candidates, in the order the service ranked them.
  *
  * The service takes no candidate cap itself, so a busy profile answers every
@@ -586,6 +620,25 @@ function candidateRecord(
 }
 
 /*
+ * Say how many candidates the result kept and, when it dropped any, why.
+ *
+ * The two reasons answer different questions: a candidate below the relevance
+ * floor scored too far under the best one to be worth reading, and a trimmed
+ * one lost the cap to better candidates. A caller who wants either back passes
+ * candidates, so the header has to tell them apart.
+ */
+function candidateCount(total: number, relevant: number, shown: number): string {
+  const irrelevant = total - relevant;
+  const trimmed = relevant - shown;
+  if (irrelevant === 0 && trimmed === 0) return `${shown}`;
+  const reasons = [
+    ...(irrelevant === 0 ? [] : [`the ${irrelevant} scoring below ${RECALL_RELEVANCE_FLOOR_TEXT}`]),
+    ...(trimmed === 0 ? [] : [`the ${trimmed} lowest-scoring`]),
+  ];
+  return `${shown} of ${total}, ${reasons.join(" and ")} trimmed`;
+}
+
+/*
  * Put the trust marker before the answer; returned candidates carry no claim mapping. The lines
  * run best score first, so the order is the ranking and the score can go out short; the header
  * names the profile once and counts the message candidates, because only their lines say so.
@@ -593,6 +646,7 @@ function candidateRecord(
 function recallText(
   params: ProfileParams,
   result: RecallResult,
+  relevant: readonly RecallCandidate[],
   shown: readonly RecallCandidate[],
   expanded: ReadonlyMap<string, string | null>,
 ): string {
@@ -602,11 +656,7 @@ function recallText(
   const header = `Recall from ${memoryTarget(params)}:`;
   if (result.candidates.length === 0) return `${header}\n\n${answer}`;
   const records = rankByScore(shown).map((candidate) => candidateRecord(candidate, expanded));
-  const trimmed = result.candidates.length - shown.length;
-  const count =
-    trimmed === 0
-      ? `${shown.length}`
-      : `${shown.length} of ${result.candidates.length}, the ${trimmed} lowest-scoring trimmed`;
+  const count = candidateCount(result.candidates.length, relevant.length, shown.length);
   const messages = shown.filter((candidate) => candidateKind(candidate) === "message").length;
   const messageNote =
     messages === 0
@@ -1107,10 +1157,13 @@ export const memoryToolExecutors = {
       referenceDate,
       ...options,
     });
-    const shown = trimCandidates(result.candidates, keptCandidates(params, result.candidates));
+    /* A caller who names a cap ranks the tail themselves; otherwise the near-zero tail never reaches the result. */
+    const relevant =
+      params.candidates === undefined ? relevantCandidates(result.candidates) : result.candidates;
+    const shown = trimCandidates(relevant, keptCandidates(params, relevant));
     const expanded = await expandCandidates(profile, shown, params.expand, options);
     return {
-      content: [{ type: "text", text: recallText(params, result, shown, expanded) }],
+      content: [{ type: "text", text: recallText(params, result, relevant, shown, expanded) }],
       details: {
         ...result,
         ...(result.answer ? { answerTrust: SERVICE_GENERATED_UNTRUSTED } : {}),

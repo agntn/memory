@@ -844,6 +844,7 @@ describe("recall result", () => {
       namespace: "recall-score",
       profile: "agent",
       query: "build tooling",
+      candidates: scores.length,
     });
 
     const lines = records<{ id: string; score: number }>(result);
@@ -980,15 +981,120 @@ describe("recall result", () => {
     });
 
     expect(textOf(result)).toContain(
-      "Candidates (10 of 12, the 2 lowest-scoring trimmed), best score first, one JSON object per line:",
+      "Candidates (10 of 12, the 1 scoring below 1% of the best score and the 1 lowest-scoring trimmed), best score first, one JSON object per line:",
     );
     expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
       "mem-3",
       ...tail.slice(0, 10).flatMap((candidate) => (candidate.id === "mem-3" ? [] : [candidate.id])),
     ]);
     expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
-    expect(memoryToolMeta.memory_recall.description).toContain("keeps the 10 best-scoring ones");
+    expect(memoryToolMeta.memory_recall.description).toContain(
+      "keeps the 10 best-scoring of what is left",
+    );
     expect(memoryFieldDescriptions.candidates).toContain("Defaults to 10");
+  });
+
+  it("drops the candidates scoring orders of magnitude under the best one", async () => {
+    /* One answered hit and the tail Cloudflare ranks behind it, as measured on a live profile. */
+    const scores = [0.98, 0.00108, 0.000632, 0.000547, 0.000529, 0.000449, 0.00043, 0.000364];
+    const urls = stubCloudflare({
+      result: {
+        count: scores.length,
+        answer: "Cloudflare Agent Memory is primary.",
+        candidates: scores.map((score, index) => ({
+          id: `mem-${index}`,
+          summary: "truncated",
+          sessionId: null,
+          score,
+        })),
+      },
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-floor",
+      profile: "agent",
+      query: "memory hierarchy",
+    });
+
+    expect(textOf(result)).toContain(
+      "Candidates (1 of 8, the 7 scoring below 1% of the best score trimmed), best score first, one JSON object per line:",
+    );
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual(["mem-0"]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(0);
+  });
+
+  it("keeps a flat candidate set, where no score stands out to measure against", async () => {
+    const candidates = Array.from({ length: 6 }, (_, index) => ({
+      id: `mem-${index}`,
+      summary: "truncated",
+      sessionId: null,
+      score: 0.0000374,
+    }));
+    stubCloudflare({ result: { count: candidates.length, answer: "", candidates } });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-flat",
+      profile: "agent",
+      query: "favourite colour",
+    });
+
+    expect(textOf(result)).toContain("Candidates (6), best score first");
+    expect(records(result)).toHaveLength(6);
+  });
+
+  it("keeps the trimmed tail when the call names a candidates cap", async () => {
+    const candidates = [
+      { id: "mem-top", summary: "truncated", sessionId: null, score: 0.98 },
+      { id: "mem-tail", summary: "truncated", sessionId: null, score: 0.0001 },
+    ];
+    stubCloudflare({ result: { count: candidates.length, answer: "Answer.", candidates } });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-floor-override",
+      profile: "agent",
+      query: "memory hierarchy",
+      candidates: 2,
+    });
+
+    expect(textOf(result)).toContain("Candidates (2), best score first");
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      "mem-top",
+      "mem-tail",
+    ]);
+  });
+
+  it("does not spend a read on a candidate the relevance floor dropped", async () => {
+    const urls = stubCloudflare((url) => {
+      if (url.includes("/memories/")) {
+        const id = url.split("/memories/")[1] ?? "";
+        return { result: { ...memoryEntry(id, null), content: `full content of ${id}` } };
+      }
+      return {
+        result: {
+          count: 3,
+          answer: "Answer.",
+          candidates: [
+            { id: "mem-top", summary: "truncated", sessionId: null, score: 0.82 },
+            { id: "mem-near", summary: "truncated", sessionId: null, score: 0.41 },
+            { id: "mem-tail", summary: "truncated", sessionId: null, score: 0.0005 },
+          ],
+        },
+      };
+    });
+
+    const result = await memoryToolExecutors.recall({
+      namespace: "recall-floor-expand",
+      profile: "agent",
+      query: "build tooling",
+      expand: 3,
+    });
+
+    expect(records<{ id: string }>(result).map((candidate) => candidate.id)).toEqual([
+      "mem-top",
+      "mem-near",
+    ]);
+    expect(urls.filter((url) => url.includes("/memories/"))).toHaveLength(2);
+    expect(memoryFieldDescriptions.expand).toContain("relevance floor");
   });
 
   it("keeps every candidate an expand above the default asks to read", async () => {
