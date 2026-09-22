@@ -405,6 +405,37 @@ describe("recall visibility", () => {
     expect(request.signal?.aborted).toBe(true);
   });
 
+  it("rejects a matching recall response received after host cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("host cancelled");
+    const urls = stubCloudflare(() => {
+      controller.abort(reason);
+      return {
+        result: {
+          count: 1,
+          answer: "ready",
+          candidates: [{ id: "mem-saved", summary: "ready", sessionId: null, score: 1 }],
+        },
+      };
+    });
+
+    await expect(
+      memoryToolExecutors.waitForRecall(
+        {
+          namespace: "recall-cancelled-response",
+          profile: "agent",
+          memoryId: "mem-saved",
+          query: "stored before cancellation",
+          timeoutSeconds: 30,
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toBe(reason);
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toMatch(/\/recall$/);
+  });
+
   it("times out without changing any memory", async () => {
     vi.useFakeTimers();
     const urls = stubCloudflare({
@@ -444,6 +475,53 @@ describe("memory supersession", () => {
     createdAt: "2026-08-28T00:00:00.000Z",
     updatedAt: "2026-08-28T00:00:00.000Z",
   };
+
+  it.each(["supersede", "resumeSupersession"] as const)(
+    "%s does not delete after recall returns despite cancellation",
+    async (operation) => {
+      const controller = new AbortController();
+      const requests: Array<{ path: string; method: string }> = [];
+      stubCloudflare((url, init) => {
+        requests.push({ path: new URL(url).pathname, method: init?.method ?? "GET" });
+        if (url.endsWith("/recall")) {
+          controller.abort(new Error("host cancelled"));
+          return {
+            result: {
+              count: 1,
+              answer: "ready",
+              candidates: [
+                { id: replacement.id, summary: replacement.summary, sessionId: null, score: 1 },
+              ],
+            },
+          };
+        }
+        return { result: replacement };
+      });
+
+      await expect(
+        memoryToolExecutors[operation](
+          {
+            namespace: "supersede-cancelled-response",
+            profile: "agent",
+            oldMemoryId: "mem-old",
+            replacementMemoryId: replacement.id,
+            content: replacement.content,
+            query: "new checkpoint",
+            timeoutSeconds: 30,
+          },
+          { signal: controller.signal },
+        ),
+      ).rejects.toThrow(/host cancelled/);
+
+      const prefix =
+        "/client/v4/accounts/account/agent-memory/namespaces/supersede-cancelled-response/profiles/agent";
+      expect(requests).toEqual([
+        ...(operation === "supersede" ? [{ path: `${prefix}/remember`, method: "POST" }] : []),
+        { path: `${prefix}/memories/mem-new`, method: "GET" },
+        { path: `${prefix}/recall`, method: "POST" },
+      ]);
+    },
+  );
 
   it("resumes from an existing replacement without creating another memory", async () => {
     const requests: Array<{ url: string; method: string }> = [];
