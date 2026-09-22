@@ -854,6 +854,7 @@ async function waitForRecallCandidate(
         responseLength: "short",
         signal,
       });
+      signal.throwIfAborted();
       const waitMilliseconds = Math.round(performance.now() - startedAt);
       if (candidateIsVisible(result, params.memoryId, waitMilliseconds, timeoutMilliseconds)) {
         return { attempts, waitMilliseconds };
