@@ -32,7 +32,7 @@ Not on npm yet. From a clone:
 pnpm install
 ```
 
-Node.js 24 or newer.
+Node.js 26 or newer.
 
 ## 🚀 First call
 
