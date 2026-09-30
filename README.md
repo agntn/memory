@@ -109,6 +109,8 @@ pnpm exec memory mcp
 
 Seventeen tools across MCP, Pi and OMP, one executor table behind them. Pi does not load `.env`. If the two scope variables are missing, it reads `~/.pi/agent/memory-scope.json`.
 
+No API token? Run `cf auth login` once and leave the token out. The tools borrow the cf CLI's OAuth session. `CLOUDFLARE_ACCOUNT_ID` stays only when that login reaches more than one account.
+
 ## 🚫 What this does not do
 
 It does not edit a memory in place, list memories newest first, run Bun, or speak Mnemopi over MCP. Durable wiki files are `@agntn/wiki`, session transcripts are `@agntn/sessions`, and Cloudflare Agent Memory is still private beta.
