@@ -31,7 +31,7 @@ afterEach(() => {
 
 describe("Pi execution errors", () => {
   it("sanitizes nested causes and stops at a cycle", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const cause = new Error(`DNS${String.fromCodePoint(10, 0x2028, 0x202e)}failed`);
     cause.cause = cause;
@@ -46,7 +46,7 @@ describe("Pi execution errors", () => {
   });
 
   it("passes cancellation through to fetch", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const signal = AbortSignal.abort(new Error("cancelled"));
     vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
@@ -78,7 +78,7 @@ describe("Pi execution errors", () => {
     ["memory_remember", { content: "synthetic" }],
     ["memory_recall", { query: "synthetic" }],
   ])("keeps the network cause in %s without retrying", async (name, params) => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const fetch = vi.fn(async () => {
       throw new TypeError("fetch failed", {

@@ -97,7 +97,7 @@ pnpm exec memory mcp
       "command": "pnpm",
       "args": ["exec", "memory", "mcp"],
       "env": {
-        "CLOUDFLARE_ACCOUNT_ID": "...",
+        "AGNTN_CLOUDFLARE_ACCOUNT_ID": "...",
         "CLOUDFLARE_API_TOKEN": "...",
         "AGNTN_MEMORY_NAMESPACE": "default",
         "AGNTN_MEMORY_PROFILE": "agent"
@@ -109,7 +109,7 @@ pnpm exec memory mcp
 
 Seventeen tools across MCP, Pi and OMP, one executor table behind them. Pi does not load `.env`. If the two scope variables are missing, it reads `~/.pi/agent/memory-scope.json`.
 
-No API token? Run `cf auth login` once and leave the token out. The tools borrow the cf CLI's OAuth session. `CLOUDFLARE_ACCOUNT_ID` stays only when that login reaches more than one account.
+No API token? Run `cf auth login` once and leave the token out. The tools borrow the cf CLI's OAuth session. `AGNTN_CLOUDFLARE_ACCOUNT_ID` stays only when that login reaches more than one account.
 
 ## 🚫 What this does not do
 

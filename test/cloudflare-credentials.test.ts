@@ -70,7 +70,7 @@ afterEach(() => {
 
 describe("Cloudflare credentials", () => {
   it("prefers the env token and never asks cf", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
     const { getCloudflareCredentials } = await loadCredentials();
 
@@ -86,8 +86,24 @@ describe("Cloudflare credentials", () => {
     const { getCloudflareCredentials } = await loadCredentials();
 
     await expect(getCloudflareCredentials()).rejects.toThrow(
-      "Set CLOUDFLARE_ACCOUNT_ID alongside CLOUDFLARE_API_TOKEN",
+      "Set AGNTN_CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_API_TOKEN needs an account",
     );
+  });
+
+  it("never reads the account cf and wrangler use", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "wrangler-account");
+    cf.whoami = loggedIn(["acct-1", "acct-2"]);
+    const { getCloudflareCredentials } = await loadCredentials();
+
+    await expect(getCloudflareCredentials()).rejects.toThrow(
+      "Set AGNTN_CLOUDFLARE_ACCOUNT_ID: the cf OAuth session can reach 2 accounts. CLOUDFLARE_ACCOUNT_ID is left to cf and wrangler",
+    );
+
+    cf.whoami = loggedIn(["acct-1"]);
+    await expect(loadCredentials().then((m) => m.getCloudflareCredentials())).resolves.toEqual({
+      accountId: "acct-1",
+      apiToken: "oauth-1",
+    });
   });
 
   it("takes the token and the only account from the cf OAuth session", async () => {
@@ -106,10 +122,10 @@ describe("Cloudflare credentials", () => {
     const { getCloudflareCredentials } = await loadCredentials();
 
     await expect(getCloudflareCredentials()).rejects.toThrow(
-      "Set CLOUDFLARE_ACCOUNT_ID: the cf OAuth session can reach 2 accounts",
+      "Set AGNTN_CLOUDFLARE_ACCOUNT_ID: the cf OAuth session can reach 2 accounts",
     );
 
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct-2");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "acct-2");
     await expect(getCloudflareCredentials()).resolves.toEqual({
       accountId: "acct-2",
       apiToken: "oauth-1",

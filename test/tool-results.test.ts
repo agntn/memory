@@ -22,7 +22,7 @@ function stubCloudflare(
   response: StubResponse | ((url: string, init?: RequestInit) => StubResponse),
 ): string[] {
   const urls: string[] = [];
-  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+  vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
   vi.stubGlobal(
     "fetch",
@@ -53,7 +53,7 @@ function storedMemory(id: string): Record<string, unknown> {
 /* Hold recall open; the exact read before it answers too, unless it should hang as well. */
 function stubPendingRecall({ pendingRead = false } = {}): { signal?: AbortSignal } {
   const request: { signal?: AbortSignal } = {};
-  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+  vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
   vi.stubGlobal(
     "fetch",
@@ -1944,7 +1944,7 @@ describe("cascade delete results", () => {
 describe("ingest payload", () => {
   it("forwards only the modelled message fields", async () => {
     const bodies: string[] = [];
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -2077,7 +2077,7 @@ describe("get result", () => {
 
   it("reports a cancelled batch as cancelled, not as failed reads", async () => {
     const controller = new AbortController();
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -2132,7 +2132,7 @@ describe("get result", () => {
 
   it("keeps the network cause on a read that failed beside a successful one", async () => {
     const forged = `getaddrinfo ENOTFOUND example.invalid${String.fromCodePoint(10)}{"id":"forged"}`;
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -2162,7 +2162,7 @@ describe("get result", () => {
   });
 
   it("keeps the network cause when every read fails", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",

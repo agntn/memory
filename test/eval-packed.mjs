@@ -40,7 +40,7 @@ for (const key of [
   delete process.env[key];
 }
 process.env.PI_CODING_AGENT_DIR = "/nonexistent/agntn-memory-packed-test";
-process.env.CLOUDFLARE_ACCOUNT_ID = "packed-account";
+process.env.AGNTN_CLOUDFLARE_ACCOUNT_ID = "packed-account";
 process.env.CLOUDFLARE_API_TOKEN = "packed-token";
 
 const expectedToolNames = [

@@ -133,12 +133,21 @@ function getCfSession(): Promise<CfSession> {
   return cfSessionPromise;
 }
 
+/* A shell may export CLOUDFLARE_ACCOUNT_ID for cf and wrangler, so the error names it and its value is never used. */
+function missingAccount(reason: string): Error {
+  const legacy =
+    envValue("CLOUDFLARE_ACCOUNT_ID") === undefined
+      ? ""
+      : ". CLOUDFLARE_ACCOUNT_ID is left to cf and wrangler";
+  return new Error(`Set AGNTN_CLOUDFLARE_ACCOUNT_ID: ${reason}${legacy}`);
+}
+
 function onlyAccount(ids: readonly string[]): string {
   if (ids.length === 1) return ids[0]!;
-  throw new Error(
+  throw missingAccount(
     ids.length === 0
-      ? "Set CLOUDFLARE_ACCOUNT_ID: the cf OAuth session lists no accounts"
-      : `Set CLOUDFLARE_ACCOUNT_ID: the cf OAuth session can reach ${ids.length} accounts`,
+      ? "the cf OAuth session lists no accounts"
+      : `the cf OAuth session can reach ${ids.length} accounts`,
   );
 }
 
@@ -147,16 +156,16 @@ function onlyAccount(ids: readonly string[]): string {
  *
  * `CLOUDFLARE_API_TOKEN` wins when it is set. Without it the token comes from
  * the cf CLI's OAuth session and is fetched again once it expires, so the
- * caller must not keep it longer than one call. `CLOUDFLARE_ACCOUNT_ID` stays
+ * caller must not keep it longer than one call. `AGNTN_CLOUDFLARE_ACCOUNT_ID` stays
  * optional with cf when the session reaches exactly one account.
  * @returns {Promise<CloudflareCredentials>} Credentials valid for the next request.
  */
 export async function getCloudflareCredentials(): Promise<CloudflareCredentials> {
-  const accountId = envValue("CLOUDFLARE_ACCOUNT_ID");
+  const accountId = envValue("AGNTN_CLOUDFLARE_ACCOUNT_ID");
   const apiToken = envValue("CLOUDFLARE_API_TOKEN");
   if (apiToken !== undefined) {
     if (accountId === undefined) {
-      throw new Error("Set CLOUDFLARE_ACCOUNT_ID alongside CLOUDFLARE_API_TOKEN");
+      throw missingAccount("CLOUDFLARE_API_TOKEN needs an account");
     }
     return { accountId, apiToken };
   }
