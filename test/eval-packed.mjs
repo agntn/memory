@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -61,6 +61,16 @@ const expectedToolNames = [
   "memory_summary",
   "memory_delete_session",
   "memory_delete_profile",
+];
+
+// Packages Pi hands its extensions. A copy in "dependencies" can bypass the
+// host's module mapping, and Pi 0.99 warns on every load of such a package.
+const hostProvidedPackages = [
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
+  "typebox",
 ];
 
 const memoryResult = {
@@ -130,6 +140,24 @@ try {
     "packages/omp/extensions/memory.ts",
   ]) {
     assert.ok(existsSync(path.join(packageRoot, entry)), `packed tarball is missing ${entry}`);
+  }
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+  assert.deepEqual(
+    hostProvidedPackages.filter((name) => name in (manifest.dependencies ?? {})),
+    [],
+    "Pi supplies these packages, so they belong in peerDependencies",
+  );
+  assert.equal(manifest.peerDependencies?.typebox, "*", 'Pi asks for a "*" range on typebox');
+  // typebox is only an optional peer now, so the CLI and the MCP server have to
+  // carry their own copy. This checkout's node_modules would hide a bare import.
+  for (const file of await readdir(path.join(packageRoot, "dist"), { recursive: true })) {
+    if (!file.endsWith(".mjs")) continue;
+    const code = await readFile(path.join(packageRoot, "dist", file), "utf8");
+    assert.doesNotMatch(
+      code,
+      /(?:from|import)\s*\(?\s*["']typebox(?:\/[^"']*)?["']/,
+      `dist/${file} imports typebox instead of bundling it`,
+    );
   }
   assert.ok(
     !existsSync(path.join(packageRoot, "src/index.ts")),
