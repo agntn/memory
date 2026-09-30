@@ -10,6 +10,8 @@ import {
   MEMORY_NAME_PATTERN,
 } from "./memory-tools.ts";
 
+export { applyMemoryScope, applyMemoryWriteScope } from "./memory-tools.ts";
+
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
 export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
@@ -127,40 +129,6 @@ export function configuredPiMemoryScope(
   const configPath = join(agentDir, PI_MEMORY_SCOPE_FILENAME);
   const value = readPiScope(configPath);
   return value === undefined ? undefined : parsePiScope(value, configPath);
-}
-
-/**
- * Inject a fixed scope after tool argument validation, so callers cannot select
- * another profile. Without a bound scope the params pass through unchanged and
- * keep the namespace and profile the caller picked.
- *
- * @param params - Already validated tool arguments.
- * @param scope - Host-bound namespace and profile, when configured.
- * @returns {T & ProfileParams} The arguments carrying the effective namespace and profile.
- */
-export function applyMemoryScope<T extends object>(
-  params: T,
-  scope: ProfileParams | undefined,
-): T & ProfileParams {
-  return scope ? { ...params, ...scope } : (params as T & ProfileParams);
-}
-
-/**
- * Own write provenance in bound mode; preserve caller-owned sessions only in raw mode.
- *
- * @param params - Already validated write arguments.
- * @param scope - Host-bound namespace and profile, when configured.
- * @param harnessSessionId - Session identifier derived from the owning harness.
- * @returns {T & ProfileParams & { sessionId?: string }} Scoped write arguments with the effective session identifier.
- */
-export function applyMemoryWriteScope<T extends object>(
-  params: T,
-  scope: ProfileParams | undefined,
-  harnessSessionId: string | undefined,
-): T & ProfileParams & { sessionId?: string } {
-  const scoped = applyMemoryScope(params, scope) as T & ProfileParams & { sessionId?: string };
-  if (!scope && scoped.sessionId) return scoped;
-  return { ...scoped, sessionId: harnessSessionId };
 }
 
 /**

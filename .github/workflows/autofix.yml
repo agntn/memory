@@ -23,6 +23,8 @@ jobs:
 
       - run: pnpm install
 
+      - run: pnpm --dir worker install
+
       - name: Fix lint issues
         run: pnpm lint:fix
 

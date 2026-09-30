@@ -7,6 +7,7 @@ const readonlyParameterOptions = {
       from: "file" as const,
       name: [
         "AbortOptions",
+        "AccessEnv",
         "AgentMemoryProfileBinding",
         "CloudflareAccountOptions",
         "CloudflareHttpClient",
@@ -14,15 +15,21 @@ const readonlyParameterOptions = {
         "CloudflareMemoryOptions",
         "CloudflareNamespaceListOptions",
         "CloudflareProfileListOptions",
+        "DecodedJwt",
         "GetParams",
+        "Headers",
         "IngestOptions",
         "IngestParams",
         "ListOptions",
         "ListParams",
         "Memory",
+        "MemoryBackend",
+        "MemoryMcpTool",
+        "MemoryMcpToolOptions",
         "MemoryMessage",
         "MemoryParams",
         "MemoryProfile",
+        "MemoryServerOptions",
         "MemoryToolResult",
         "MnemopiClient",
         "MnemopiMemoryOptions",
@@ -40,6 +47,7 @@ const readonlyParameterOptions = {
         "RemovedCount",
         "RenderedToolResult",
         "RenderOptions",
+        "Request",
         "SessionParams",
         "StatusLine",
         "StatusTheme",
@@ -50,7 +58,16 @@ const readonlyParameterOptions = {
     },
     {
       from: "lib" as const,
-      name: ["AbortSignal", "Date", "Iterable", "ReadonlyMap", "RequestInit", "Response"],
+      name: [
+        "AbortSignal",
+        "ArrayBuffer",
+        "Date",
+        "Iterable",
+        "ReadonlyMap",
+        "RequestInit",
+        "Response",
+        "Uint8Array",
+      ],
     },
     {
       from: "package" as const,
@@ -78,6 +95,16 @@ const readonlyParameterOptions = {
     },
     {
       from: "package" as const,
+      name: ["AuthRequest", "ConsentDescription"],
+      package: "@cloudflare/workers-oauth-provider",
+    },
+    {
+      from: "package" as const,
+      name: ["ServerContext"],
+      package: "@modelcontextprotocol/server",
+    },
+    {
+      from: "package" as const,
       name: ["ExtensionAPI", "ExtensionContext", "ToolDefinition"],
       package: "@earendil-works/pi-coding-agent",
     },
@@ -99,7 +126,7 @@ export default defineConfig({
   overrides: [
     {
       /** Test fixtures use mutable host shapes and Vitest's intentionally `any` asymmetric matchers. */
-      files: ["test/**/*.{ts,mjs}"],
+      files: ["test/**/*.{ts,mjs}", "worker/test/**/*.ts"],
       rules: {
         "jsdoc/require-param": "off",
         "jsdoc/require-param-description": "off",

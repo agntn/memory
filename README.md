@@ -111,6 +111,14 @@ Seventeen tools across MCP, Pi and OMP, one executor table behind them. Pi does 
 
 No API token? Run `cf auth login` once and leave the token out. The tools borrow the cf CLI's OAuth session. `AGNTN_CLOUDFLARE_ACCOUNT_ID` stays only when that login reaches more than one account.
 
+## ☁️ Remote
+
+```bash
+claude mcp add --transport http memory https://agntn-memory.<you>.workers.dev/mcp
+```
+
+Your client can't spawn a process? Deploy `worker/` to your own account. It's the same server behind a URL. Memory goes through the Agent Memory binding, so no API token sits anywhere. You sign in once through Cloudflare Access. Anyone else gets turned away. Eleven tools, one namespace, one profile. Namespace admin stays local. Every call lands as a span in Workers Observability. Setup: [worker/README.md](./worker/README.md).
+
 ## 🚫 What this does not do
 
 It does not edit a memory in place, list memories newest first, run Bun, or speak Mnemopi over MCP. Durable wiki files are `@agntn/wiki`, session transcripts are `@agntn/sessions`, and Cloudflare Agent Memory is still private beta.

@@ -11,7 +11,8 @@
 - Local harness sources and remote API providers stay separate concerns.
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
 - `src/commands/mcp.ts` imports the server and the SDK inside `run()`, because citty resolves the subcommand for `--help` and for an unknown command too. `test/cli.test.ts` runs those usage paths under a load hook.
-- Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
+- Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`. `createMemoryToolExecutors()` takes a `MemoryBackend`: `packages/shared/memory-api-backend.ts` is the HTTP API with credentials, and the Worker in `worker/` passes an Agent Memory binding. `memory-tools.ts` and `memory-mcp-tools.ts` import nothing from `node:*`, because the Worker bundles them.
+- Both MCP servers build their tool table with `packages/shared/memory-mcp-tools.ts`. The stdio server uses SDK v1 and the Worker uses SDK v2, so only the transport wiring differs.
 - Pi and MCP share the schemas in `packages/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
 
 ## Terminal rendering

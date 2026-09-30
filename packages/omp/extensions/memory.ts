@@ -21,10 +21,10 @@ import {
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
   memoryFieldDescriptions,
-  memoryToolExecutors,
   memoryToolMeta,
   memoryToolProgress,
 } from "../../shared/memory-tools.ts";
+import { memoryToolExecutors } from "../../shared/memory-api-backend.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
 import {
   describeToolCall,

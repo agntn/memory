@@ -24,6 +24,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - run: pnpm --dir worker install --frozen-lockfile
+
       - name: Lint
         run: pnpm lint
 
@@ -38,3 +40,9 @@ jobs:
 
       - name: Test packed entries
         run: pnpm test:packed
+
+      - name: Typecheck Worker
+        run: pnpm --dir worker typecheck
+
+      - name: Test Worker
+        run: pnpm --dir worker test
