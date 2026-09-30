@@ -1,15 +1,10 @@
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type {
   AbortOptions,
-  CloudflareMemoryOptions,
   Memory,
   MemoryProfile,
-  MemoryProvider,
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
-import { type CloudflareCredentials, getCloudflareCredentials } from "./cloudflare-credentials.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { toolErrorMessage } from "./tool-errors.ts";
@@ -17,7 +12,7 @@ import type {
   GetParams,
   IngestParams,
   ListParams,
-  MemoryModule,
+  MemoryBackend,
   MemoryParams,
   MemoryToolResult,
   NamespaceListParams,
@@ -34,13 +29,6 @@ import type {
 } from "./memory-tools.types.ts";
 
 export { singleLineToolText };
-
-let memoryModulePromise: Promise<MemoryModule> | undefined;
-let namespaceClientPromise:
-  | Promise<InstanceType<MemoryModule["CloudflareNamespaceClient"]>>
-  | undefined;
-const providerPromises = new Map<string, Promise<MemoryProvider>>();
-let credentialsKey: string | undefined;
 
 export const MAX_TOOL_LIST_LIMIT = 100;
 
@@ -270,33 +258,38 @@ export const memoryFieldDescriptions = {
   sortDirection: "Sort direction.",
 } as const;
 
-function loadMemory(): Promise<MemoryModule> {
-  if (!memoryModulePromise) {
-    const sourceUrl = new URL("../../src/index.ts", import.meta.url);
-    // Runtime-selected so a checkout uses current source while a published package uses dist.
-    memoryModulePromise = existsSync(fileURLToPath(sourceUrl))
-      ? import(sourceUrl.href).then((memory) => memory as MemoryModule)
-      : import("@agntn/memory").then((memory) => memory as unknown as MemoryModule);
-  }
-  return memoryModulePromise;
+/**
+ * Inject a fixed scope after tool argument validation, so callers cannot select
+ * another profile. Without a bound scope the params pass through unchanged and
+ * keep the namespace and profile the caller picked.
+ *
+ * @param params - Already validated tool arguments.
+ * @param scope - Host-bound namespace and profile, when configured.
+ * @returns {T & ProfileParams} The arguments carrying the effective namespace and profile.
+ */
+export function applyMemoryScope<T extends object>(
+  params: T,
+  scope: ProfileParams | undefined,
+): T & ProfileParams {
+  return scope ? { ...params, ...scope } : (params as T & ProfileParams);
 }
 
 /**
- * Resolve credentials and drop clients built for a token that is gone.
+ * Own write provenance in bound mode; preserve caller-owned sessions only in raw mode.
  *
- * A cf OAuth token rotates while the process lives, and every cached client
- * carries the token it was built with.
- * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
+ * @param params - Already validated write arguments.
+ * @param scope - Host-bound namespace and profile, when configured.
+ * @param harnessSessionId - Session identifier derived from the owning harness.
+ * @returns {T & ProfileParams & { sessionId?: string }} Scoped write arguments with the effective session identifier.
  */
-async function getCredentials(): Promise<CloudflareCredentials> {
-  const credentials = await getCloudflareCredentials();
-  const key = `${credentials.accountId}\n${credentials.apiToken}`;
-  if (key !== credentialsKey) {
-    credentialsKey = key;
-    namespaceClientPromise = undefined;
-    providerPromises.clear();
-  }
-  return credentials;
+export function applyMemoryWriteScope<T extends object>(
+  params: T,
+  scope: ProfileParams | undefined,
+  harnessSessionId: string | undefined,
+): T & ProfileParams & { sessionId?: string } {
+  const scoped = applyMemoryScope(params, scope) as T & ProfileParams & { sessionId?: string };
+  if (!scope && scoped.sessionId) return scoped;
+  return { ...scoped, sessionId: harnessSessionId };
 }
 
 function optionalString(value: string | undefined): string | undefined {
@@ -339,36 +332,10 @@ function messageTimestamp(value: string): Date {
   return timestamp;
 }
 
-async function getNamespaceClient(): Promise<
-  InstanceType<MemoryModule["CloudflareNamespaceClient"]>
-> {
-  const credentials = await getCredentials();
-  namespaceClientPromise ??= loadMemory().then(
-    (memory) => new memory.CloudflareNamespaceClient(credentials),
-  );
-  return namespaceClientPromise;
-}
-
-async function getProvider(namespace: string): Promise<MemoryProvider> {
-  const credentials = await getCredentials();
-  let providerPromise = providerPromises.get(namespace);
-  if (!providerPromise) {
-    providerPromise = loadMemory().then((memory) => {
-      memory.registerAll();
-      return memory.create<CloudflareMemoryOptions>("cloudflare", {
-        ...credentials,
-        namespace,
-      });
-    });
-    providerPromises.set(namespace, providerPromise);
-  }
-  return providerPromise;
-}
-
-async function getProfile(params: ProfileParams): Promise<MemoryProfile> {
+async function getProfile(backend: MemoryBackend, params: ProfileParams): Promise<MemoryProfile> {
   const profile = params.profile.trim();
   if (!profile) throw new Error("Profile cannot be empty");
-  return (await getProvider(params.namespace)).getProfile(profile);
+  return (await backend.provider(params.namespace)).getProfile(profile);
 }
 
 function requireCapability<K extends keyof MemoryProfile>(
@@ -1035,458 +1002,476 @@ function emptyCascade(removed: RemovedCount): boolean {
   return removed?.count === 0 && !removed.atLeast;
 }
 
-export const memoryToolExecutors = {
-  async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    const memory = await requireCapability(profile, "remember")(
-      { content: params.content, sessionId: optionalString(params.sessionId) },
-      options,
-    );
-    return {
-      content: [{ type: "text", text: json(withSummaryTrust(memory)) }],
-      details: memory as unknown as Record<string, unknown>,
-    };
-  },
-
-  async supersede(params: SupersedeParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertRecallVisibility({
-      ...params,
-      memoryId: params.oldMemoryId,
-    });
-    const profile = await getProfile(params);
-    const replacement = await requireCapability(profile, "remember")(
-      { content: params.content, sessionId: optionalString(params.sessionId) },
-      options,
-    );
-    let verified: { memory: Memory; visibility: RecallVisibility };
-    try {
-      verified = await verifyReplacement(profile, replacement.id, params, options);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
-        { cause: error },
+/**
+ * Build the memory tool operations over one backend.
+ *
+ * @param backend - The HTTP API with credentials, or a Workers binding.
+ * @returns {MemoryToolExecutors} The operations every tool surface calls.
+ */
+export function createMemoryToolExecutors(backend: MemoryBackend) {
+  return {
+    async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      const memory = await requireCapability(profile, "remember")(
+        { content: params.content, sessionId: optionalString(params.sessionId) },
+        options,
       );
-    }
-    try {
-      await requireCapability(profile, "delete")(params.oldMemoryId, options);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Replacement memory ${quoteToolText(replacement.id)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
-        { cause: error },
-      );
-    }
-    const details = {
-      oldMemoryId: params.oldMemoryId,
-      newMemory: verified.memory,
-      ...verified.visibility,
-    };
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
-        },
-      ],
-      details,
-    };
-  },
-
-  async resumeSupersession(
-    params: Readonly<ResumeSupersessionParams>,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    assertRecallVisibility({ ...params, memoryId: params.oldMemoryId });
-    assertRecallVisibility({ ...params, memoryId: params.replacementMemoryId });
-    const profile = await getProfile(params);
-    let verified: { memory: Memory; visibility: RecallVisibility };
-    try {
-      verified = await verifyReplacement(profile, params.replacementMemoryId, params, options);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Replacement memory ${quoteToolText(params.replacementMemoryId)} for old memory ${quoteToolText(params.oldMemoryId)} failed verification: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
-        { cause: error },
-      );
-    }
-    try {
-      await requireCapability(profile, "delete")(params.oldMemoryId, options);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Replacement memory ${quoteToolText(params.replacementMemoryId)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
-        { cause: error },
-      );
-    }
-    const details = {
-      oldMemoryId: params.oldMemoryId,
-      newMemory: verified.memory,
-      ...verified.visibility,
-    };
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Resumed supersession of memory ${quoteToolText(params.oldMemoryId)} with replacement ${quoteToolText(params.replacementMemoryId)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
-        },
-      ],
-      details,
-    };
-  },
-
-  async waitForRecall(
-    params: RecallVisibilityParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    let visibility: RecallVisibility;
-    try {
-      visibility = await waitForRecallCandidate(profile, params, options);
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${message} No memory was changed.`, { cause: error });
-    }
-    const { attempts, waitMilliseconds } = visibility;
-    const details = {
-      id: params.memoryId,
-      namespace: params.namespace,
-      profile: params.profile,
-      attempts,
-      waitMilliseconds,
-    };
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Memory ${quoteToolText(params.memoryId)} reached recall in ${memoryTarget(params)} after ${waitMilliseconds} ms and ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
-        },
-      ],
-      details,
-    };
-  },
-
-  async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    // Copy the modelled fields only: anything else the caller attached would be
-    // posted upstream under the account token without appearing in the schema.
-    const messages = params.messages.map((message) => {
-      const timestamp = optionalString(message.timestamp);
       return {
-        role: message.role,
-        content: message.content,
-        ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
+        content: [{ type: "text", text: json(withSummaryTrust(memory)) }],
+        details: memory as unknown as Record<string, unknown>,
       };
-    });
-    await requireCapability(profile, "ingest")(messages, {
-      sessionId: optionalString(params.sessionId),
-      ...options,
-    });
-    const sessionId = optionalString(params.sessionId);
-    /** The service answers with no session, so the text names the one it will derive when the caller passed none. */
-    const session =
-      sessionId === undefined
-        ? " with no session id; the service derives one from the message content, and memory_list shows it on the extracted memories as an id under the hash- prefix"
-        : ` in session ${singleLineToolText(sessionId)}`;
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Submitted ${messages.length} messages for ingestion into ${memoryTarget(params)}${session}. Extraction runs asynchronously: memories appear in memory_list and memory_recall once it finishes, and the service decides how many memories the messages produce.`,
-        },
-      ],
-      details: {
-        namespace: params.namespace,
-        profile: params.profile,
-        messageCount: messages.length,
-        ...(sessionId === undefined ? {} : { sessionId }),
-      },
-    };
-  },
+    },
 
-  /**
-   * Answer a recall query, trimming and expanding the candidates on request.
-   *
-   * @param params - Validated recall arguments.
-   * @param options - Request cancellation.
-   * @returns {Promise<MemoryToolResult>} The serialized answer and normalized result details.
-   */
-  async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertCount(params.candidates, "Candidates");
-    assertCount(params.expand, "Expand");
-    const referenceDate = optionalString(params.referenceDate);
-    if (referenceDate !== undefined && !hasValidCalendarDate(referenceDate)) {
-      throw new Error("Recall reference date must contain a valid calendar date");
-    }
-    const profile = await getProfile(params);
-    const result = await requireCapability(profile, "recall")(params.query, {
-      thinkingLevel: params.thinkingLevel,
-      responseLength: params.responseLength,
-      referenceDate,
-      ...options,
-    });
-    /* A caller who names a cap ranks the tail themselves; otherwise the near-zero tail never reaches the result. */
-    const relevant =
-      params.candidates === undefined ? relevantCandidates(result.candidates) : result.candidates;
-    const shown = trimCandidates(relevant, keptCandidates(params, relevant));
-    const expanded = await expandCandidates(profile, shown, params.expand, options);
-    return {
-      content: [{ type: "text", text: recallText(params, result, relevant, shown, expanded) }],
-      details: {
-        ...result,
-        ...(result.answer ? { answerTrust: SERVICE_GENERATED_UNTRUSTED } : {}),
-        candidates: shown.map((candidate) =>
-          candidateKind(candidate) === "message" ? { ...candidate, kind: "message" } : candidate,
-        ),
-      },
-    };
-  },
-
-  /**
-   * List a page of memories, expanding the first entries on request.
-   *
-   * @param params - Validated listing and expansion arguments.
-   * @param options - Request cancellation.
-   * @returns {Promise<MemoryToolResult>} The serialized page and normalized pagination details.
-   */
-  async list(params: ListParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertCount(params.expand, "Expand");
-    const profile = await getProfile(params);
-    const result = await requireCapability(
-      profile,
-      "list",
-    )({
-      limit: params.limit,
-      cursor: optionalString(params.cursor),
-      sessionId: optionalString(params.sessionId),
-      type: params.type,
-      ...options,
-    });
-    const expanded = await readContents(
-      profile,
-      result.memories.slice(0, params.expand ?? 0).map((memory) => memory.id),
-      options,
-    );
-    const memories = result.memories.map((memory) =>
-      expanded.has(memory.id) ? { ...memory, content: expanded.get(memory.id) ?? null } : memory,
-    );
-    const page = paged({ ...result, memories });
-    return {
-      content: [{ type: "text", text: listText(params, memories, result.cursor) }],
-      details: page,
-    };
-  },
-
-  /**
-   * Read every requested memory, keeping first-seen order and per-id failures.
-   *
-   * When every read fails the call itself fails: a result that is nothing but
-   * error entries would hide the failure from clients that only check isError.
-   *
-   * @param params - Validated memory identifiers and profile scope.
-   * @param options - Request cancellation.
-   * @returns {Promise<MemoryToolResult>} The serialized records with per-id failures where applicable.
-   */
-  async get(params: GetParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    assertMemoryIds(params.memoryIds);
-    const profile = await getProfile(params);
-    const readings = await readMemories(profile, params.memoryIds, options);
-    const entries = [...readings.entries()];
-    const failed = entries.filter(
-      (entry): entry is [string, { error: unknown }] => "error" in entry[1],
-    );
-    if (failed.length === entries.length) {
-      const first = failed[0];
-      /** A single-id total failure keeps memory_delete's flat error shape instead of a one-entry listing. */
-      if (first && entries.length === 1) throw explainMissing(params, first[0], first[1].error);
-      throw new Error(
-        [
-          `Every read in ${memoryTarget(params)} failed:`,
-          ...failed.map(
-            ([id, { error }]) =>
-              `${singleLineToolText(id)}: ${describeReadError(params, id, error)}`,
-          ),
-        ].join("\n"),
+    async supersede(
+      params: SupersedeParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      assertRecallVisibility({
+        ...params,
+        memoryId: params.oldMemoryId,
+      });
+      const profile = await getProfile(backend, params);
+      const replacement = await requireCapability(profile, "remember")(
+        { content: params.content, sessionId: optionalString(params.sessionId) },
+        options,
       );
-    }
-    const memories = entries.map(([id, reading]) =>
-      "memory" in reading
-        ? reading.memory
-        : { id, error: describeReadError(params, id, reading.error) },
-    );
-    const header =
-      failed.length === 0
-        ? ""
-        : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => singleLineToolText(id)).join(", ")}.\n`;
-    return {
-      content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
-      details: { memories },
-    };
-  },
+      let verified: { memory: Memory; visibility: RecallVisibility };
+      try {
+        verified = await verifyReplacement(profile, replacement.id, params, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
+          { cause: error },
+        );
+      }
+      try {
+        await requireCapability(profile, "delete")(params.oldMemoryId, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Replacement memory ${quoteToolText(replacement.id)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
+          { cause: error },
+        );
+      }
+      const details = {
+        oldMemoryId: params.oldMemoryId,
+        newMemory: verified.memory,
+        ...verified.visibility,
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
+          },
+        ],
+        details,
+      };
+    },
 
-  async deleteMemory(params: MemoryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    const result = await requireCapability(profile, "delete")(params.memoryId, options).catch(
-      (error: unknown) => {
-        throw explainMissing(params, params.memoryId, error);
-      },
-    );
-    return {
-      content: [{ type: "text", text: json(withSummaryTrust(result)) }],
-      details: result as unknown as Record<string, unknown>,
-    };
-  },
+    async resumeSupersession(
+      params: Readonly<ResumeSupersessionParams>,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      assertRecallVisibility({ ...params, memoryId: params.oldMemoryId });
+      assertRecallVisibility({ ...params, memoryId: params.replacementMemoryId });
+      const profile = await getProfile(backend, params);
+      let verified: { memory: Memory; visibility: RecallVisibility };
+      try {
+        verified = await verifyReplacement(profile, params.replacementMemoryId, params, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Replacement memory ${quoteToolText(params.replacementMemoryId)} for old memory ${quoteToolText(params.oldMemoryId)} failed verification: ${quoteToolText(message)}. The old memory was not deleted; keep both ids for cleanup.`,
+          { cause: error },
+        );
+      }
+      try {
+        await requireCapability(profile, "delete")(params.oldMemoryId, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Replacement memory ${quoteToolText(params.replacementMemoryId)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
+          { cause: error },
+        );
+      }
+      const details = {
+        oldMemoryId: params.oldMemoryId,
+        newMemory: verified.memory,
+        ...verified.visibility,
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Resumed supersession of memory ${quoteToolText(params.oldMemoryId)} with replacement ${quoteToolText(params.replacementMemoryId)} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
+          },
+        ],
+        details,
+      };
+    },
 
-  async summary(params: SummaryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    const result = await requireCapability(
-      profile,
-      "getSummary",
-    )({
-      sessionId: optionalString(params.sessionId),
-      ...options,
-    });
-    const sessionId = optionalString(params.sessionId);
-    /** The service never narrows a summary to one session, so the header says which session it names instead. */
-    const scope =
-      sessionId === undefined
-        ? `Summary of ${memoryTarget(params)}, whole profile, current session chosen by the service:`
-        : `Summary of ${memoryTarget(params)}, whole profile, current session ${quoteToolText(sessionId)}:`;
-    const trust = `Summary (summaryTrust: "${SERVICE_GENERATED_UNTRUSTED}"; supporting memory ids unavailable, verify with memory_list or memory_recall)`;
-    return {
-      content: [{ type: "text", text: `${scope}\n\n${trust}:\n${indentToolText(result.summary)}` }],
-      details: { ...result, summaryTrust: SERVICE_GENERATED_UNTRUSTED },
-    };
-  },
-
-  async deleteSession(
-    params: SessionParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
-    const removed = await countMemories(profile, options, params.sessionId);
-    await requireCapability(profile, "deleteSession")(params.sessionId, options);
-    const sessionId = singleLineToolText(params.sessionId);
-    const text = emptyCascade(removed)
-      ? `No listed memory in ${memoryTarget(params)} carried session ${sessionId}; the delete removed only superseded memories tagged with it, if there were any. Check the session id against memory_list.`
-      : `Deleted session ${sessionId} in ${memoryTarget(params)}, holding ${removedText(removed)}.`;
-    return {
-      content: [{ type: "text", text }],
-      details: {
+    async waitForRecall(
+      params: RecallVisibilityParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      let visibility: RecallVisibility;
+      try {
+        visibility = await waitForRecallCandidate(profile, params, options);
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message} No memory was changed.`, { cause: error });
+      }
+      const { attempts, waitMilliseconds } = visibility;
+      const details = {
+        id: params.memoryId,
         namespace: params.namespace,
         profile: params.profile,
-        sessionId: params.sessionId,
-        listedMemories: removed?.count ?? null,
-        listedAtLeast: removed?.atLeast ?? null,
-      },
-    };
-  },
+        attempts,
+        waitMilliseconds,
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Memory ${quoteToolText(params.memoryId)} reached recall in ${memoryTarget(params)} after ${waitMilliseconds} ms and ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
+          },
+        ],
+        details,
+      };
+    },
 
-  async deleteProfile(
-    params: ProfileParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const provider = await getProvider(params.namespace);
-    if (!provider.deleteProfile) {
-      throw new Error("Memory provider does not support deleteProfile");
-    }
-    const removed = await countMemories(await getProfile(params), options);
-    await provider.deleteProfile(params.profile, options);
-    const text = emptyCascade(removed)
-      ? `Deleted profile ${memoryTarget(params)}, which held no listed memories; superseded ones, if there were any, went with it. A profile name that was never written to reports the same result.`
-      : `Deleted profile ${memoryTarget(params)}, holding ${removedText(removed)}.`;
-    return {
-      content: [{ type: "text", text }],
-      details: {
-        namespace: params.namespace,
-        profile: params.profile,
-        listedMemories: removed?.count ?? null,
-        listedAtLeast: removed?.atLeast ?? null,
-      },
-    };
-  },
-
-  async listNamespaces(
-    params: NamespaceListParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const result = await (
-      await getNamespaceClient()
-    ).list({
-      limit: params.limit,
-      cursor: optionalString(params.cursor),
-      order: params.order,
-      direction: params.direction,
-      ...options,
-    });
-    const page = paged(result);
-    return {
-      content: [{ type: "text", text: json(page) }],
-      details: page,
-    };
-  },
-
-  /**
-   * List one page of the profiles a namespace holds.
-   *
-   * @param params - Validated namespace and pagination arguments.
-   * @param options - Request cancellation.
-   * @returns {Promise<MemoryToolResult>} The serialized page, naming its namespace and whether another page waits.
-   */
-  async listProfiles(
-    params: ProfileListParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const result = await (
-      await getNamespaceClient()
-    ).listProfiles(params.namespace, {
-      limit: params.limit,
-      cursor: optionalString(params.cursor),
-      ...options,
-    });
-    const page = paged({ namespace: params.namespace, ...result });
-    return {
-      content: [{ type: "text", text: json(page) }],
-      details: page,
-    };
-  },
-
-  async getNamespace(
-    params: NamespaceParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const namespace = await (await getNamespaceClient()).get(params.namespace, options);
-    return {
-      content: [{ type: "text", text: json(namespace) }],
-      details: namespace as unknown as Record<string, unknown>,
-    };
-  },
-
-  async createNamespace(
-    params: NamespaceParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    const namespace = await (await getNamespaceClient()).create(params.namespace, options);
-    return {
-      content: [{ type: "text", text: json(namespace) }],
-      details: namespace as unknown as Record<string, unknown>,
-    };
-  },
-
-  async deleteNamespace(
-    params: NamespaceParams,
-    options: AbortOptions = {},
-  ): Promise<MemoryToolResult> {
-    await (await getNamespaceClient()).delete(params.namespace, options);
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Deleted namespace ${params.namespace} with every profile and memory it held.`,
+    async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      // Copy the modelled fields only: anything else the caller attached would be
+      // posted upstream under the account token without appearing in the schema.
+      const messages = params.messages.map((message) => {
+        const timestamp = optionalString(message.timestamp);
+        return {
+          role: message.role,
+          content: message.content,
+          ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
+        };
+      });
+      await requireCapability(profile, "ingest")(messages, {
+        sessionId: optionalString(params.sessionId),
+        ...options,
+      });
+      const sessionId = optionalString(params.sessionId);
+      /** The service answers with no session, so the text names the one it will derive when the caller passed none. */
+      const session =
+        sessionId === undefined
+          ? " with no session id; the service derives one from the message content, and memory_list shows it on the extracted memories as an id under the hash- prefix"
+          : ` in session ${singleLineToolText(sessionId)}`;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Submitted ${messages.length} messages for ingestion into ${memoryTarget(params)}${session}. Extraction runs asynchronously: memories appear in memory_list and memory_recall once it finishes, and the service decides how many memories the messages produce.`,
+          },
+        ],
+        details: {
+          namespace: params.namespace,
+          profile: params.profile,
+          messageCount: messages.length,
+          ...(sessionId === undefined ? {} : { sessionId }),
         },
-      ],
-      details: { namespace: params.namespace },
-    };
-  },
-};
+      };
+    },
+
+    /**
+     * Answer a recall query, trimming and expanding the candidates on request.
+     *
+     * @param params - Validated recall arguments.
+     * @param options - Request cancellation.
+     * @returns {Promise<MemoryToolResult>} The serialized answer and normalized result details.
+     */
+    async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      assertCount(params.candidates, "Candidates");
+      assertCount(params.expand, "Expand");
+      const referenceDate = optionalString(params.referenceDate);
+      if (referenceDate !== undefined && !hasValidCalendarDate(referenceDate)) {
+        throw new Error("Recall reference date must contain a valid calendar date");
+      }
+      const profile = await getProfile(backend, params);
+      const result = await requireCapability(profile, "recall")(params.query, {
+        thinkingLevel: params.thinkingLevel,
+        responseLength: params.responseLength,
+        referenceDate,
+        ...options,
+      });
+      /* A caller who names a cap ranks the tail themselves; otherwise the near-zero tail never reaches the result. */
+      const relevant =
+        params.candidates === undefined ? relevantCandidates(result.candidates) : result.candidates;
+      const shown = trimCandidates(relevant, keptCandidates(params, relevant));
+      const expanded = await expandCandidates(profile, shown, params.expand, options);
+      return {
+        content: [{ type: "text", text: recallText(params, result, relevant, shown, expanded) }],
+        details: {
+          ...result,
+          ...(result.answer ? { answerTrust: SERVICE_GENERATED_UNTRUSTED } : {}),
+          candidates: shown.map((candidate) =>
+            candidateKind(candidate) === "message" ? { ...candidate, kind: "message" } : candidate,
+          ),
+        },
+      };
+    },
+
+    /**
+     * List a page of memories, expanding the first entries on request.
+     *
+     * @param params - Validated listing and expansion arguments.
+     * @param options - Request cancellation.
+     * @returns {Promise<MemoryToolResult>} The serialized page and normalized pagination details.
+     */
+    async list(params: ListParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      assertCount(params.expand, "Expand");
+      const profile = await getProfile(backend, params);
+      const result = await requireCapability(
+        profile,
+        "list",
+      )({
+        limit: params.limit,
+        cursor: optionalString(params.cursor),
+        sessionId: optionalString(params.sessionId),
+        type: params.type,
+        ...options,
+      });
+      const expanded = await readContents(
+        profile,
+        result.memories.slice(0, params.expand ?? 0).map((memory) => memory.id),
+        options,
+      );
+      const memories = result.memories.map((memory) =>
+        expanded.has(memory.id) ? { ...memory, content: expanded.get(memory.id) ?? null } : memory,
+      );
+      const page = paged({ ...result, memories });
+      return {
+        content: [{ type: "text", text: listText(params, memories, result.cursor) }],
+        details: page,
+      };
+    },
+
+    /**
+     * Read every requested memory, keeping first-seen order and per-id failures.
+     *
+     * When every read fails the call itself fails: a result that is nothing but
+     * error entries would hide the failure from clients that only check isError.
+     *
+     * @param params - Validated memory identifiers and profile scope.
+     * @param options - Request cancellation.
+     * @returns {Promise<MemoryToolResult>} The serialized records with per-id failures where applicable.
+     */
+    async get(params: GetParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      assertMemoryIds(params.memoryIds);
+      const profile = await getProfile(backend, params);
+      const readings = await readMemories(profile, params.memoryIds, options);
+      const entries = [...readings.entries()];
+      const failed = entries.filter(
+        (entry): entry is [string, { error: unknown }] => "error" in entry[1],
+      );
+      if (failed.length === entries.length) {
+        const first = failed[0];
+        /** A single-id total failure keeps memory_delete's flat error shape instead of a one-entry listing. */
+        if (first && entries.length === 1) throw explainMissing(params, first[0], first[1].error);
+        throw new Error(
+          [
+            `Every read in ${memoryTarget(params)} failed:`,
+            ...failed.map(
+              ([id, { error }]) =>
+                `${singleLineToolText(id)}: ${describeReadError(params, id, error)}`,
+            ),
+          ].join("\n"),
+        );
+      }
+      const memories = entries.map(([id, reading]) =>
+        "memory" in reading
+          ? reading.memory
+          : { id, error: describeReadError(params, id, reading.error) },
+      );
+      const header =
+        failed.length === 0
+          ? ""
+          : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => singleLineToolText(id)).join(", ")}.\n`;
+      return {
+        content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
+        details: { memories },
+      };
+    },
+
+    async deleteMemory(
+      params: MemoryParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      const result = await requireCapability(profile, "delete")(params.memoryId, options).catch(
+        (error: unknown) => {
+          throw explainMissing(params, params.memoryId, error);
+        },
+      );
+      return {
+        content: [{ type: "text", text: json(withSummaryTrust(result)) }],
+        details: result as unknown as Record<string, unknown>,
+      };
+    },
+
+    async summary(params: SummaryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      const result = await requireCapability(
+        profile,
+        "getSummary",
+      )({
+        sessionId: optionalString(params.sessionId),
+        ...options,
+      });
+      const sessionId = optionalString(params.sessionId);
+      /** The service never narrows a summary to one session, so the header says which session it names instead. */
+      const scope =
+        sessionId === undefined
+          ? `Summary of ${memoryTarget(params)}, whole profile, current session chosen by the service:`
+          : `Summary of ${memoryTarget(params)}, whole profile, current session ${quoteToolText(sessionId)}:`;
+      const trust = `Summary (summaryTrust: "${SERVICE_GENERATED_UNTRUSTED}"; supporting memory ids unavailable, verify with memory_list or memory_recall)`;
+      return {
+        content: [
+          { type: "text", text: `${scope}\n\n${trust}:\n${indentToolText(result.summary)}` },
+        ],
+        details: { ...result, summaryTrust: SERVICE_GENERATED_UNTRUSTED },
+      };
+    },
+
+    async deleteSession(
+      params: SessionParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const profile = await getProfile(backend, params);
+      const removed = await countMemories(profile, options, params.sessionId);
+      await requireCapability(profile, "deleteSession")(params.sessionId, options);
+      const sessionId = singleLineToolText(params.sessionId);
+      const text = emptyCascade(removed)
+        ? `No listed memory in ${memoryTarget(params)} carried session ${sessionId}; the delete removed only superseded memories tagged with it, if there were any. Check the session id against memory_list.`
+        : `Deleted session ${sessionId} in ${memoryTarget(params)}, holding ${removedText(removed)}.`;
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          namespace: params.namespace,
+          profile: params.profile,
+          sessionId: params.sessionId,
+          listedMemories: removed?.count ?? null,
+          listedAtLeast: removed?.atLeast ?? null,
+        },
+      };
+    },
+
+    async deleteProfile(
+      params: ProfileParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const provider = await backend.provider(params.namespace);
+      if (!provider.deleteProfile) {
+        throw new Error("Memory provider does not support deleteProfile");
+      }
+      const removed = await countMemories(await getProfile(backend, params), options);
+      await provider.deleteProfile(params.profile, options);
+      const text = emptyCascade(removed)
+        ? `Deleted profile ${memoryTarget(params)}, which held no listed memories; superseded ones, if there were any, went with it. A profile name that was never written to reports the same result.`
+        : `Deleted profile ${memoryTarget(params)}, holding ${removedText(removed)}.`;
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          namespace: params.namespace,
+          profile: params.profile,
+          listedMemories: removed?.count ?? null,
+          listedAtLeast: removed?.atLeast ?? null,
+        },
+      };
+    },
+
+    async listNamespaces(
+      params: NamespaceListParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const result = await (
+        await backend.namespaces()
+      ).list({
+        limit: params.limit,
+        cursor: optionalString(params.cursor),
+        order: params.order,
+        direction: params.direction,
+        ...options,
+      });
+      const page = paged(result);
+      return {
+        content: [{ type: "text", text: json(page) }],
+        details: page,
+      };
+    },
+
+    /**
+     * List one page of the profiles a namespace holds.
+     *
+     * @param params - Validated namespace and pagination arguments.
+     * @param options - Request cancellation.
+     * @returns {Promise<MemoryToolResult>} The serialized page, naming its namespace and whether another page waits.
+     */
+    async listProfiles(
+      params: ProfileListParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const result = await (
+        await backend.namespaces()
+      ).listProfiles(params.namespace, {
+        limit: params.limit,
+        cursor: optionalString(params.cursor),
+        ...options,
+      });
+      const page = paged({ namespace: params.namespace, ...result });
+      return {
+        content: [{ type: "text", text: json(page) }],
+        details: page,
+      };
+    },
+
+    async getNamespace(
+      params: NamespaceParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const namespace = await (await backend.namespaces()).get(params.namespace, options);
+      return {
+        content: [{ type: "text", text: json(namespace) }],
+        details: namespace as unknown as Record<string, unknown>,
+      };
+    },
+
+    async createNamespace(
+      params: NamespaceParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      const namespace = await (await backend.namespaces()).create(params.namespace, options);
+      return {
+        content: [{ type: "text", text: json(namespace) }],
+        details: namespace as unknown as Record<string, unknown>,
+      };
+    },
+
+    async deleteNamespace(
+      params: NamespaceParams,
+      options: AbortOptions = {},
+    ): Promise<MemoryToolResult> {
+      await (await backend.namespaces()).delete(params.namespace, options);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Deleted namespace ${params.namespace} with every profile and memory it held.`,
+          },
+        ],
+        details: { namespace: params.namespace },
+      };
+    },
+  };
+}
+
+export type MemoryToolExecutors = ReturnType<typeof createMemoryToolExecutors>;

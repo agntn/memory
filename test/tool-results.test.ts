@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  memoryFieldDescriptions,
-  memoryToolExecutors,
-  memoryToolMeta,
-} from "../packages/shared/memory-tools.ts";
+import { memoryToolExecutors } from "../packages/shared/memory-api-backend.ts";
+import { memoryFieldDescriptions, memoryToolMeta } from "../packages/shared/memory-tools.ts";
 
 interface StubResponse {
   result?: unknown;

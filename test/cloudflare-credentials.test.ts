@@ -218,7 +218,7 @@ describe("memory tools with the cf OAuth session", () => {
       }),
     );
     vi.resetModules();
-    const { memoryToolExecutors } = await import("../packages/shared/memory-tools.ts");
+    const { memoryToolExecutors } = await import("../packages/shared/memory-api-backend.ts");
 
     await memoryToolExecutors.listNamespaces({});
     cf.token = "oauth-2";

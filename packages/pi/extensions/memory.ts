@@ -20,11 +20,8 @@ import {
   configuredPiMemoryScope,
   memorySessionId,
 } from "../../shared/memory-scope.ts";
-import {
-  memoryToolExecutors,
-  memoryToolMeta,
-  memoryToolProgress,
-} from "../../shared/memory-tools.ts";
+import { memoryToolMeta, memoryToolProgress } from "../../shared/memory-tools.ts";
+import { memoryToolExecutors } from "../../shared/memory-api-backend.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
 import {
   describeToolCall,
