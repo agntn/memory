@@ -1,3 +1,6 @@
+import type { execFile } from "node:child_process";
+import { vi } from "vitest";
+
 /**
  * Neutralize the host configuration this library reads from the environment.
  *
@@ -14,6 +17,7 @@ const hostEnvironment = [
   "PI_CODING_AGENT_DIR",
   "CLAUDE_PROJECT_DIR",
   "CLAUDE_CODE_SESSION_ID",
+  "AGNTN_CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
 ];
@@ -23,3 +27,18 @@ for (const name of hostEnvironment) delete process.env[name];
 // The Pi scope falls back to a file under the home directory, which delete
 // cannot neutralize, so point the agent directory somewhere that cannot exist.
 process.env.PI_CODING_AGENT_DIR = "/nonexistent/agntn-memory-tests";
+
+// Without an env token the memory tools ask the cf CLI for its OAuth session,
+// and a contributor logged in to cf would otherwise lend the suite a live
+// account token. A test that exercises that path supplies its own cf.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const notFound = Object.assign(new Error("spawn cf ENOENT"), { code: "ENOENT" });
+  return {
+    ...actual,
+    execFile: vi.fn(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error, stdout: string, stderr: string) => void;
+      queueMicrotask(() => callback(notFound, "", ""));
+    }) as unknown as typeof execFile),
+  };
+});

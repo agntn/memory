@@ -36,6 +36,8 @@
 
 The first provider follows the Cloudflare Agent Memory Workers and HTTP APIs documented on 2026-06-03. Agent Memory is private beta. Both binding and HTTP transports are supported. Keep validation limits aligned with current Cloudflare documentation, and prefer a limit you measured against the live API over one from the docs page.
 
+The tools take `CLOUDFLARE_API_TOKEN` first. Without it `packages/shared/cloudflare-credentials.ts` borrows the cf CLI's OAuth session: `cf auth whoami` refreshes an expired token and names the credentials file. The token rotates while a server runs, so cached clients are rebuilt when it changes. `test/setup.ts` mocks `execFile`, so the suite never borrows a contributor's login. The account comes only from `AGNTN_CLOUDFLARE_ACCOUNT_ID`: `CLOUDFLARE_ACCOUNT_ID` belongs to cf and wrangler and is never read.
+
 ## Commands
 
 - `pnpm fmt`

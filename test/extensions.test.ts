@@ -361,7 +361,7 @@ describe("memory extensions", () => {
 
   it("selects the Cloudflare namespace independently for every tool call", async () => {
     const urls: string[] = [];
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -405,7 +405,7 @@ describe("memory extensions", () => {
 
   it("ignores empty optional strings emitted by an extension host", async () => {
     const urls: string[] = [];
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -582,7 +582,7 @@ describe("memory tool renderers", () => {
 
 describe("OMP execution errors", () => {
   it("keeps the network cause in a thrown failure", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",

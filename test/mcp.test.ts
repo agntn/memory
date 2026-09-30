@@ -109,7 +109,7 @@ describe("memory MCP server", () => {
   });
 
   it("executes the recall visibility check through the shared MCP path", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const bodies: unknown[] = [];
     vi.stubGlobal(
@@ -155,7 +155,7 @@ describe("memory MCP server", () => {
   });
 
   it("stores and verifies a replacement before deleting the old memory", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const requests: Array<{ url: string; method: string; body?: unknown }> = [];
     vi.stubGlobal(
@@ -234,7 +234,7 @@ describe("memory MCP server", () => {
   });
 
   it("resumes a supersession through MCP without another write", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const requests: Array<{ url: string; method: string }> = [];
     vi.stubGlobal(
@@ -308,7 +308,7 @@ describe("memory MCP server", () => {
 
   it("keeps a long recall wait alive with MCP progress", async () => {
     vi.useFakeTimers();
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const startedAt = performance.now();
     let recalls = 0;
@@ -379,7 +379,7 @@ describe("memory MCP server", () => {
   });
 
   it("gives the outbound request the caller's cancellation signal", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const signals: Array<AbortSignal | null | undefined> = [];
     vi.stubGlobal(
@@ -401,7 +401,7 @@ describe("memory MCP server", () => {
   });
 
   it("binds operational tools to configured scope and harness session", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
@@ -467,7 +467,7 @@ describe("memory MCP server", () => {
   });
 
   it("falls back to the Grok session when no Claude session is in the environment", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
@@ -517,7 +517,7 @@ describe("memory MCP server", () => {
 
   it("executes a tool against the configured Cloudflare namespace", async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -674,7 +674,7 @@ describe("memory MCP server", () => {
   });
 
   it("includes the network cause in an executor failure", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const networkCause = new Error("getaddrinfo ENOTFOUND api.cloudflare.com");
     vi.stubGlobal(
@@ -704,7 +704,7 @@ describe("memory MCP server", () => {
   });
 
   it("does not serialize fields from non-Error failure causes", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubGlobal(
       "fetch",
@@ -731,7 +731,7 @@ describe("memory MCP server", () => {
   });
 
   it("reports an executor failure as a tool error", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
     const client = await connectTestClient();
 

@@ -9,6 +9,7 @@ import type {
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
+import { type CloudflareCredentials, getCloudflareCredentials } from "./cloudflare-credentials.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { toolErrorMessage } from "./tool-errors.ts";
@@ -39,6 +40,7 @@ let namespaceClientPromise:
   | Promise<InstanceType<MemoryModule["CloudflareNamespaceClient"]>>
   | undefined;
 const providerPromises = new Map<string, Promise<MemoryProvider>>();
+let credentialsKey: string | undefined;
 
 export const MAX_TOOL_LIST_LIMIT = 100;
 
@@ -279,13 +281,22 @@ function loadMemory(): Promise<MemoryModule> {
   return memoryModulePromise;
 }
 
-function getCredentials(): { accountId: string; apiToken: string } {
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !apiToken) {
-    throw new Error("Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN");
+/**
+ * Resolve credentials and drop clients built for a token that is gone.
+ *
+ * A cf OAuth token rotates while the process lives, and every cached client
+ * carries the token it was built with.
+ * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
+ */
+async function getCredentials(): Promise<CloudflareCredentials> {
+  const credentials = await getCloudflareCredentials();
+  const key = `${credentials.accountId}\n${credentials.apiToken}`;
+  if (key !== credentialsKey) {
+    credentialsKey = key;
+    namespaceClientPromise = undefined;
+    providerPromises.clear();
   }
-  return { accountId, apiToken };
+  return credentials;
 }
 
 function optionalString(value: string | undefined): string | undefined {
@@ -331,19 +342,17 @@ function messageTimestamp(value: string): Date {
 async function getNamespaceClient(): Promise<
   InstanceType<MemoryModule["CloudflareNamespaceClient"]>
 > {
-  if (!namespaceClientPromise) {
-    const credentials = getCredentials();
-    namespaceClientPromise = loadMemory().then(
-      (memory) => new memory.CloudflareNamespaceClient(credentials),
-    );
-  }
+  const credentials = await getCredentials();
+  namespaceClientPromise ??= loadMemory().then(
+    (memory) => new memory.CloudflareNamespaceClient(credentials),
+  );
   return namespaceClientPromise;
 }
 
 async function getProvider(namespace: string): Promise<MemoryProvider> {
+  const credentials = await getCredentials();
   let providerPromise = providerPromises.get(namespace);
   if (!providerPromise) {
-    const credentials = getCredentials();
     providerPromise = loadMemory().then((memory) => {
       memory.registerAll();
       return memory.create<CloudflareMemoryOptions>("cloudflare", {
