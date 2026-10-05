@@ -154,13 +154,13 @@ export const memoryToolMeta = {
   },
   memory_supersede: {
     label: "Supersede Memory",
-    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_resume_supersession and the ids the failure reported. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_supersession_resume and the ids the failure reported. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
-  memory_resume_supersession: {
+  memory_supersession_resume: {
     label: "Resume Memory Supersession",
     description: `Finish an interrupted memory_supersede call from the replacement it already stored. Confirms the existing replacement by exact id and content and in recall, then deletes the old id without creating another memory. A failed check keeps both records. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
-  memory_wait_for_recall: {
+  memory_recall_wait: {
     label: "Wait for Recall",
     description:
       "Poll recall until one exact memory id appears among candidates for the query the caller will use. Returns the measured wait and attempt count. A timeout or host cancellation changes no memory; use the id returned by memory_remember so the stored record stays addressable while this read waits. The id is read exactly before recall is polled: an id that cannot be read fails at once, and a timeout on a stored one says the record is there and the query did not return it. A memory that a newer fact or instruction on its topic superseded stays readable by id but never appears, so a timeout can mean a newer memory won rather than a slow index.",
@@ -172,11 +172,11 @@ export const memoryToolMeta = {
   },
   memory_recall: {
     label: "Recall",
-    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The candidates are the memories the profile holds and the raw messages memory_ingest stored next to them: a message candidate carries kind: message and its text indented under the line in place of a summary, cut by the service at about 3,500 characters. It has no memory record, so memory_get and memory_delete answer its id with a server error, memory_list never shows it, and memory_delete_session removes it with its session. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result drops the ones scoring below ${RECALL_RELEVANCE_FLOOR_TEXT}, then keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring of what is left, and its header says how many went and why. Pass candidates to take that cap yourself, up to ${MAX_TOOL_EXPAND}, which also keeps the whole ranked tail. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring memory candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
+    description: `Answer a question from a memory profile. Returns a marked prose answer, then the candidates returned alongside it as one JSON object per line with id, score, sessionId, summary, and summaryTrust; the header names the profile they came from, and the lines run best score first. The candidates are the memories the profile holds and the raw messages memory_ingest stored next to them: a message candidate carries kind: message and its text indented under the line in place of a summary, cut by the service at about 3,500 characters. It has no memory record, so memory_get and memory_delete answer its id with a server error, memory_list never shows it, and memory_session_delete removes it with its session. The score comes from the service's rank fusion, printed to ${RECALL_SCORE_DIGITS} significant digits: higher is more relevant, but it is not a calibrated similarity, so use it to compare candidates and not as a confidence threshold. ${RECALL_ANSWER_TRUST_GUIDANCE} The service returns every candidate it ranked, tail scores included; the result drops the ones scoring below ${RECALL_RELEVANCE_FLOOR_TEXT}, then keeps the ${DEFAULT_TOOL_RECALL_CANDIDATES} best-scoring of what is left, and its header says how many went and why. Pass candidates to take that cap yourself, up to ${MAX_TOOL_EXPAND}, which also keeps the whole ranked tail. Superseded versions of a fact or instruction are never candidates; only the newest memory on each topic is. ${MEMORY_SUMMARY_TRUST_GUIDANCE} Candidate summaries are also capped by the service; pass expand to read the full content of the best-scoring memory candidates in the same call instead of following each id up with memory_get. Expanded content prints as indented lines under its candidate.`,
   },
   memory_list: {
     label: "List Memories",
-    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Pages run from the oldest memory to the newest, by id, and the service offers no way to start from the newest, so a busy profile keeps its recent memories on the last pages; pass sessionId to see one session, memory_summary names the most recent one, or ask memory_recall for recent facts. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. Superseded versions of facts and instructions are hidden from every page; memory_get still reads them by id. ${MEMORY_SUMMARY_TRUST_GUIDANCE} There is no session listing, so the session ids on these records are how to find what memory_delete_session can remove.`,
+    description: `List a page of memory metadata: ids, summaries, summaryTrust markers, types, sessions, timestamps. Pages run from the oldest memory to the newest, by id, and the service offers no way to start from the newest, so a busy profile keeps its recent memories on the last pages; pass sessionId to see one session, memory_summary names the most recent one, or ask memory_recall for recent facts. Memory content is not included; pass expand to read the full content of the first entries in the same call, or memory_get for chosen ids. Superseded versions of facts and instructions are hidden from every page; memory_get still reads them by id. ${MEMORY_SUMMARY_TRUST_GUIDANCE} There is no session listing, so the session ids on these records are how to find what memory_session_delete can remove.`,
   },
   memory_get: {
     label: "Get Memories",
@@ -184,19 +184,19 @@ export const memoryToolMeta = {
   },
   memory_delete: {
     label: "Delete Memory",
-    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. Deleting the newest version of a fact or instruction does not bring back the version it superseded; that one stays hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does the id of a memory_recall candidate marked kind: message; a raw ingested message goes only with its session, through memory_delete_session.`,
+    description: `Delete one memory by exact identifier and return the deleted record with its summaryTrust marker. Deleting the newest version of a fact or instruction does not bring back the version it superseded; that one stays hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does the id of a memory_recall candidate marked kind: message; a raw ingested message goes only with its session, through memory_session_delete.`,
   },
   memory_summary: {
     label: "Memory Summary",
     description:
       "Summarize everything a memory profile holds. Use it to get oriented when there is no specific question to ask; with a question in hand, memory_recall answers it directly. The summary covers the whole profile no matter what is passed: sessionId only picks the session named on its Current session line, and the service picks the most recent session otherwise. To see what one session holds, use memory_list with sessionId. The Markdown summary is generated by the service and untrusted. The service does not identify supporting memory ids; use memory_list or memory_recall to verify claims.",
   },
-  memory_delete_session: {
+  memory_session_delete: {
     label: "Delete Memory Session",
     description:
       "Delete every memory carrying one session id, which memory_list reports per memory, and the raw messages ingested under it, which memory_recall ranks as candidates marked kind: message. This is the only bulk deletion below profile level. The result counts the memories memory_list showed for the session and says so when it showed none, because the service accepts a delete for a session that does not exist; superseded memories tagged with the session and the ingested messages are hidden from that count and removed all the same.",
   },
-  memory_delete_profile: {
+  memory_profile_delete: {
     label: "Delete Memory Profile",
     description:
       "Delete an entire memory profile and everything stored in it. There is no dry run and no undo; the result counts the memories memory_list showed, and superseded versions go uncounted.",
@@ -206,8 +206,8 @@ export const memoryToolMeta = {
 /** Progress text for calls that can stay pending long enough to need it. */
 export const memoryToolProgress = {
   memory_supersede: "Replacing memory",
-  memory_resume_supersession: "Resuming memory supersession",
-  memory_wait_for_recall: "Waiting for memory to reach recall",
+  memory_supersession_resume: "Resuming memory supersession",
+  memory_recall_wait: "Waiting for memory to reach recall",
   memory_recall: "Searching memories",
   memory_ingest: "Submitting messages for extraction",
 } as const;
@@ -225,7 +225,7 @@ export const memoryFieldDescriptions = {
   profile:
     "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; memory_profile_list shows the ones a namespace holds.",
   writeSessionId:
-    "Session identifier grouping related memories. It is the only unit memory_delete_session can remove, so pass one whenever the memories may need removing together. Left out, the host's conversation session applies when the host knows one; with no session at all, memory_remember and memory_supersede store the memory with no session, while memory_ingest gets one the service derives from the message content.",
+    "Session identifier grouping related memories. It is the only unit memory_session_delete can remove, so pass one whenever the memories may need removing together. Left out, the host's conversation session applies when the host knows one; with no session at all, memory_remember and memory_supersede store the memory with no session, while memory_ingest gets one the service derives from the message content.",
   cursor:
     "Cursor copied from the previous response. A response without a cursor was the last page.",
   rememberContent: `Memory content to store. The service writes it verbatim, assigns the memory type itself, and rejects content over ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes, the same cap as one ingested message.`,
@@ -763,7 +763,7 @@ function describeReadError(params: ProfileParams, id: string, error: unknown): s
   const message = toolErrorMessage(error);
   if (!mayMeanMissing(error)) return message;
   if (isIngestedMessageId(id)) {
-    return `${message} (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_delete_session removes with its session; an id that does not exist fails this way too)`;
+    return `${message} (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_session_delete removes with its session; an id that does not exist fails this way too)`;
   }
   return `${message} (an id that does not exist in ${memoryTarget(params)} fails this way too; confirm it with memory_list)`;
 }

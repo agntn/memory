@@ -51,16 +51,16 @@ const expectedToolNames = [
   "memory_profile_list",
   "memory_remember",
   "memory_supersede",
-  "memory_resume_supersession",
-  "memory_wait_for_recall",
+  "memory_supersession_resume",
+  "memory_recall_wait",
   "memory_ingest",
   "memory_recall",
   "memory_list",
   "memory_get",
   "memory_delete",
   "memory_summary",
-  "memory_delete_session",
-  "memory_delete_profile",
+  "memory_session_delete",
+  "memory_profile_delete",
 ];
 
 // Packages Pi hands its extensions. A copy in "dependencies" can bypass the
@@ -197,7 +197,7 @@ try {
   // A write without a caller session still carries the harness-derived one.
   assert.match(rememberRequest.body.sessionId, /^omp-[a-z0-9-]+-[0-9a-f]{16}$/);
 
-  const visible = await ompTools.get("memory_wait_for_recall").execute("packed-wait", {
+  const visible = await ompTools.get("memory_recall_wait").execute("packed-wait", {
     namespace: "packed",
     profile: "agent",
     memoryId: memoryResult.id,

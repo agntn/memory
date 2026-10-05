@@ -121,13 +121,13 @@ describe("supersession", () => {
     for (const name of [
       "memory_remember",
       "memory_supersede",
-      "memory_wait_for_recall",
+      "memory_recall_wait",
       "memory_recall",
       "memory_list",
       "memory_get",
       "memory_delete",
-      "memory_delete_session",
-      "memory_delete_profile",
+      "memory_session_delete",
+      "memory_profile_delete",
       "memory_ingest",
     ] as const) {
       expect(memoryToolMeta[name].description, name).toMatch(/supersed/i);
@@ -145,7 +145,7 @@ describe("memory summary trust", () => {
     for (const name of [
       "memory_remember",
       "memory_supersede",
-      "memory_resume_supersession",
+      "memory_supersession_resume",
       "memory_recall",
       "memory_list",
       "memory_get",
@@ -1568,7 +1568,7 @@ describe("recall message candidates", () => {
         memoryIds: [messageId],
       }),
     ).rejects.toThrow(
-      "An error occurred processing your request. (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_delete_session removes with its session; an id that does not exist fails this way too)",
+      "An error occurred processing your request. (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_session_delete removes with its session; an id that does not exist fails this way too)",
     );
     await expect(
       memoryToolExecutors.deleteMemory({
@@ -1585,7 +1585,7 @@ describe("recall message candidates", () => {
     );
     expect(memoryToolMeta.memory_get.description).toContain("kind: message");
     expect(memoryToolMeta.memory_delete.description).toContain("kind: message");
-    expect(memoryToolMeta.memory_delete_session.description).toContain(
+    expect(memoryToolMeta.memory_session_delete.description).toContain(
       "the raw messages ingested under it",
     );
     expect(memoryToolMeta.memory_ingest.description).toContain(

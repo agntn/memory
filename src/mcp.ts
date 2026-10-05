@@ -160,7 +160,7 @@ function createTools(): MemoryToolDefinition[] {
         ),
     },
     {
-      name: "memory_resume_supersession",
+      name: "memory_supersession_resume",
       inputSchema: operationalSchemas.resumeSupersessionParameters,
       annotations: supersedeAnnotations,
       execute: (args, options) =>
@@ -170,7 +170,7 @@ function createTools(): MemoryToolDefinition[] {
         ),
     },
     {
-      name: "memory_wait_for_recall",
+      name: "memory_recall_wait",
       inputSchema: operationalSchemas.recallVisibilityParameters,
       annotations: readAnnotations,
       execute: (args, options) =>
@@ -228,7 +228,7 @@ function createTools(): MemoryToolDefinition[] {
         memoryToolExecutors.summary(operationalParams(args as object) as SummaryParams, options),
     },
     {
-      name: "memory_delete_session",
+      name: "memory_session_delete",
       inputSchema: operationalSchemas.sessionParameters,
       annotations: destructiveAnnotations,
       execute: (args, options) =>
@@ -238,7 +238,7 @@ function createTools(): MemoryToolDefinition[] {
         ),
     },
     {
-      name: "memory_delete_profile",
+      name: "memory_profile_delete",
       inputSchema: profileOnlyParameters,
       annotations: destructiveAnnotations,
       execute: (args, options) => memoryToolExecutors.deleteProfile(args as ProfileParams, options),
@@ -268,12 +268,12 @@ function progressSpec(
   timeoutSeconds: unknown,
 ): { message: string; total: number } | undefined {
   const message =
-    name === "memory_wait_for_recall"
-      ? memoryToolProgress.memory_wait_for_recall
+    name === "memory_recall_wait"
+      ? memoryToolProgress.memory_recall_wait
       : name === "memory_supersede"
         ? memoryToolProgress.memory_supersede
-        : name === "memory_resume_supersession"
-          ? memoryToolProgress.memory_resume_supersession
+        : name === "memory_supersession_resume"
+          ? memoryToolProgress.memory_supersession_resume
           : undefined;
   if (message === undefined || typeof timeoutSeconds !== "number") return undefined;
   return { message, total: timeoutSeconds * 1_000 };
