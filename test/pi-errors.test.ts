@@ -1,6 +1,6 @@
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
 const context = {
   cwd: "/workspace/memory-test",
   sessionManager: { getSessionId: () => "test-session" },
-} as ExtensionContext;
+} as ExtensionToolContext;
 
 function tools(): Pick<ToolDefinition, "name" | "execute">[] {
   const registered: Pick<ToolDefinition, "name" | "execute">[] = [];
