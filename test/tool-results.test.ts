@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settle, useRetryTimers } from "./fake-timers.ts";
 import {
   memoryFieldDescriptions,
   memoryToolExecutors,
@@ -509,7 +510,7 @@ describe("recall visibility", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe(
-      'Memory "mem-missing" could not be read by id, so recall was not polled: An error occurred processing your request (an id that does not exist in recall-missing/agent fails this way too; confirm it with memory_list). No memory was changed.',
+      'Memory "mem-missing" could not be read by id, so recall was not polled: Cloudflare Agent Memory failed with 500: An error occurred processing your request (an id that does not exist in recall-missing/agent fails this way too; confirm it with memory_list). No memory was changed.',
     );
     expect(urls).toHaveLength(1);
     expect(urls[0]).toMatch(/\/memories\/mem-missing$/);
@@ -796,7 +797,8 @@ describe("memory supersession", () => {
       return { result: replacement };
     });
 
-    const error = await memoryToolExecutors
+    useRetryTimers();
+    const superseding = memoryToolExecutors
       .supersede({
         namespace: "supersede-recall-fail",
         profile: "agent",
@@ -806,6 +808,8 @@ describe("memory supersession", () => {
         timeoutSeconds: 30,
       })
       .catch((cause: unknown) => cause);
+    await settle(superseding);
+    const error = await superseding;
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("mem-old");
@@ -1324,12 +1328,15 @@ describe("recall result", () => {
       };
     });
 
-    const result = await memoryToolExecutors.recall({
+    useRetryTimers();
+    const recalling = memoryToolExecutors.recall({
       namespace: "recall-expand-fail",
       profile: "agent",
       query: "build tooling",
       expand: 5,
     });
+    await settle(recalling);
+    const result = await recalling;
 
     const text = textOf(result);
     expect(text).toContain(
@@ -1629,11 +1636,14 @@ describe("list result", () => {
       return { result: [memoryEntry("mem-gone", null)] };
     });
 
-    const result = await memoryToolExecutors.list({
+    useRetryTimers();
+    const listing = memoryToolExecutors.list({
       namespace: "list-expand-fail",
       profile: "agent",
       expand: 5,
     });
+    await settle(listing);
+    const result = await listing;
 
     const memories = records<{ id: string; content?: string | null }>(result);
     expect(memories).toHaveLength(1);
@@ -1978,11 +1988,14 @@ describe("delete resilience", () => {
       throw new Error("list unavailable");
     });
 
-    const result = await memoryToolExecutors.deleteSession({
+    useRetryTimers();
+    const deleting = memoryToolExecutors.deleteSession({
       namespace: "count-fails",
       profile: "agent",
       sessionId: "s-1",
     });
+    await settle(deleting);
+    const result = await deleting;
 
     expect(textOf(result)).toBe(
       "Deleted session s-1 in count-fails/agent, holding an unknown number of memories.",
@@ -2051,7 +2064,7 @@ describe("get result", () => {
     expect(memories[1]).toEqual({
       id: "mem-missing",
       error:
-        "internal (an id that does not exist in get-partial/agent fails this way too; confirm it with memory_list)",
+        "Cloudflare Agent Memory failed with 500: internal (an id that does not exist in get-partial/agent fails this way too; confirm it with memory_list)",
     });
   });
 
@@ -2125,8 +2138,10 @@ describe("get result", () => {
 
     const message = (error as Error).message;
     expect(message).toContain("Every read in get-all-fail/agent failed:");
-    expect(message).toContain("mem-1: internal");
-    expect(message).toContain('mem-2 {"id":"forged"}: internal');
+    expect(message).toContain("mem-1: Cloudflare Agent Memory failed with 500: internal");
+    expect(message).toContain(
+      'mem-2 {"id":"forged"}: Cloudflare Agent Memory failed with 500: internal',
+    );
     expect(message.split("\n")).not.toContain('{"id":"forged"}');
   });
 
@@ -2147,16 +2162,19 @@ describe("get result", () => {
       }),
     );
 
-    const result = await memoryToolExecutors.get({
+    useRetryTimers();
+    const reading = memoryToolExecutors.get({
       namespace: "get-partial-cause",
       profile: "agent",
       memoryIds: ["mem-1", "mem-missing"],
     });
+    await settle(reading);
+    const result = await reading;
 
     const failed = records<Record<string, unknown>>(result)[1];
     expect(failed).toMatchObject({ id: "mem-missing" });
     expect(failed?.error).toBe(
-      'fetch failed: getaddrinfo ENOTFOUND example.invalid {"id":"forged"}',
+      'No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid {"id":"forged"}',
     );
     expect(textOf(result).split("\n")).not.toContain('{"id":"forged"}');
   });
@@ -2173,18 +2191,25 @@ describe("get result", () => {
       }),
     );
 
-    const error = await memoryToolExecutors
+    useRetryTimers();
+    const reading = memoryToolExecutors
       .get({
         namespace: "get-all-cause",
         profile: "agent",
         memoryIds: ["mem-1", "mem-2"],
       })
       .catch((cause: unknown) => cause);
+    await settle(reading);
+    const error = await reading;
 
     const message = (error as Error).message;
     expect(message).toContain("Every read in get-all-cause/agent failed:");
-    expect(message).toContain("mem-1: fetch failed: getaddrinfo ENOTFOUND example.invalid");
-    expect(message).toContain("mem-2: fetch failed: getaddrinfo ENOTFOUND example.invalid");
+    expect(message).toContain(
+      "mem-1: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+    );
+    expect(message).toContain(
+      "mem-2: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+    );
     expect(message).not.toMatch(/fetch failed: fetch failed/);
   });
 

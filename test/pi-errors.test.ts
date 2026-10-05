@@ -4,6 +4,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settle, useRetryTimers } from "./fake-timers.ts";
 import memoryExtension from "../packages/pi/extensions/memory.ts";
 import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
 
@@ -25,6 +26,7 @@ function tools(): Pick<ToolDefinition, "name" | "execute">[] {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -40,9 +42,12 @@ describe("Pi execution errors", () => {
     });
     const tool = tools().find((candidate) => candidate.name === "memory_namespace_list");
     if (!tool) throw new Error("Missing namespace list tool");
-    await expect(tool.execute("call-1", {}, undefined, undefined, context)).rejects.toThrow(
-      "fetch failed: DNS   failed",
-    );
+    useRetryTimers();
+    const execution = tool
+      .execute("call-1", {}, undefined, undefined, context)
+      .catch((failure: unknown) => failure);
+    await settle(execution);
+    expect(String(await execution)).toContain("fetch failed: DNS   failed");
   });
 
   it("passes cancellation through to fetch", async () => {
@@ -124,11 +129,15 @@ describe("Pi execution errors", () => {
     );
     expect(toolErrorMessage({ apiToken: "do-not-leak" })).toBe("Unknown error");
   });
+  const unreachable = "No complete answer came back from Cloudflare Agent Memory";
+  const readFailure = `${unreachable} after 3 attempts, which usually passes, so try the call again later`;
+  const writeFailure = `${unreachable}, and a write that fails this way may still have landed, so repeat it only once a read shows it did not`;
   it.each([
-    ["memory_namespace_list", {}],
-    ["memory_remember", { content: "synthetic" }],
-    ["memory_recall", { query: "synthetic" }],
-  ])("keeps the network cause in %s without retrying", async (name, params) => {
+    ["memory_namespace_list", {}, readFailure, 3],
+    ["memory_remember", { content: "synthetic" }, writeFailure, 1],
+    ["memory_recall", { query: "synthetic" }, readFailure, 3],
+  ])("keeps the network cause in %s", async (name, params, failure, calls) => {
+    useRetryTimers();
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const fetch = vi.fn(async () => {
@@ -140,15 +149,21 @@ describe("Pi execution errors", () => {
     const tool = tools().find((candidate) => candidate.name === name);
     if (!tool) throw new Error(`Missing tool: ${name}`);
 
-    await expect(
-      tool.execute(
+    const execution = tool
+      .execute(
         "call-1",
         { namespace: "test", profile: "agent", ...params },
         new AbortController().signal,
         undefined,
         context,
-      ),
-    ).rejects.toThrow("fetch failed: getaddrinfo ENOTFOUND example.invalid");
-    expect(fetch).toHaveBeenCalledTimes(1);
+      )
+      .catch((cause: unknown) => cause);
+    await settle(execution);
+
+    expect(await execution).toHaveProperty(
+      "message",
+      `${failure}: fetch failed: getaddrinfo ENOTFOUND example.invalid`,
+    );
+    expect(fetch).toHaveBeenCalledTimes(calls);
   });
 });

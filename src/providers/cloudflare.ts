@@ -4,6 +4,8 @@ import {
   MemoryInputError,
   MemoryNotFoundError,
   MemoryRateLimitError,
+  MemoryServerError,
+  MemoryNetworkError,
   normalizeMemoryError,
 } from "../errors.ts";
 import { MemoryProfile, MemoryProvider } from "../memory.ts";
@@ -134,6 +136,13 @@ const MAX_HTTP_LIST_LIMIT = 500;
 const MAX_NAMESPACE_LIST_LIMIT = 1000;
 /** The profiles endpoint shares the memories cap and answers 501 with the same 400. */
 const MAX_PROFILE_LIST_LIMIT = 500;
+/** A read gets three tries, 250 ms and then 500 ms apart, before its failure reaches the caller. */
+const READ_ATTEMPTS = 3;
+const READ_RETRY_DELAY_MS = 250;
+/** The 5xx answers a read does not try again on. */
+const READ_RETRY_EXCEPT: readonly number[] = [];
+/** An unknown memory id answers 500, so a read by id leaves that one alone. */
+const READ_BY_ID_RETRY_EXCEPT: readonly number[] = [500];
 
 /** Input limits this provider enforces, so tool schemas can publish the same bounds. */
 export const cloudflareMemoryLimits = Object.freeze({
@@ -521,11 +530,11 @@ function parseProfiles(value: unknown): CloudflareProfile[] {
   return value.map(parseProfile);
 }
 
-async function cloudflareResponseBody(response: Response): Promise<unknown> {
+function parseResponseBody(text: string, response: Response): unknown {
   try {
-    return await response.json();
+    return JSON.parse(text);
   } catch (error) {
-    if (!response.ok && error instanceof SyntaxError) return null;
+    if (!response.ok) return null;
     throw responseError(
       `Cloudflare Agent Memory returned invalid JSON (${response.status})`,
       response.status,
@@ -538,15 +547,53 @@ function responseMessage(value: unknown): string | undefined {
   return isUnknownRecord(value) && typeof value.message === "string" ? value.message : undefined;
 }
 
-function throwCloudflareResponseError(body: unknown, response: Response): never {
+/** How many tries a request got, and whether it was a read the client may repeat. */
+interface RequestAttempts {
+  count: number;
+  read: boolean;
+}
+
+const WRITE_FAILURE_NOTE =
+  "a write that fails this way may still have landed, so repeat it only once a read shows it did not";
+
+const PASSING_FAILURE_NOTE = "which usually passes, so try the call again later";
+
+function serverFailureText(status: number, attempts: Readonly<RequestAttempts>): string {
+  const failed = `Cloudflare Agent Memory failed with ${status}`;
+  if (!attempts.read) return `${failed}, and ${WRITE_FAILURE_NOTE}`;
+  if (attempts.count === 1) return failed;
+  return `${failed} after ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
+}
+
+function networkFailureText(attempts: Readonly<RequestAttempts>): string {
+  const failed = "No complete answer came back from Cloudflare Agent Memory";
+  if (!attempts.read) return `${failed}, and ${WRITE_FAILURE_NOTE}`;
+  if (attempts.count === 1) return failed;
+  return `${failed} after ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
+}
+
+function responseMessages(body: unknown): string[] {
   const errors: unknown[] = isUnknownRecord(body) && Array.isArray(body.errors) ? body.errors : [];
-  const messages = errors.flatMap((error) => {
+  return errors.flatMap((error) => {
     const message = responseMessage(error);
     return message === undefined ? [] : [message];
   });
+}
+
+function throwCloudflareResponseError(
+  body: unknown,
+  response: Response,
+  attempts: Readonly<RequestAttempts>,
+): never {
+  const messages = responseMessages(body);
+  const options = { provider: "cloudflare" };
+  if (response.status >= 500) {
+    const text = serverFailureText(response.status, attempts);
+    const message = messages.length === 0 ? text : `${text}: ${messages.join("; ")}`;
+    throw new MemoryServerError(message, response.status, options);
+  }
   const message =
     messages.join("; ") || `Cloudflare Agent Memory request failed (${response.status})`;
-  const options = { provider: "cloudflare" };
   if (response.status === 401 || response.status === 403) {
     throw new MemoryAuthError(message, response.status, options);
   }
@@ -559,17 +606,66 @@ function throwCloudflareResponseError(body: unknown, response: Response): never 
   throw new MemoryHttpError(message, response.status, options);
 }
 
-function requireCloudflareEnvelope(value: unknown, response: Response): Record<string, unknown> {
-  if (!response.ok) throwCloudflareResponseError(value, response);
+function requireEnvelopeShape(value: unknown, response: Response): Record<string, unknown> {
   if (!isUnknownRecord(value) || typeof value.success !== "boolean") {
     throw responseError(
       "Cloudflare Agent Memory returned an invalid response envelope",
       response.status,
     );
   }
-  if (!value.success) throwCloudflareResponseError(value, response);
   return value;
 }
+
+/**
+ * Turn a 2xx body nobody can read into an error that says the write behind it may have landed.
+ * @param error - What reading the body threw.
+ * @param response - The 2xx answer to the write.
+ * @returns {MemoryHttpError} The same failure with the write note and the original as its cause.
+ */
+function unreadableWriteAnswer(error: unknown, response: Response): MemoryHttpError {
+  return new MemoryHttpError(
+    `Cloudflare Agent Memory answered the write with ${response.status} and a body it could not read, and ${WRITE_FAILURE_NOTE}`,
+    response.status,
+    { provider: "cloudflare", cause: error },
+  );
+}
+
+/**
+ * Wait between two tries of a read, and stop waiting the moment the caller aborts.
+ * @param milliseconds - How long to wait.
+ * @param signal - The caller's signal, if it passed one.
+ * @returns {Promise<void>} Resolves after the wait and rejects with the abort reason.
+ */
+function pause(milliseconds: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Whether a read gets another try after this answer.
+ * @param status - HTTP status of the answer.
+ * @param except - 5xx statuses this read leaves alone.
+ * @returns {boolean} True for a 5xx outside the exceptions.
+ */
+function retriesAfter(status: number, except: readonly number[]): boolean {
+  return status >= 500 && !except.includes(status);
+}
+
+/** One try ends with a response and its whole body, or with the error that cut it short. */
+type AttemptOutcome = { response: Response; text: string } | { cause: unknown };
 
 class CloudflareHttpClient {
   private readonly fetcher?: typeof globalThis.fetch;
@@ -582,31 +678,90 @@ class CloudflareHttpClient {
     this.baseURL = `${CLOUDFLARE_API_URL}/accounts/${encodePath(options.accountId)}/agent-memory${path}`;
   }
 
+  /**
+   * Send a request and parse its envelope.
+   * @param path - Path under the client's base URL.
+   * @param parseResult - Parser for the envelope's `result`.
+   * @param init - Fetch options; the client adds the token and the JSON content type.
+   * @param retryExcept - 5xx statuses a read gets no other try on. A write passes none.
+   * @returns {Promise<{ result: T; cursor?: string }>} The parsed result and the next cursor.
+   */
   async request<T>(
     path: string,
     parseResult: (value: unknown) => T,
     init: RequestInit = {},
+    retryExcept?: readonly number[],
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
-      /** The global fallback is read per request, so a fetch installed after the client (a polyfill, a test stub) still applies. */
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${this.apiToken}`);
       if (init.body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      const response = await (this.fetcher ?? globalThis.fetch)(`${this.baseURL}${path}`, {
-        ...init,
-        headers,
-      });
+      const { response, text, attempts } = await this.send(
+        `${this.baseURL}${path}`,
+        { ...init, headers },
+        retryExcept,
+      );
+      const parse = <R>(step: () => R): R => {
+        try {
+          return step();
+        } catch (error) {
+          throw attempts.read ? error : unreadableWriteAnswer(error, response);
+        }
+      };
 
-      const body = requireCloudflareEnvelope(await cloudflareResponseBody(response), response);
-      const result = parseResult(body.result);
+      const value = parse(() => parseResponseBody(text, response));
+      if (!response.ok) throwCloudflareResponseError(value, response, attempts);
+      const body = parse(() => requireEnvelopeShape(value, response));
+      if (body.success !== true) throwCloudflareResponseError(body, response, attempts);
+      const result = parse(() => parseResult(body.result));
       const cursor =
         isUnknownRecord(body.result_info) && typeof body.result_info.cursor === "string"
           ? body.result_info.cursor
           : undefined;
       return { result, ...(cursor === undefined ? {} : { cursor }) };
     });
+  }
+
+  private async send(
+    url: string,
+    init: RequestInit,
+    retryExcept: readonly number[] | undefined,
+  ): Promise<{ response: Response; text: string; attempts: RequestAttempts }> {
+    const read = retryExcept !== undefined;
+    const limit = read ? READ_ATTEMPTS : 1;
+    for (let count = 1; ; count += 1) {
+      const outcome = await this.attempt(url, init);
+      const attempts = { count, read };
+      if ("response" in outcome) {
+        if (count >= limit || !retriesAfter(outcome.response.status, retryExcept ?? [])) {
+          return { ...outcome, attempts };
+        }
+      } else if (count >= limit) {
+        throw new MemoryNetworkError(networkFailureText(attempts), {
+          provider: "cloudflare",
+          cause: outcome.cause,
+        });
+      }
+      await pause(READ_RETRY_DELAY_MS * 2 ** (count - 1), init.signal);
+    }
+  }
+
+  /**
+   * Reads the global fetch per call, so one installed after the client still applies.
+   * @param url - Full request URL.
+   * @param init - Fetch options, signal included.
+   * @returns {Promise<AttemptOutcome>} The response and its body, or what cut either short.
+   */
+  private async attempt(url: string, init: RequestInit): Promise<AttemptOutcome> {
+    try {
+      const response = await (this.fetcher ?? globalThis.fetch)(url, init);
+      return { response, text: await response.text() };
+    } catch (error) {
+      if (init.signal?.aborted === true) throw error;
+      return { cause: error };
+    }
   }
 }
 
@@ -635,9 +790,12 @@ async function requestProfilePage(
   if (options.limit !== undefined) query.set("per_page", String(options.limit));
   if (options.cursor !== undefined) query.set("cursor", options.cursor);
   const suffix = query.size === 0 ? "" : `?${query}`;
-  const response = await client.request(`${path}${suffix}`, parseProfiles, {
-    signal: options.signal,
-  });
+  const response = await client.request(
+    `${path}${suffix}`,
+    parseProfiles,
+    { signal: options.signal },
+    READ_RETRY_EXCEPT,
+  );
   return {
     profiles: response.result,
     ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
@@ -795,11 +953,16 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   override async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
     assertRecall(query, options);
     return (
-      await this.client.request("/recall", parseRecallResult, {
-        method: "POST",
-        body: JSON.stringify({ query, ...withoutSignal(options) }),
-        signal: options.signal,
-      })
+      await this.client.request(
+        "/recall",
+        parseRecallResult,
+        {
+          method: "POST",
+          body: JSON.stringify({ query, ...withoutSignal(options) }),
+          signal: options.signal,
+        },
+        READ_RETRY_EXCEPT,
+      )
     ).result;
   }
 
@@ -811,9 +974,12 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
     if (options.sessionId !== undefined) query.set("session_id", options.sessionId);
     if (options.type !== undefined) query.set("type", options.type);
     const suffix = query.size === 0 ? "" : `?${query}`;
-    const response = await this.client.request(`/memories${suffix}`, parseMemoryList, {
-      signal: options.signal,
-    });
+    const response = await this.client.request(
+      `/memories${suffix}`,
+      parseMemoryList,
+      { signal: options.signal },
+      READ_RETRY_EXCEPT,
+    );
     return {
       memories: response.result,
       ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
@@ -823,9 +989,12 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   override async get(memoryId: string, options: AbortOptions = {}): Promise<Memory> {
     assertString(memoryId, "Memory ID");
     return (
-      await this.client.request(`/memories/${encodePath(memoryId)}`, parseMemory, {
-        signal: options.signal,
-      })
+      await this.client.request(
+        `/memories/${encodePath(memoryId)}`,
+        parseMemory,
+        { signal: options.signal },
+        READ_BY_ID_RETRY_EXCEPT,
+      )
     ).result;
   }
 
@@ -850,11 +1019,16 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
   override async getSummary(options: SummaryOptions = {}): Promise<SummaryResult> {
     assertSessionId(options.sessionId);
     return (
-      await this.client.request("/summary", parseSummary, {
-        method: "POST",
-        body: JSON.stringify(withoutSignal(options)),
-        signal: options.signal,
-      })
+      await this.client.request(
+        "/summary",
+        parseSummary,
+        {
+          method: "POST",
+          body: JSON.stringify(withoutSignal(options)),
+          signal: options.signal,
+        },
+        READ_RETRY_EXCEPT,
+      )
     ).result;
   }
 }
@@ -887,9 +1061,12 @@ export class CloudflareNamespaceClient {
     if (options.order !== undefined) query.set("order", options.order);
     if (options.direction !== undefined) query.set("direction", options.direction);
     const suffix = query.size === 0 ? "" : `?${query}`;
-    const response = await this.client.request(suffix, parseNamespaces, {
-      signal: options.signal,
-    });
+    const response = await this.client.request(
+      suffix,
+      parseNamespaces,
+      { signal: options.signal },
+      READ_RETRY_EXCEPT,
+    );
     return {
       namespaces: response.result,
       ...(response.cursor === undefined ? {} : { cursor: response.cursor }),
@@ -906,9 +1083,12 @@ export class CloudflareNamespaceClient {
   async get(name: string, options: AbortOptions = {}): Promise<CloudflareNamespace> {
     assertNamespaceName(name);
     return (
-      await this.client.request(`/${encodePath(name)}`, parseNamespace, {
-        signal: options.signal,
-      })
+      await this.client.request(
+        `/${encodePath(name)}`,
+        parseNamespace,
+        { signal: options.signal },
+        READ_RETRY_EXCEPT,
+      )
     ).result;
   }
 

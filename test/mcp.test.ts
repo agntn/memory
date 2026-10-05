@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settle, useRetryTimers } from "./fake-timers.ts";
 import { createMcpServer } from "../src/mcp.ts";
 import { memorySessionId } from "../packages/shared/memory-scope.ts";
 
@@ -49,6 +50,7 @@ async function connectTestClient(): Promise<Client> {
 
 afterEach(async () => {
   await Promise.all(openConnections.splice(0).map((connection) => connection.close()));
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -698,7 +700,7 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([
       {
         type: "text",
-        text: "memory_remember failed: fetch failed: getaddrinfo ENOTFOUND api.cloudflare.com",
+        text: "memory_remember failed: No complete answer came back from Cloudflare Agent Memory, and a write that fails this way may still have landed, so repeat it only once a read shows it did not: fetch failed: getaddrinfo ENOTFOUND api.cloudflare.com",
       },
     ]);
   });
@@ -713,8 +715,9 @@ describe("memory MCP server", () => {
       }),
     );
     const client = await connectTestClient();
+    useRetryTimers();
 
-    const response = await client.callTool({
+    const call = client.callTool({
       name: "memory_get",
       arguments: {
         namespace: "mcp-error-test",
@@ -722,10 +725,15 @@ describe("memory MCP server", () => {
         memoryIds: ["mem-1"],
       },
     });
+    await settle(call);
+    const response = await call;
 
     expect(response.isError).toBe(true);
     expect(response.content).toEqual([
-      { type: "text", text: "memory_get failed: Unknown memory provider error" },
+      {
+        type: "text",
+        text: "memory_get failed: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later",
+      },
     ]);
     expect(JSON.stringify(response)).not.toContain("do-not-leak");
   });
