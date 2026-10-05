@@ -78,16 +78,16 @@ export const MEMORY_TOOL_SYMBOLS = {
   memory_profile_list: "👤",
   memory_remember: "🧠",
   memory_supersede: "♻️",
-  memory_resume_supersession: "▶️",
-  memory_wait_for_recall: "⏳",
+  memory_supersession_resume: "▶️",
+  memory_recall_wait: "⏳",
   memory_ingest: "📥",
   memory_recall: "🔎",
   memory_list: "📚",
   memory_get: "📖",
   memory_delete: "🗑️",
   memory_summary: "📝",
-  memory_delete_session: "🧹",
-  memory_delete_profile: "🗑️",
+  memory_session_delete: "🧹",
+  memory_profile_delete: "🗑️",
 } as const;
 
 /** Argument carrying the subject of the call, most specific first. */

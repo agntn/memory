@@ -42,16 +42,16 @@ const expectedNames = [
   "memory_profile_list",
   "memory_remember",
   "memory_supersede",
-  "memory_resume_supersession",
-  "memory_wait_for_recall",
+  "memory_supersession_resume",
+  "memory_recall_wait",
   "memory_ingest",
   "memory_recall",
   "memory_list",
   "memory_get",
   "memory_delete",
   "memory_summary",
-  "memory_delete_session",
-  "memory_delete_profile",
+  "memory_session_delete",
+  "memory_profile_delete",
 ];
 
 function sharedListLimit(parameters: RegisteredTool["parameters"] | undefined): number | undefined {
@@ -290,7 +290,7 @@ describe("memory extensions", () => {
     const controllers = [new AbortController(), new AbortController()];
 
     for (const [index, tools] of [piTools(), ompTools()].entries()) {
-      const wait = tools.find((tool) => tool.name === "memory_wait_for_recall") as
+      const wait = tools.find((tool) => tool.name === "memory_recall_wait") as
         | (RegisteredTool & {
             execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
           })
@@ -332,10 +332,7 @@ describe("memory extensions", () => {
         const first = update.content[0];
         return first?.type === "text" ? first.text : undefined;
       }),
-    ).toEqual([
-      memoryToolProgress.memory_wait_for_recall,
-      memoryToolProgress.memory_wait_for_recall,
-    ]);
+    ).toEqual([memoryToolProgress.memory_recall_wait, memoryToolProgress.memory_recall_wait]);
   });
 
   it("streams a progress line before a recall answers", async () => {

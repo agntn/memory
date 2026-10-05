@@ -27,16 +27,16 @@ const expectedNames = [
   "memory_profile_list",
   "memory_remember",
   "memory_supersede",
-  "memory_resume_supersession",
-  "memory_wait_for_recall",
+  "memory_supersession_resume",
+  "memory_recall_wait",
   "memory_ingest",
   "memory_recall",
   "memory_list",
   "memory_get",
   "memory_delete",
   "memory_summary",
-  "memory_delete_session",
-  "memory_delete_profile",
+  "memory_session_delete",
+  "memory_profile_delete",
 ];
 
 async function connectTestClient(): Promise<Client> {
@@ -81,7 +81,7 @@ describe("memory MCP server", () => {
       },
       annotations: { destructiveHint: true, idempotentHint: false },
     });
-    expect(response.tools.find((tool) => tool.name === "memory_resume_supersession")).toMatchObject(
+    expect(response.tools.find((tool) => tool.name === "memory_supersession_resume")).toMatchObject(
       {
         inputSchema: {
           required: expect.arrayContaining([
@@ -98,14 +98,13 @@ describe("memory MCP server", () => {
       },
     );
     expect(
-      response.tools.find((tool) => tool.name === "memory_wait_for_recall")?.annotations
-        ?.readOnlyHint,
+      response.tools.find((tool) => tool.name === "memory_recall_wait")?.annotations?.readOnlyHint,
     ).toBe(true);
     expect(
       response.tools.find((tool) => tool.name === "memory_recall")?.annotations?.readOnlyHint,
     ).toBe(true);
     expect(
-      response.tools.find((tool) => tool.name === "memory_delete_profile")?.annotations
+      response.tools.find((tool) => tool.name === "memory_profile_delete")?.annotations
         ?.destructiveHint,
     ).toBe(true);
   });
@@ -134,7 +133,7 @@ describe("memory MCP server", () => {
     const client = await connectTestClient();
 
     const response = await client.callTool({
-      name: "memory_wait_for_recall",
+      name: "memory_recall_wait",
       arguments: {
         namespace: "default",
         profile: "agent",
@@ -271,7 +270,7 @@ describe("memory MCP server", () => {
     const client = await connectTestClient();
 
     const response = await client.callTool({
-      name: "memory_resume_supersession",
+      name: "memory_supersession_resume",
       arguments: {
         namespace: "default",
         profile: "agent",
@@ -339,7 +338,7 @@ describe("memory MCP server", () => {
 
     const pending = client.callTool(
       {
-        name: "memory_wait_for_recall",
+        name: "memory_recall_wait",
         arguments: {
           namespace: "default",
           profile: "agent",

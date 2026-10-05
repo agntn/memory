@@ -570,14 +570,14 @@ export default function memoryExtension(omp: ExtensionAPI) {
   });
 
   registerTool({
-    name: "memory_resume_supersession",
-    ...memoryToolMeta.memory_resume_supersession,
+    name: "memory_supersession_resume",
+    ...memoryToolMeta.memory_supersession_resume,
     approval: "write",
     parameters: resumeSupersessionParameters,
-    renderCall: callRenderer("memory_resume_supersession"),
+    renderCall: callRenderer("memory_supersession_resume"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
-      onUpdate?.(progress(memoryToolProgress.memory_resume_supersession));
+      onUpdate?.(progress(memoryToolProgress.memory_supersession_resume));
       return memoryToolExecutors.resumeSupersession(
         operationalParams(params) as ResumeSupersessionParams,
         { signal },
@@ -586,14 +586,14 @@ export default function memoryExtension(omp: ExtensionAPI) {
   });
 
   registerTool({
-    name: "memory_wait_for_recall",
-    ...memoryToolMeta.memory_wait_for_recall,
+    name: "memory_recall_wait",
+    ...memoryToolMeta.memory_recall_wait,
     approval: "read",
     parameters: recallVisibilityParameters,
-    renderCall: callRenderer("memory_wait_for_recall"),
+    renderCall: callRenderer("memory_recall_wait"),
     renderResult: resultLine,
     execute(_id, params, signal, onUpdate): Promise<AgentToolResult<Record<string, unknown>>> {
-      onUpdate?.(progress(memoryToolProgress.memory_wait_for_recall));
+      onUpdate?.(progress(memoryToolProgress.memory_recall_wait));
       return memoryToolExecutors.waitForRecall(
         operationalParams(params) as RecallVisibilityParams,
         { signal },
@@ -680,11 +680,11 @@ export default function memoryExtension(omp: ExtensionAPI) {
   });
 
   registerTool({
-    name: "memory_delete_session",
-    ...memoryToolMeta.memory_delete_session,
+    name: "memory_session_delete",
+    ...memoryToolMeta.memory_session_delete,
     approval: "write",
     parameters: sessionParameters,
-    renderCall: callRenderer("memory_delete_session"),
+    renderCall: callRenderer("memory_session_delete"),
     renderResult: resultLine,
     execute(_id, params, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteSession(operationalParams(params) as SessionParams, {
@@ -694,11 +694,11 @@ export default function memoryExtension(omp: ExtensionAPI) {
   });
 
   registerTool({
-    name: "memory_delete_profile",
-    ...memoryToolMeta.memory_delete_profile,
+    name: "memory_profile_delete",
+    ...memoryToolMeta.memory_profile_delete,
     approval: "write",
     parameters: profileOnlyParameters,
-    renderCall: callRenderer("memory_delete_profile", false),
+    renderCall: callRenderer("memory_profile_delete", false),
     renderResult: resultLine,
     execute(_id, params: ProfileParams, signal): Promise<AgentToolResult<Record<string, unknown>>> {
       return memoryToolExecutors.deleteProfile(params, { signal });

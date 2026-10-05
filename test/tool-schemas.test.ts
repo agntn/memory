@@ -181,16 +181,16 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_profile_list: sharedSchemas.profileListParameters,
   memory_remember: sharedSchemas.rememberParameters,
   memory_supersede: sharedSchemas.supersedeParameters,
-  memory_resume_supersession: sharedSchemas.resumeSupersessionParameters,
-  memory_wait_for_recall: sharedSchemas.recallVisibilityParameters,
+  memory_supersession_resume: sharedSchemas.resumeSupersessionParameters,
+  memory_recall_wait: sharedSchemas.recallVisibilityParameters,
   memory_ingest: sharedSchemas.ingestParameters,
   memory_recall: sharedSchemas.recallParameters,
   memory_list: sharedSchemas.listParameters,
   memory_get: sharedSchemas.getParameters,
   memory_delete: sharedSchemas.memoryParameters,
   memory_summary: sharedSchemas.summaryParameters,
-  memory_delete_session: sharedSchemas.sessionParameters,
-  memory_delete_profile: sharedSchemas.profileOnlyParameters,
+  memory_session_delete: sharedSchemas.sessionParameters,
+  memory_profile_delete: sharedSchemas.profileOnlyParameters,
 };
 
 function expectFieldAlignment(
