@@ -30,7 +30,7 @@ export class MemoryRateLimitError extends MemoryHttpError {}
 /** Any 5xx. Cloudflare answers an unknown memory id with 500 too, so it isn't proof of a blip. */
 export class MemoryServerError extends MemoryHttpError {}
 
-/** No answer at all. The cause says whether DNS, the connection or TLS gave out. */
+/** No complete answer. The cause says whether DNS, the connection, TLS or the body gave out. */
 export class MemoryNetworkError extends MemoryError {}
 
 export class MemoryInputError extends MemoryError {}

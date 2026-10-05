@@ -530,11 +530,11 @@ function parseProfiles(value: unknown): CloudflareProfile[] {
   return value.map(parseProfile);
 }
 
-async function cloudflareResponseBody(response: Response): Promise<unknown> {
+function parseResponseBody(text: string, response: Response): unknown {
   try {
-    return await response.json();
+    return JSON.parse(text);
   } catch (error) {
-    if (!response.ok && error instanceof SyntaxError) return null;
+    if (!response.ok) return null;
     throw responseError(
       `Cloudflare Agent Memory returned invalid JSON (${response.status})`,
       response.status,
@@ -566,7 +566,7 @@ function serverFailureText(status: number, attempts: Readonly<RequestAttempts>):
 }
 
 function networkFailureText(attempts: Readonly<RequestAttempts>): string {
-  const failed = "Cloudflare Agent Memory could not be reached";
+  const failed = "No complete answer came back from Cloudflare Agent Memory";
   if (!attempts.read) return `${failed}, and ${WRITE_FAILURE_NOTE}`;
   if (attempts.count === 1) return failed;
   return `${failed} after ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
@@ -606,20 +606,28 @@ function throwCloudflareResponseError(
   throw new MemoryHttpError(message, response.status, options);
 }
 
-function requireCloudflareEnvelope(
-  value: unknown,
-  response: Response,
-  attempts: Readonly<RequestAttempts>,
-): Record<string, unknown> {
-  if (!response.ok) throwCloudflareResponseError(value, response, attempts);
+function requireEnvelopeShape(value: unknown, response: Response): Record<string, unknown> {
   if (!isUnknownRecord(value) || typeof value.success !== "boolean") {
     throw responseError(
       "Cloudflare Agent Memory returned an invalid response envelope",
       response.status,
     );
   }
-  if (!value.success) throwCloudflareResponseError(value, response, attempts);
   return value;
+}
+
+/**
+ * Turn a 2xx body nobody can read into an error that says the write behind it may have landed.
+ * @param error - What reading the body threw.
+ * @param response - The 2xx answer to the write.
+ * @returns {MemoryHttpError} The same failure with the write note and the original as its cause.
+ */
+function unreadableWriteAnswer(error: unknown, response: Response): MemoryHttpError {
+  return new MemoryHttpError(
+    `Cloudflare Agent Memory answered the write with ${response.status} and a body it could not read, and ${WRITE_FAILURE_NOTE}`,
+    response.status,
+    { provider: "cloudflare", cause: error },
+  );
 }
 
 /**
@@ -656,8 +664,8 @@ function retriesAfter(status: number, except: readonly number[]): boolean {
   return status >= 500 && !except.includes(status);
 }
 
-/** One try ends with a response or with the error that left none. */
-type AttemptOutcome = { response: Response } | { cause: unknown };
+/** One try ends with a response and its whole body, or with the error that cut it short. */
+type AttemptOutcome = { response: Response; text: string } | { cause: unknown };
 
 class CloudflareHttpClient {
   private readonly fetcher?: typeof globalThis.fetch;
@@ -676,7 +684,7 @@ class CloudflareHttpClient {
    * @param parseResult - Parser for the envelope's `result`.
    * @param init - Fetch options; the client adds the token and the JSON content type.
    * @param retryExcept - 5xx statuses a read gets no other try on. A write passes none.
-   * @returns {Promise<{ result: T; cursor?: string }>} The parsed result and the next page's cursor.
+   * @returns {Promise<{ result: T; cursor?: string }>} The parsed result and the next cursor.
    */
   async request<T>(
     path: string,
@@ -690,18 +698,24 @@ class CloudflareHttpClient {
       if (init.body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      const { response, attempts } = await this.send(
+      const { response, text, attempts } = await this.send(
         `${this.baseURL}${path}`,
         { ...init, headers },
         retryExcept,
       );
+      const parse = <R>(step: () => R): R => {
+        try {
+          return step();
+        } catch (error) {
+          throw attempts.read ? error : unreadableWriteAnswer(error, response);
+        }
+      };
 
-      const body = requireCloudflareEnvelope(
-        await cloudflareResponseBody(response),
-        response,
-        attempts,
-      );
-      const result = parseResult(body.result);
+      const value = parse(() => parseResponseBody(text, response));
+      if (!response.ok) throwCloudflareResponseError(value, response, attempts);
+      const body = parse(() => requireEnvelopeShape(value, response));
+      if (body.success !== true) throwCloudflareResponseError(body, response, attempts);
+      const result = parse(() => parseResult(body.result));
       const cursor =
         isUnknownRecord(body.result_info) && typeof body.result_info.cursor === "string"
           ? body.result_info.cursor
@@ -714,18 +728,16 @@ class CloudflareHttpClient {
     url: string,
     init: RequestInit,
     retryExcept: readonly number[] | undefined,
-  ): Promise<{ response: Response; attempts: RequestAttempts }> {
+  ): Promise<{ response: Response; text: string; attempts: RequestAttempts }> {
     const read = retryExcept !== undefined;
     const limit = read ? READ_ATTEMPTS : 1;
     for (let count = 1; ; count += 1) {
       const outcome = await this.attempt(url, init);
       const attempts = { count, read };
       if ("response" in outcome) {
-        const { response } = outcome;
-        if (count >= limit || !retriesAfter(response.status, retryExcept ?? [])) {
-          return { response, attempts };
+        if (count >= limit || !retriesAfter(outcome.response.status, retryExcept ?? [])) {
+          return { ...outcome, attempts };
         }
-        await response.body?.cancel();
       } else if (count >= limit) {
         throw new MemoryNetworkError(networkFailureText(attempts), {
           provider: "cloudflare",
@@ -740,11 +752,12 @@ class CloudflareHttpClient {
    * Reads the global fetch per call, so one installed after the client still applies.
    * @param url - Full request URL.
    * @param init - Fetch options, signal included.
-   * @returns {Promise<AttemptOutcome>} The response, or the error a request with no answer threw.
+   * @returns {Promise<AttemptOutcome>} The response and its body, or what cut either short.
    */
   private async attempt(url: string, init: RequestInit): Promise<AttemptOutcome> {
     try {
-      return { response: await (this.fetcher ?? globalThis.fetch)(url, init) };
+      const response = await (this.fetcher ?? globalThis.fetch)(url, init);
+      return { response, text: await response.text() };
     } catch (error) {
       if (init.signal?.aborted === true) throw error;
       return { cause: error };

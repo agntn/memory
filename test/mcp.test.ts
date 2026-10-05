@@ -700,7 +700,7 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([
       {
         type: "text",
-        text: "memory_remember failed: Cloudflare Agent Memory could not be reached, and a write that fails this way may still have landed, so repeat it only once a read shows it did not: fetch failed: getaddrinfo ENOTFOUND api.cloudflare.com",
+        text: "memory_remember failed: No complete answer came back from Cloudflare Agent Memory, and a write that fails this way may still have landed, so repeat it only once a read shows it did not: fetch failed: getaddrinfo ENOTFOUND api.cloudflare.com",
       },
     ]);
   });
@@ -732,7 +732,7 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([
       {
         type: "text",
-        text: "memory_get failed: Cloudflare Agent Memory could not be reached after 3 attempts, which usually passes, so try the call again later",
+        text: "memory_get failed: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later",
       },
     ]);
     expect(JSON.stringify(response)).not.toContain("do-not-leak");

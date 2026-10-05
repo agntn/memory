@@ -275,8 +275,9 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
       ),
     });
 
-    const error = await namespaces.list().catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(MemoryHttpError);
+    useRetryTimers();
+    const error = await settle(namespaces.list());
+    expect(error).toBeInstanceOf(MemoryNetworkError);
     expect(error).not.toBeInstanceOf(MemoryRateLimitError);
     expect(error).toHaveProperty("cause", cause);
   });
@@ -627,10 +628,60 @@ describe("CloudflareMemoryProvider server and network failures", () => {
 
     expect(error).toBeInstanceOf(MemoryNetworkError);
     expect(error).toMatchObject({
-      message: `Cloudflare Agent Memory could not be reached after 3 attempts, ${passingNote}`,
+      message: `No complete answer came back from Cloudflare Agent Memory after 3 attempts, ${passingNote}`,
       cause,
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("tries a read again when its body breaks off halfway", async () => {
+    useRetryTimers();
+    const broken = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"success":true,'));
+        controller.error(new TypeError("terminated"));
+      },
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(broken))
+      .mockResolvedValueOnce(jsonResponse(namespace));
+
+    const result = await settle(clients(fetcher).namespaces.get("test-namespace"));
+
+    expect(result).toMatchObject({ id: "namespace-id" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["not JSON", "not JSON"],
+    ["an envelope", '{"result":{}}'],
+    ["a result", '{"success":true,"errors":[],"result":{}}'],
+  ])("says a write may have landed when a 2xx answer holds no readable %s", async (_part, body) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(body));
+    const profile = await clients(fetcher).provider.getProfile("user");
+
+    const error = await profile.remember({ content: "x" }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(MemoryHttpError);
+    expect(error).toMatchObject({
+      statusCode: 200,
+      message: `Cloudflare Agent Memory answered the write with 200 and a body it could not read, and ${writeNote}`,
+    });
+    expect(error).toHaveProperty("cause.name", "MemoryHttpError");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a write refused in a 2xx envelope free of the landed note", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ success: false, errors: [{ message: "content is empty" }] }),
+    );
+    const profile = await clients(fetcher).provider.getProfile("user");
+
+    await expect(profile.remember({ content: "x" })).rejects.toMatchObject({
+      statusCode: 200,
+      message: "content is empty",
+    });
   });
 
   it.each([400, 403, 404, 429])("fails a read on %i without another try", async (status) => {
@@ -684,7 +735,7 @@ describe("CloudflareMemoryProvider server and network failures", () => {
     expect(error).toBeInstanceOf(MemoryNetworkError);
     expect(error).toMatchObject({
       provider: "cloudflare",
-      message: `Cloudflare Agent Memory could not be reached after 3 attempts, ${passingNote}`,
+      message: `No complete answer came back from Cloudflare Agent Memory after 3 attempts, ${passingNote}`,
       cause,
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
@@ -702,7 +753,7 @@ describe("CloudflareMemoryProvider server and network failures", () => {
 
     expect(error).toBeInstanceOf(MemoryNetworkError);
     expect(error).toMatchObject({
-      message: `Cloudflare Agent Memory could not be reached, and ${writeNote}`,
+      message: `No complete answer came back from Cloudflare Agent Memory, and ${writeNote}`,
       cause,
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
