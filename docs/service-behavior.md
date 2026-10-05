@@ -12,7 +12,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 
 - A profile listing orders by name, includes a profile once something was written to it, and ends with `cursor: null`.
 - A memory listing pages by id from the oldest memory up, takes no order, and its cursor is the last id of the page.
-- An unknown memory id returns a server error, not a 404. An unknown namespace name returns a real 404 from its own endpoint and from its profile listing.
+- An unknown memory id returns 500, not a 404, with code 10000 and the same `You may contact support with the following Cf-Ray request id` text a passing server failure carries, so the answer alone does not tell the two apart. Measured 2026-10-05. An unknown namespace name returns a real 404 from its own endpoint and from its profile listing.
 - A summary always covers the whole profile, and its `sessionId` only picks the session named on its `Current session` line.
 
 ## Sessions

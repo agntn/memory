@@ -6,6 +6,8 @@ export {
   MemoryAuthError,
   MemoryNotFoundError,
   MemoryRateLimitError,
+  MemoryServerError,
+  MemoryNetworkError,
   MemoryInputError,
   UnknownProviderError,
   normalizeMemoryError,

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settle, useRetryTimers } from "./fake-timers.ts";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
@@ -82,6 +83,7 @@ function requiresNamespace(tool: RegisteredTool): boolean {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -596,13 +598,18 @@ describe("OMP execution errors", () => {
       execute(...args: unknown[]): Promise<unknown>;
     };
 
-    await expect(
-      recall.execute(
+    useRetryTimers();
+    const execution = recall
+      .execute(
         "call-1",
         { namespace: "test", profile: "agent", query: "synthetic" },
         new AbortController().signal,
         undefined,
-      ),
-    ).rejects.toThrow("fetch failed: getaddrinfo ENOTFOUND example.invalid");
+      )
+      .catch((failure: unknown) => failure);
+    await settle(execution);
+    expect(String(await execution)).toContain(
+      "fetch failed: getaddrinfo ENOTFOUND example.invalid",
+    );
   });
 });

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { settle, useRetryTimers } from "./fake-timers.ts";
 import {
   CloudflareMemoryProvider,
   CloudflareNamespaceClient,
@@ -6,8 +7,10 @@ import {
   MemoryError,
   MemoryHttpError,
   MemoryInputError,
+  MemoryNetworkError,
   MemoryNotFoundError,
   MemoryRateLimitError,
+  MemoryServerError,
   MemoryProfile,
   cloudflareMemoryLimits,
   create,
@@ -194,7 +197,6 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
         [403, MemoryAuthError],
         [404, MemoryNotFoundError],
         [429, MemoryRateLimitError],
-        [502, MemoryHttpError],
       ] as const)("classifies status %i for profiles and namespaces", async (status, ErrorType) => {
         const options = {
           accountId: "account",
@@ -427,7 +429,10 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     });
     const profile = await provider.getProfile("user");
 
-    await expect(profile.recall("question")).rejects.toBeInstanceOf(MemoryError);
+    useRetryTimers();
+    const recall = profile.recall("question").catch((cause: unknown) => cause);
+    await settle(recall);
+    expect(await recall).toBeInstanceOf(MemoryError);
   });
 
   it("keeps the candidates when the service skips the synthesized answer", async () => {
@@ -487,8 +492,246 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     });
     const profile = await provider.getProfile("user");
 
-    await expect(profile.recall("question")).rejects.toBeInstanceOf(MemoryHttpError);
+    useRetryTimers();
+    const recall = profile.recall("question").catch((cause: unknown) => cause);
+    await settle(recall);
+    expect(await recall).toBeInstanceOf(MemoryHttpError);
   });
+});
+
+describe("CloudflareMemoryProvider server and network failures", () => {
+  /** Cloudflare's answer to an unknown id on 2026-10-05, ray id zeroed. A blip reads the same. */
+  const serverFailure = {
+    result: null,
+    errors: [
+      {
+        code: 10000,
+        message:
+          "An error occurred processing your request. You may contact support with the following Cf-Ray request id: 0000000000000000",
+      },
+    ],
+    messages: [],
+    success: false,
+  };
+  const namespace = {
+    id: "namespace-id",
+    name: "test-namespace",
+    created_at: "2026-08-17T00:00:00.000Z",
+    updated_at: "2026-08-17T00:00:00.000Z",
+  };
+  const passingNote = "which usually passes, so try the call again later";
+  const writeNote =
+    "a write that fails this way may still have landed, so repeat it only once a read shows it did not";
+
+  function clients(fetcher: typeof fetch) {
+    const options = {
+      accountId: "account",
+      namespace: "namespace",
+      apiToken: "token",
+      fetch: fetcher,
+    };
+    return {
+      provider: new CloudflareMemoryProvider(options),
+      namespaces: new CloudflareNamespaceClient(options),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("tries a read again after a gateway failure and returns what the next try got", async () => {
+    useRetryTimers();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("<html>bad gateway</html>", { status: 502 }))
+      .mockResolvedValueOnce(Response.json(serverFailure, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(namespace));
+
+    const result = await settle(clients(fetcher).namespaces.get("test-namespace"));
+
+    expect(result).toMatchObject({ id: "namespace-id", name: "test-namespace" });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([500, 502, 503, 504])(
+    "names status %i and the passing failure once every try of a read ran out",
+    async (status) => {
+      useRetryTimers();
+      const fetcher = vi.fn<typeof fetch>(async () => Response.json(serverFailure, { status }));
+      const { provider, namespaces } = clients(fetcher);
+      const profile = await provider.getProfile("user");
+
+      for (const operation of [
+        () => profile.recall("question"),
+        () => profile.list(),
+        () => profile.getSummary(),
+        () => namespaces.list(),
+        () => namespaces.get("test-namespace"),
+        () => namespaces.listProfiles("test-namespace"),
+      ]) {
+        fetcher.mockClear();
+        const error = await settle(operation());
+        expect(error).toBeInstanceOf(MemoryServerError);
+        expect(error).toBeInstanceOf(MemoryHttpError);
+        expect(error).toMatchObject({
+          provider: "cloudflare",
+          statusCode: status,
+          message: `Cloudflare Agent Memory failed with ${status} on all 3 attempts, ${passingNote}: ${serverFailure.errors[0]?.message}`,
+        });
+        expect(fetcher).toHaveBeenCalledTimes(3);
+      }
+    },
+  );
+
+  it("reads a memory by id once on 500, since the service also answers an unknown id that way", async () => {
+    useRetryTimers();
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json(serverFailure, { status: 500 }));
+    const profile = await clients(fetcher).provider.getProfile("user");
+
+    const error = await settle(profile.get("memory-1"));
+
+    expect(error).toBeInstanceOf(MemoryServerError);
+    expect(error).toMatchObject({
+      statusCode: 500,
+      message: `Cloudflare Agent Memory failed with 500: ${serverFailure.errors[0]?.message}`,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries a read by id again on a gateway failure", async () => {
+    useRetryTimers();
+    const fetcher = vi.fn<typeof fetch>(
+      async () => new Response("<html>Service unavailable</html>", { status: 503 }),
+    );
+    const profile = await clients(fetcher).provider.getProfile("user");
+
+    const error = await settle(profile.get("memory-1"));
+
+    expect(error).toMatchObject({
+      statusCode: 503,
+      message: `Cloudflare Agent Memory failed with 503 on all 3 attempts, ${passingNote}`,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([400, 403, 404, 429])("fails a read on %i without another try", async (status) => {
+    useRetryTimers();
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json(serverFailure, { status }));
+
+    const error = await settle(clients(fetcher).namespaces.list());
+
+    expect(error).toBeInstanceOf(MemoryHttpError);
+    expect(error).not.toBeInstanceOf(MemoryServerError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a write once and says a server failure leaves its outcome open", async () => {
+    useRetryTimers();
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json(serverFailure, { status: 503 }));
+    const { provider, namespaces } = clients(fetcher);
+    const profile = await provider.getProfile("user");
+
+    for (const operation of [
+      () => profile.ingest([{ role: "user", content: "x" }]),
+      () => profile.remember({ content: "x" }),
+      () => profile.delete("memory-1"),
+      () => profile.deleteSession("session-1"),
+      () => provider.deleteProfile("user"),
+      () => namespaces.create("test-namespace"),
+      () => namespaces.delete("test-namespace"),
+    ]) {
+      fetcher.mockClear();
+      const error = await settle(operation());
+      expect(error).toBeInstanceOf(MemoryServerError);
+      expect(error).toMatchObject({
+        statusCode: 503,
+        message: `Cloudflare Agent Memory failed with 503, and ${writeNote}: ${serverFailure.errors[0]?.message}`,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("keeps the network cause and tries a read three times when no answer comes back", async () => {
+    useRetryTimers();
+    const cause = new TypeError("fetch failed", {
+      cause: new Error("getaddrinfo ENOTFOUND api.cloudflare.com"),
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw cause;
+    });
+
+    const error = await settle(clients(fetcher).namespaces.list());
+
+    expect(error).toBeInstanceOf(MemoryNetworkError);
+    expect(error).toMatchObject({
+      provider: "cloudflare",
+      message: `Cloudflare Agent Memory could not be reached on all 3 attempts, ${passingNote}`,
+      cause,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends a write once when no answer comes back", async () => {
+    useRetryTimers();
+    const cause = new TypeError("fetch failed");
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw cause;
+    });
+    const profile = await clients(fetcher).provider.getProfile("user");
+
+    const error = await settle(profile.remember({ content: "x" }));
+
+    expect(error).toBeInstanceOf(MemoryNetworkError);
+    expect(error).toMatchObject({
+      message: `Cloudflare Agent Memory could not be reached, and ${writeNote}`,
+      cause,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops between two tries the moment the caller aborts", async () => {
+    useRetryTimers();
+    const controller = new AbortController();
+    const reason = new Error("caller gave up");
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      queueMicrotask(() => {
+        controller.abort(reason);
+      });
+      return new Response(null, { status: 502 });
+    });
+
+    const error = await settle(clients(fetcher).namespaces.list({ signal: controller.signal }));
+
+    expect(error).toBeInstanceOf(MemoryError);
+    expect(error).not.toBeInstanceOf(MemoryServerError);
+    expect(error).toHaveProperty("cause", reason);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["read", "write"])(
+    "does not report a %s the caller aborted as a network failure",
+    async (kind) => {
+      useRetryTimers();
+      const controller = new AbortController();
+      const reason = new Error("caller gave up");
+      const fetcher = vi.fn<typeof fetch>(async () => {
+        controller.abort(reason);
+        throw reason;
+      });
+      const { provider, namespaces } = clients(fetcher);
+      const profile = await provider.getProfile("user");
+      const options = { signal: controller.signal };
+
+      const error = await settle(
+        kind === "read" ? namespaces.list(options) : profile.remember({ content: "x" }, options),
+      );
+
+      expect(error).not.toBeInstanceOf(MemoryNetworkError);
+      expect(error).toHaveProperty("cause", reason);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("CloudflareNamespaceClient", () => {
