@@ -67,6 +67,57 @@ describe("Pi execution errors", () => {
     expect(toolErrorMessage(error)).toBe("0: 1: 2: 3: 4: 5: 6: 7");
   });
 
+  it.each([
+    [
+      "every address refused",
+      Object.assign(
+        new AggregateError(
+          [
+            new Error("connect ECONNREFUSED ::1:59999"),
+            new Error("connect ECONNREFUSED 127.0.0.1:59999"),
+          ],
+          "",
+        ),
+        { code: "ECONNREFUSED" },
+      ),
+      "fetch failed: connect ECONNREFUSED ::1:59999; connect ECONNREFUSED 127.0.0.1:59999",
+    ],
+    [
+      "an aggregate with nothing but a code",
+      Object.assign(new AggregateError([], ""), { code: "ECONNRESET" }),
+      "fetch failed: ECONNRESET",
+    ],
+    [
+      "a connect timeout",
+      Object.assign(
+        new Error("Connect Timeout Error (attempted address: example.com:443, timeout: 10000ms)"),
+        { code: "UND_ERR_CONNECT_TIMEOUT" },
+      ),
+      "fetch failed: UND_ERR_CONNECT_TIMEOUT: Connect Timeout Error (attempted address: example.com:443, timeout: 10000ms)",
+    ],
+    [
+      "a self-signed certificate",
+      Object.assign(new Error("self-signed certificate"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" }),
+      "fetch failed: DEPTH_ZERO_SELF_SIGNED_CERT: self-signed certificate",
+    ],
+    [
+      "a missing domain",
+      Object.assign(new Error("getaddrinfo ENOTFOUND example.invalid"), { code: "ENOTFOUND" }),
+      "fetch failed: getaddrinfo ENOTFOUND example.invalid",
+    ],
+    ["a numeric code", Object.assign(new Error("exited"), { code: 1 }), "fetch failed: exited"],
+    [
+      "control bytes in an address error",
+      new AggregateError(
+        [new Error(`connect${String.fromCodePoint(10, 0x1b)}[31mECONNREFUSED`)],
+        "",
+      ),
+      "fetch failed: connect  [31mECONNREFUSED",
+    ],
+  ])("names the reason for %s", (_shape, cause, expected) => {
+    expect(toolErrorMessage(new TypeError("fetch failed", { cause }))).toBe(expected);
+  });
+
   it("does not serialize arbitrary cause fields", () => {
     expect(toolErrorMessage(new Error("failed", { cause: { apiToken: "do-not-leak" } }))).toBe(
       "failed",
