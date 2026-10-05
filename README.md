@@ -126,6 +126,8 @@ pnpm test        # vitest --run
 pnpm build       # obuild
 ```
 
+Point an MCP client at a checkout's `dist/cli.mjs` and it serves `src/` live. Edit a tool, restart the server, done. The one file that still wants `pnpm build` is `src/cli.ts`, because that's the switch itself. `MEMORY_DIST=1` sends it back to the bundle.
+
 ## 💛 Thanks
 
 Without those two OSS programs this file would not exist. [Claude for Open Source](https://claude.com/contact-sales/claude-for-oss) and [Codex for Open Source](https://developers.openai.com/community/codex-for-oss). Thank you <3

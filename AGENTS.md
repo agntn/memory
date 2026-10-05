@@ -11,6 +11,7 @@
 - Local harness sources and remote API providers stay separate concerns.
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
 - `src/commands/mcp.ts` imports the server and the SDK inside `run()`, because citty resolves the subcommand for `--help` and for an unknown command too. `test/cli.test.ts` runs those usage paths under a load hook.
+- Inside a checkout `dist/cli.mjs mcp` loads the command from `src/`, as the Pi and OMP extensions do, so a local server needs a restart after an edit and no build. It keeps the bundle under `MEMORY_DIST=1`, when Node doesn't strip types, under `node_modules`, without `src/`, and when typebox, the one devDependency `src/` imports at runtime, doesn't resolve. An edit to `src/cli.ts` itself still needs `pnpm build`. `test/cli.test.ts` goes red without any one of those guards.
 - Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
 - Pi and MCP share the schemas in `packages/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
 - Pi peers run `>=0.84.2 <2`, and the dev pin sits on 1.0.2 so `tsc` reads the 1.x types. On 2026-10-05 a packed tarball installed next to Pi 1.0.2, and a real `pi -p` session listed namespaces and came back with `isError` for both a service failure and an argument the host rejected. The next major gets the same session before the fence moves.
