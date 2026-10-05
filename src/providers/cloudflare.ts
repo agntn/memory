@@ -139,9 +139,10 @@ const MAX_PROFILE_LIST_LIMIT = 500;
 /** A read gets three tries, 250 ms and then 500 ms apart, before its failure reaches the caller. */
 const READ_ATTEMPTS = 3;
 const READ_RETRY_DELAY_MS = 250;
-const READ_RETRY_STATUSES: readonly number[] = [500, 502, 503, 504];
-/** An unknown memory id answers 500, so a read by id retries only the gateway codes. */
-const READ_BY_ID_RETRY_STATUSES: readonly number[] = [502, 503, 504];
+/** The 5xx answers a read does not try again on. */
+const READ_RETRY_EXCEPT: readonly number[] = [];
+/** An unknown memory id answers 500, so a read by id leaves that one alone. */
+const READ_BY_ID_RETRY_EXCEPT: readonly number[] = [500];
 
 /** Input limits this provider enforces, so tool schemas can publish the same bounds. */
 export const cloudflareMemoryLimits = Object.freeze({
@@ -561,14 +562,14 @@ function serverFailureText(status: number, attempts: Readonly<RequestAttempts>):
   const failed = `Cloudflare Agent Memory failed with ${status}`;
   if (!attempts.read) return `${failed}, and ${WRITE_FAILURE_NOTE}`;
   if (attempts.count === 1) return failed;
-  return `${failed} on all ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
+  return `${failed} after ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
 }
 
 function networkFailureText(attempts: Readonly<RequestAttempts>): string {
   const failed = "Cloudflare Agent Memory could not be reached";
   if (!attempts.read) return `${failed}, and ${WRITE_FAILURE_NOTE}`;
   if (attempts.count === 1) return failed;
-  return `${failed} on all ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
+  return `${failed} after ${attempts.count} attempts, ${PASSING_FAILURE_NOTE}`;
 }
 
 function responseMessages(body: unknown): string[] {
@@ -645,6 +646,16 @@ function pause(milliseconds: number, signal: AbortSignal | null | undefined): Pr
   });
 }
 
+/**
+ * Whether a read gets another try after this answer.
+ * @param status - HTTP status of the answer.
+ * @param except - 5xx statuses this read leaves alone.
+ * @returns {boolean} True for a 5xx outside the exceptions.
+ */
+function retriesAfter(status: number, except: readonly number[]): boolean {
+  return status >= 500 && !except.includes(status);
+}
+
 /** One try ends with a response or with the error that left none. */
 type AttemptOutcome = { response: Response } | { cause: unknown };
 
@@ -664,14 +675,14 @@ class CloudflareHttpClient {
    * @param path - Path under the client's base URL.
    * @param parseResult - Parser for the envelope's `result`.
    * @param init - Fetch options; the client adds the token and the JSON content type.
-   * @param retryStatuses - Statuses worth another try for a read. A write passes none.
+   * @param retryExcept - 5xx statuses a read gets no other try on. A write passes none.
    * @returns {Promise<{ result: T; cursor?: string }>} The parsed result and the next page's cursor.
    */
   async request<T>(
     path: string,
     parseResult: (value: unknown) => T,
     init: RequestInit = {},
-    retryStatuses?: readonly number[],
+    retryExcept?: readonly number[],
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
       const headers = new Headers(init.headers);
@@ -682,7 +693,7 @@ class CloudflareHttpClient {
       const { response, attempts } = await this.send(
         `${this.baseURL}${path}`,
         { ...init, headers },
-        retryStatuses,
+        retryExcept,
       );
 
       const body = requireCloudflareEnvelope(
@@ -702,16 +713,16 @@ class CloudflareHttpClient {
   private async send(
     url: string,
     init: RequestInit,
-    retryStatuses: readonly number[] | undefined,
+    retryExcept: readonly number[] | undefined,
   ): Promise<{ response: Response; attempts: RequestAttempts }> {
-    const read = retryStatuses !== undefined;
+    const read = retryExcept !== undefined;
     const limit = read ? READ_ATTEMPTS : 1;
     for (let count = 1; ; count += 1) {
       const outcome = await this.attempt(url, init);
       const attempts = { count, read };
       if ("response" in outcome) {
         const { response } = outcome;
-        if (count >= limit || retryStatuses?.includes(response.status) !== true) {
+        if (count >= limit || !retriesAfter(response.status, retryExcept ?? [])) {
           return { response, attempts };
         }
         await response.body?.cancel();
@@ -770,7 +781,7 @@ async function requestProfilePage(
     `${path}${suffix}`,
     parseProfiles,
     { signal: options.signal },
-    READ_RETRY_STATUSES,
+    READ_RETRY_EXCEPT,
   );
   return {
     profiles: response.result,
@@ -937,7 +948,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
           body: JSON.stringify({ query, ...withoutSignal(options) }),
           signal: options.signal,
         },
-        READ_RETRY_STATUSES,
+        READ_RETRY_EXCEPT,
       )
     ).result;
   }
@@ -954,7 +965,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
       `/memories${suffix}`,
       parseMemoryList,
       { signal: options.signal },
-      READ_RETRY_STATUSES,
+      READ_RETRY_EXCEPT,
     );
     return {
       memories: response.result,
@@ -969,7 +980,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
         `/memories/${encodePath(memoryId)}`,
         parseMemory,
         { signal: options.signal },
-        READ_BY_ID_RETRY_STATUSES,
+        READ_BY_ID_RETRY_EXCEPT,
       )
     ).result;
   }
@@ -1003,7 +1014,7 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
           body: JSON.stringify(withoutSignal(options)),
           signal: options.signal,
         },
-        READ_RETRY_STATUSES,
+        READ_RETRY_EXCEPT,
       )
     ).result;
   }
@@ -1041,7 +1052,7 @@ export class CloudflareNamespaceClient {
       suffix,
       parseNamespaces,
       { signal: options.signal },
-      READ_RETRY_STATUSES,
+      READ_RETRY_EXCEPT,
     );
     return {
       namespaces: response.result,
@@ -1063,7 +1074,7 @@ export class CloudflareNamespaceClient {
         `/${encodePath(name)}`,
         parseNamespace,
         { signal: options.signal },
-        READ_RETRY_STATUSES,
+        READ_RETRY_EXCEPT,
       )
     ).result;
   }

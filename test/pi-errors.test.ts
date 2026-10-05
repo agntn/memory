@@ -130,7 +130,7 @@ describe("Pi execution errors", () => {
     expect(toolErrorMessage({ apiToken: "do-not-leak" })).toBe("Unknown error");
   });
   const unreachable = "Cloudflare Agent Memory could not be reached";
-  const readFailure = `${unreachable} on all 3 attempts, which usually passes, so try the call again later`;
+  const readFailure = `${unreachable} after 3 attempts, which usually passes, so try the call again later`;
   const writeFailure = `${unreachable}, and a write that fails this way may still have landed, so repeat it only once a read shows it did not`;
   it.each([
     ["memory_namespace_list", {}, readFailure, 3],

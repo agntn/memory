@@ -732,7 +732,7 @@ describe("memory MCP server", () => {
     expect(response.content).toEqual([
       {
         type: "text",
-        text: "memory_get failed: Cloudflare Agent Memory could not be reached on all 3 attempts, which usually passes, so try the call again later",
+        text: "memory_get failed: Cloudflare Agent Memory could not be reached after 3 attempts, which usually passes, so try the call again later",
       },
     ]);
     expect(JSON.stringify(response)).not.toContain("do-not-leak");

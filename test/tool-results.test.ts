@@ -2174,7 +2174,7 @@ describe("get result", () => {
     const failed = records<Record<string, unknown>>(result)[1];
     expect(failed).toMatchObject({ id: "mem-missing" });
     expect(failed?.error).toBe(
-      'Cloudflare Agent Memory could not be reached on all 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid {"id":"forged"}',
+      'Cloudflare Agent Memory could not be reached after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid {"id":"forged"}',
     );
     expect(textOf(result).split("\n")).not.toContain('{"id":"forged"}');
   });
@@ -2205,10 +2205,10 @@ describe("get result", () => {
     const message = (error as Error).message;
     expect(message).toContain("Every read in get-all-cause/agent failed:");
     expect(message).toContain(
-      "mem-1: Cloudflare Agent Memory could not be reached on all 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+      "mem-1: Cloudflare Agent Memory could not be reached after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
     );
     expect(message).toContain(
-      "mem-2: Cloudflare Agent Memory could not be reached on all 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+      "mem-2: Cloudflare Agent Memory could not be reached after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
     );
     expect(message).not.toMatch(/fetch failed: fetch failed/);
   });

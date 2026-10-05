@@ -554,7 +554,7 @@ describe("CloudflareMemoryProvider server and network failures", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it.each([500, 502, 503, 504])(
+  it.each([500, 501, 502, 503, 504, 520])(
     "names status %i and the passing failure once every try of a read ran out",
     async (status) => {
       useRetryTimers();
@@ -577,7 +577,7 @@ describe("CloudflareMemoryProvider server and network failures", () => {
         expect(error).toMatchObject({
           provider: "cloudflare",
           statusCode: status,
-          message: `Cloudflare Agent Memory failed with ${status} on all 3 attempts, ${passingNote}: ${serverFailure.errors[0]?.message}`,
+          message: `Cloudflare Agent Memory failed with ${status} after 3 attempts, ${passingNote}: ${serverFailure.errors[0]?.message}`,
         });
         expect(fetcher).toHaveBeenCalledTimes(3);
       }
@@ -610,7 +610,25 @@ describe("CloudflareMemoryProvider server and network failures", () => {
 
     expect(error).toMatchObject({
       statusCode: 503,
-      message: `Cloudflare Agent Memory failed with 503 on all 3 attempts, ${passingNote}`,
+      message: `Cloudflare Agent Memory failed with 503 after 3 attempts, ${passingNote}`,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("names the last failure, not every one, when the tries failed differently", async () => {
+    useRetryTimers();
+    const cause = new TypeError("fetch failed");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 502 }))
+      .mockRejectedValue(cause);
+
+    const error = await settle(clients(fetcher).namespaces.list());
+
+    expect(error).toBeInstanceOf(MemoryNetworkError);
+    expect(error).toMatchObject({
+      message: `Cloudflare Agent Memory could not be reached after 3 attempts, ${passingNote}`,
+      cause,
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
@@ -666,7 +684,7 @@ describe("CloudflareMemoryProvider server and network failures", () => {
     expect(error).toBeInstanceOf(MemoryNetworkError);
     expect(error).toMatchObject({
       provider: "cloudflare",
-      message: `Cloudflare Agent Memory could not be reached on all 3 attempts, ${passingNote}`,
+      message: `Cloudflare Agent Memory could not be reached after 3 attempts, ${passingNote}`,
       cause,
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
