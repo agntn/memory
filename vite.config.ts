@@ -1,5 +1,6 @@
-import { defineConfig } from "oxlint";
+import oxfmt from "@agntn/ox/oxfmt";
 import oxlint from "@agntn/ox/oxlint";
+import { defineConfig } from "vite-plus";
 
 const readonlyParameterOptions = {
   allow: [
@@ -90,43 +91,50 @@ const readonlyParameterOptions = {
   ignoreInferredTypes: true,
 };
 
+/** Vite+ lints, formats and tests. obuild keeps the build: `vp pack` can't stub or write licenses. */
 export default defineConfig({
-  ...oxlint,
-  rules: {
-    ...oxlint.rules,
-    "typescript/prefer-readonly-parameter-types": ["error", readonlyParameterOptions],
+  fmt: { ...oxfmt, ignorePatterns: ["dist", "coverage"] },
+  lint: {
+    ...oxlint,
+    rules: {
+      ...oxlint.rules,
+      "typescript/prefer-readonly-parameter-types": ["error", readonlyParameterOptions],
+    },
+    overrides: [
+      {
+        /** Test fixtures use mutable host shapes and Vitest's intentionally `any` asymmetric matchers. */
+        files: ["test/**/*.{ts,mjs}"],
+        rules: {
+          "jsdoc/require-param": "off",
+          "jsdoc/require-param-description": "off",
+          "jsdoc/require-param-name": "off",
+          "jsdoc/require-returns": "off",
+          "jsdoc/require-returns-description": "off",
+          "jsdoc/require-returns-type": "off",
+          "jsdoc/require-throws-type": "off",
+          "jsdoc/require-yields-type": "off",
+          "typescript/no-base-to-string": "off",
+          "typescript/no-unsafe-assignment": "off",
+          "typescript/prefer-readonly-parameter-types": "off",
+          "typescript/unbound-method": "off",
+        },
+      },
+      {
+        /** The packed smoke test loads an unpacked tarball dynamically, so JavaScript has no static package types. */
+        files: ["test/eval-packed.mjs"],
+        rules: {
+          "typescript/no-unsafe-argument": "off",
+          "typescript/no-unsafe-assignment": "off",
+          "typescript/no-unsafe-call": "off",
+          "typescript/no-unsafe-function-type": "off",
+          "typescript/no-unsafe-member-access": "off",
+          "typescript/no-unsafe-return": "off",
+        },
+      },
+    ],
+    ignorePatterns: ["dist", "coverage"],
   },
-  overrides: [
-    {
-      /** Test fixtures use mutable host shapes and Vitest's intentionally `any` asymmetric matchers. */
-      files: ["test/**/*.{ts,mjs}"],
-      rules: {
-        "jsdoc/require-param": "off",
-        "jsdoc/require-param-description": "off",
-        "jsdoc/require-param-name": "off",
-        "jsdoc/require-returns": "off",
-        "jsdoc/require-returns-description": "off",
-        "jsdoc/require-returns-type": "off",
-        "jsdoc/require-throws-type": "off",
-        "jsdoc/require-yields-type": "off",
-        "typescript/no-base-to-string": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/prefer-readonly-parameter-types": "off",
-        "typescript/unbound-method": "off",
-      },
-    },
-    {
-      /** The packed smoke test loads an unpacked tarball dynamically, so JavaScript has no static package types. */
-      files: ["test/eval-packed.mjs"],
-      rules: {
-        "typescript/no-unsafe-argument": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/no-unsafe-call": "off",
-        "typescript/no-unsafe-function-type": "off",
-        "typescript/no-unsafe-member-access": "off",
-        "typescript/no-unsafe-return": "off",
-      },
-    },
-  ],
-  ignorePatterns: ["dist", "coverage"],
+  test: {
+    setupFiles: ["./test/setup.ts"],
+  },
 });

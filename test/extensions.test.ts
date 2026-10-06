@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";

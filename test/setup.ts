@@ -1,5 +1,5 @@
 import type { execFile } from "node:child_process";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 
 /**
  * Neutralize the host configuration this library reads from the environment.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import {
   memoryFieldDescriptions,

@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 
 /** Captured at import, before any test fakes the timers. */
 const realSetTimeout = globalThis.setTimeout;

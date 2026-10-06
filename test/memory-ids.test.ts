@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   EARLIEST_MEMORY_MS,
   MEMORY_ID_CLOCK_SKEW_MS,

@@ -3,7 +3,7 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import memoryExtension from "../packages/pi/extensions/memory.ts";
 import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
