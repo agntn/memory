@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import type { ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
 import * as sharedSchemas from "../packages/shared/memory-tool-schemas.ts";
 import {

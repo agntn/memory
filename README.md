@@ -120,9 +120,9 @@ It does not edit a memory in place, list memories newest first, run Bun, or spea
 
 ```bash
 pnpm install
-pnpm lint        # builds first, then oxlint and oxfmt --check
+pnpm lint        # builds first, then vp lint and vp fmt --check
 pnpm typecheck
-pnpm test        # vitest --run
+pnpm test        # vp test run
 pnpm build       # obuild
 ```
 
