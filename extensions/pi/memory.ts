@@ -1,5 +1,5 @@
 import type { TSchema } from "typebox";
-import { toolErrorMessage } from "../../shared/tool-errors.ts";
+import { toolErrorMessage } from "../shared/tool-errors.ts";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -13,25 +13,21 @@ import {
   namespaceParameters,
   profileListParameters,
   profileOnlyParameters,
-} from "../../shared/memory-tool-schemas.ts";
+} from "../shared/memory-tool-schemas.ts";
 import {
   applyMemoryScope,
   applyMemoryWriteScope,
   configuredPiMemoryScope,
   memorySessionId,
-} from "../../shared/memory-scope.ts";
-import {
-  memoryToolExecutors,
-  memoryToolMeta,
-  memoryToolProgress,
-} from "../../shared/memory-tools.ts";
-import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
+} from "../shared/memory-scope.ts";
+import { memoryToolExecutors, memoryToolMeta, memoryToolProgress } from "../shared/memory-tools.ts";
+import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
 import {
   describeToolCall,
   MEMORY_TOOL_SYMBOLS,
   renderStatusLine,
   renderToolResult,
-} from "../../shared/tui.ts";
+} from "../shared/tui.ts";
 import type {
   GetParams,
   IngestParams,
@@ -48,7 +44,7 @@ import type {
   SessionParams,
   SummaryParams,
   SupersedeParams,
-} from "../../shared/memory-tools.types.ts";
+} from "../shared/memory-tools.types.ts";
 
 /* One streamed update: the progress line, with the real result still to come. */
 function progress(text: string): AgentToolResult<Record<string, unknown>> {

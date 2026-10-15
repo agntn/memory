@@ -4,7 +4,7 @@ import {
   memoryFieldDescriptions,
   memoryToolExecutors,
   memoryToolMeta,
-} from "../packages/shared/memory-tools.ts";
+} from "../extensions/shared/memory-tools.ts";
 
 interface StubResponse {
   result?: unknown;

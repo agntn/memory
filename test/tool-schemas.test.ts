@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import type { ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { describe, expect, it, vi } from "vite-plus/test";
-import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
-import * as sharedSchemas from "../packages/shared/memory-tool-schemas.ts";
+import ompMemoryExtension from "../extensions/omp/memory.ts";
+import * as sharedSchemas from "../extensions/shared/memory-tool-schemas.ts";
 import {
   MAX_TOOL_LIST_LIMIT,
   MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
@@ -14,7 +14,7 @@ import {
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_NAME_PATTERN,
   memoryToolMeta,
-} from "../packages/shared/memory-tools.ts";
+} from "../extensions/shared/memory-tools.ts";
 import { cloudflareMemoryLimits } from "../src/index.ts";
 import { createMcpServer } from "../src/mcp.ts";
 import { version } from "../src/version.ts";

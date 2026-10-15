@@ -106,7 +106,7 @@ describe("memory usage paths", () => {
     expect(loadedFrom(result.loaded, "/node_modules/@modelcontextprotocol/")).toEqual([]);
     expect(loadedFrom(result.loaded, "/node_modules/typebox/")).toEqual([]);
     expect(result.loaded.filter((url) => url.endsWith("/src/mcp.ts"))).toEqual([]);
-    expect(loadedFrom(result.loaded, "/packages/shared/")).toEqual([]);
+    expect(loadedFrom(result.loaded, "/extensions/shared/")).toEqual([]);
   });
 
   it("memory mcp serves the server over stdio", () => {
@@ -153,7 +153,7 @@ describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
   it("keeps the bundle when the package sits under node_modules", () => {
     withCopy(
       join(root, "node_modules/.cache"),
-      ["dist", "src", "packages", "package.json"],
+      ["dist", "src", "extensions", "package.json"],
       (copy) => {
         const result = runCli(["mcp"], { entry: join(copy, "dist/cli.mjs"), input: initialize });
 
@@ -165,7 +165,7 @@ describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
   });
 
   it("keeps the bundle in a package that ships no src", () => {
-    withCopy(tmpdir(), ["dist", "packages", "package.json"], (copy) => {
+    withCopy(tmpdir(), ["dist", "extensions", "package.json"], (copy) => {
       symlinkSync(join(root, "node_modules"), join(copy, "node_modules"), "dir");
       const result = runCli(["mcp"], { entry: join(copy, "dist/cli.mjs"), input: initialize });
 
@@ -175,7 +175,7 @@ describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
   });
 
   it("keeps the bundle in a checkout installed without devDependencies", () => {
-    withCopy(tmpdir(), ["dist", "src", "packages", "package.json"], (copy) => {
+    withCopy(tmpdir(), ["dist", "src", "extensions", "package.json"], (copy) => {
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
       };

@@ -6,7 +6,7 @@ import {
   renderStatusLine,
   renderToolResult,
   sanitizeTerminalText,
-} from "../packages/shared/tui.ts";
+} from "../extensions/shared/tui.ts";
 
 const ESC = String.fromCodePoint(27);
 const NUL = String.fromCodePoint(0);

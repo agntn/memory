@@ -5,8 +5,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
-import memoryExtension from "../packages/pi/extensions/memory.ts";
-import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
+import memoryExtension from "../extensions/pi/memory.ts";
+import { toolErrorMessage } from "../extensions/shared/tool-errors.ts";
 
 const context = {
   cwd: "/workspace/memory-test",

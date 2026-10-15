@@ -5,7 +5,7 @@ import type {
   ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent";
 import { Text } from "@oh-my-pi/pi-tui";
-import { toolErrorMessage } from "../../shared/tool-errors.ts";
+import { toolErrorMessage } from "../shared/tool-errors.ts";
 import {
   ISO_INSTANT_PATTERN,
   MAX_TOOL_INGEST_MESSAGES,
@@ -24,20 +24,20 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
   memoryToolProgress,
-} from "../../shared/memory-tools.ts";
-import type { RenderedToolResult, RenderOptions, StatusTheme } from "../../shared/tui.ts";
+} from "../shared/memory-tools.ts";
+import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
 import {
   describeToolCall,
   MEMORY_TOOL_SYMBOLS,
   renderStatusLine,
   renderToolResult,
-} from "../../shared/tui.ts";
+} from "../shared/tui.ts";
 import {
   applyMemoryScope,
   applyMemoryWriteScope,
   configuredMemoryScope,
   memorySessionId,
-} from "../../shared/memory-scope.ts";
+} from "../shared/memory-scope.ts";
 import type {
   GetParams,
   IngestParams,
@@ -54,7 +54,7 @@ import type {
   SessionParams,
   SummaryParams,
   SupersedeParams,
-} from "../../shared/memory-tools.types.ts";
+} from "../shared/memory-tools.types.ts";
 
 /*
  * Rebuild the shared parameter shapes with OMP's TypeBox.

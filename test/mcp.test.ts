@@ -3,7 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import { createMcpServer } from "../src/mcp.ts";
-import { memorySessionId } from "../packages/shared/memory-scope.ts";
+import { memorySessionId } from "../extensions/shared/memory-scope.ts";
 
 const openConnections: Array<{ close(): Promise<void> }> = [];
 

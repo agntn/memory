@@ -135,9 +135,9 @@ try {
     "dist/index.mjs",
     "dist/cli.mjs",
     "dist/mcp.mjs",
-    "packages/shared/memory-tools.ts",
-    "packages/pi/extensions/memory.ts",
-    "packages/omp/extensions/memory.ts",
+    "extensions/shared/memory-tools.ts",
+    "extensions/pi/memory.ts",
+    "extensions/omp/memory.ts",
   ]) {
     assert.ok(existsSync(path.join(packageRoot, entry)), `packed tarball is missing ${entry}`);
   }
@@ -176,10 +176,10 @@ try {
   );
   await writeFile(path.join(stubRoot, "index.mjs"), "export class Text {}\n");
 
-  const ompTools = await registerPacked(
-    path.join(packageRoot, "packages/omp/extensions/memory.ts"),
-    { typebox: OmpTypeBox, setLabel() {} },
-  );
+  const ompTools = await registerPacked(path.join(packageRoot, "extensions/omp/memory.ts"), {
+    typebox: OmpTypeBox,
+    setLabel() {},
+  });
   const ctx = { cwd: root, sessionManager: { getSessionId: () => "packed-conversation" } };
   const remembered = await ompTools
     .get("memory_remember")
@@ -208,10 +208,7 @@ try {
 
   // The Pi extension ships from the same tarball and reaches the library through
   // the shared executors, so it has to work from the packed layout too.
-  const piTools = await registerPacked(
-    path.join(packageRoot, "packages/pi/extensions/memory.ts"),
-    {},
-  );
+  const piTools = await registerPacked(path.join(packageRoot, "extensions/pi/memory.ts"), {});
   const recalled = await piTools
     .get("memory_recall")
     .execute("packed-pi", { namespace: "packed", profile: "agent", query: "what is packed?" });

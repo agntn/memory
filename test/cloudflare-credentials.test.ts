@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
+import { toolErrorMessage } from "../extensions/shared/tool-errors.ts";
 
 interface CfState {
   whoami: Record<string, unknown>;
@@ -46,10 +46,10 @@ function loggedIn(accounts: string[]): Record<string, unknown> {
 }
 
 async function loadCredentials(): Promise<
-  typeof import("../packages/shared/cloudflare-credentials.ts")
+  typeof import("../extensions/shared/cloudflare-credentials.ts")
 > {
   vi.resetModules();
-  return import("../packages/shared/cloudflare-credentials.ts");
+  return import("../extensions/shared/cloudflare-credentials.ts");
 }
 
 beforeEach(() => {
@@ -218,7 +218,7 @@ describe("memory tools with the cf OAuth session", () => {
       }),
     );
     vi.resetModules();
-    const { memoryToolExecutors } = await import("../packages/shared/memory-tools.ts");
+    const { memoryToolExecutors } = await import("../extensions/shared/memory-tools.ts");
 
     await memoryToolExecutors.listNamespaces({});
     cf.token = "oauth-2";

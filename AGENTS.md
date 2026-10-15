@@ -12,13 +12,13 @@
 - Registration is explicit through `registerAll()`. Importing anything has no side effects.
 - `src/commands/mcp.ts` imports the server and the SDK inside `run()`, because citty resolves the subcommand for `--help` and for an unknown command too. `test/cli.test.ts` runs those usage paths under a load hook.
 - Inside a checkout `dist/cli.mjs mcp` loads the command from `src/`, as the Pi and OMP extensions do, so a local server needs a restart after an edit and no build. It keeps the bundle under `MEMORY_DIST=1`, when Node doesn't strip types, under `node_modules`, without `src/`, and when typebox, the one devDependency `src/` imports at runtime, doesn't resolve. An edit to `src/cli.ts` itself still needs `pnpm build`. With `dist/` built, as CI's test job does before `pnpm test`, `test/cli.test.ts` goes red without any one of those guards. A clean checkout skips those cases.
-- Pi, OMP and MCP are one tool surface backed by `packages/shared/memory-tools.ts`.
-- Pi and MCP share the schemas in `packages/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
+- Pi, OMP and MCP are one tool surface backed by `extensions/shared/memory-tools.ts`.
+- Pi and MCP share the schemas in `extensions/shared/memory-tool-schemas.ts`. OMP rebuilds them with its host TypeBox because that is what validates OMP tool parameters, and `test/tool-schemas.test.ts` fails when the two copies drift.
 - Pi peers run `>=0.84.2 <2`, and the dev pin sits on 1.0.2 so `tsc` reads the 1.x types. On 2026-10-05 a packed tarball installed next to Pi 1.0.2, and a real `pi -p` session listed namespaces and came back with `isError` for both a service failure and an argument the host rejected. The next major gets the same session before the fence moves.
 
 ## Terminal rendering
 
-- Both wrappers render through `packages/shared/tui.ts`, so a call reads the same in either harness. Only the adapter around it differs.
+- Both wrappers render through `extensions/shared/tui.ts`, so a call reads the same in either harness. Only the adapter around it differs.
 - The two harnesses order the renderer arguments differently: Pi passes `(args, theme, context)`, OMP passes `(args, options, theme)`. Verify the order in the installed runtime's declarations, never in the dev dependency.
 - Pi keeps the failure flag out of the result object and reports it in the render context. OMP puts it in the result. A renderer that reads only `result.isError` marks a failed Pi call as done.
 - Both harnesses print the call line and the result line in one container, so the result line carries no tool name.
@@ -38,7 +38,7 @@
 
 The first provider follows the Cloudflare Agent Memory Workers and HTTP APIs documented on 2026-06-03. Agent Memory is private beta. Both binding and HTTP transports are supported. Over HTTP a read gets three tries on a 5xx or an answer that never arrives in full, except a read by id on 500, which is how the service answers an unknown id. A write goes out once, and its error says it may have landed anyway. Keep validation limits aligned with current Cloudflare documentation, and prefer a limit you measured against the live API over one from the docs page.
 
-The tools take `CLOUDFLARE_API_TOKEN` first. Without it `packages/shared/cloudflare-credentials.ts` borrows the cf CLI's OAuth session: `cf auth whoami` refreshes an expired token and names the credentials file. The token rotates while a server runs, so cached clients are rebuilt when it changes. `test/setup.ts` mocks `execFile`, so the suite never borrows a contributor's login. The account comes only from `AGNTN_CLOUDFLARE_ACCOUNT_ID`: `CLOUDFLARE_ACCOUNT_ID` belongs to cf and wrangler and is never read.
+The tools take `CLOUDFLARE_API_TOKEN` first. Without it `extensions/shared/cloudflare-credentials.ts` borrows the cf CLI's OAuth session: `cf auth whoami` refreshes an expired token and names the credentials file. The token rotates while a server runs, so cached clients are rebuilt when it changes. `test/setup.ts` mocks `execFile`, so the suite never borrows a contributor's login. The account comes only from `AGNTN_CLOUDFLARE_ACCOUNT_ID`: `CLOUDFLARE_ACCOUNT_ID` belongs to cf and wrangler and is never read.
 
 ## Commands
 
