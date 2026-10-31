@@ -32,7 +32,7 @@ const initialize = `${JSON.stringify({
 })}\n`;
 
 /**
- * Run a CLI entry under the load hook. citty exits on its own, so the hook reports at exit.
+ * Run a CLI entry under the load hook, which reports at exit.
  */
 function runCli(
   args: readonly string[],
@@ -93,20 +93,42 @@ function loadedFrom(loaded: readonly string[], directory: string): string[] {
 
 describe("memory usage paths", () => {
   it.each([
-    { args: ["--help"], status: 0 },
-    { args: ["-h"], status: 0 },
-    { args: ["mcp", "--help"], status: 0 },
-    { args: ["no-such-command"], status: 1 },
-  ])("memory $args prints the usage without the server", ({ args, status }) => {
+    {
+      args: ["--help"],
+      usage: /^USAGE memory <command>.*^ {2}mcp {2,}Run the memory MCP server/msu,
+    },
+    { args: ["-h"], usage: /^USAGE memory <command>.*^ {2}mcp {2,}Run the memory MCP server/msu },
+    { args: ["mcp", "--help"], usage: /^USAGE memory mcp$/mu },
+  ])("memory $args prints the usage without the server", ({ args, usage }) => {
     const result = runCli(args);
 
-    expect(result.status).toBe(status);
-    expect(result.stdout).toMatch(/USAGE.*memory mcp/u);
-    expect(result.loaded.some((url) => url.endsWith("/src/commands/mcp.ts"))).toBe(true);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(usage);
     expect(loadedFrom(result.loaded, "/node_modules/@modelcontextprotocol/")).toEqual([]);
     expect(loadedFrom(result.loaded, "/node_modules/typebox/")).toEqual([]);
     expect(result.loaded.filter((url) => url.endsWith("/src/mcp.ts"))).toEqual([]);
-    expect(loadedFrom(result.loaded, "/extensions/shared/")).toEqual([]);
+    expect(
+      result.loaded.filter((url) => url.endsWith("/extensions/shared/memory-tools.ts")),
+    ).toEqual([]);
+  });
+
+  it("names an unknown command on stderr", () => {
+    const result = runCli(["no-such-command"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unknown command "no-such-command"');
+    expect(loadedFrom(result.loaded, "/node_modules/@modelcontextprotocol/")).toEqual([]);
+  });
+
+  it("names a half-set scope in one line instead of a stack trace", () => {
+    const result = runCli(["--help"], {
+      env: { AGNTN_MEMORY_NAMESPACE: "default", AGNTN_MEMORY_PROFILE: "" },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe(
+      "AGNTN_MEMORY_NAMESPACE and AGNTN_MEMORY_PROFILE must be set together\n",
+    );
   });
 
   it("memory mcp serves the server over stdio", () => {
@@ -174,7 +196,7 @@ describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
     });
   });
 
-  it("keeps the bundle in a checkout installed without devDependencies", () => {
+  it("serves the source in a checkout installed without devDependencies", () => {
     withCopy(tmpdir(), ["dist", "src", "extensions", "package.json"], (copy) => {
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
@@ -187,7 +209,7 @@ describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
 
       expect(result.status).toBe(0);
       expect(serverName(result.stdout)).toBe("memory");
-      expect(servedFrom(result.loaded, copy)).toBe("bundle");
+      expect(servedFrom(result.loaded, copy)).toBe("source");
     });
   });
 });

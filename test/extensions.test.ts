@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
 import piMemoryExtension from "../extensions/pi/memory.ts";
 import ompMemoryExtension from "../extensions/omp/memory.ts";
 import { painted, type RegisteredTool } from "./extensions.types.ts";
@@ -33,6 +32,9 @@ vi.mock("@oh-my-pi/pi-tui", () => ({
     }
   },
 }));
+
+/** OMP's host `Type.Unsafe` emits the JSON Schema it gets; standalone omptype shares one object. */
+const ompTypebox = { Type: { Unsafe: (schema: unknown) => schema } };
 
 const expectedNames = [
   "memory_namespace_list",
@@ -149,16 +151,21 @@ describe("memory extensions", () => {
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
     const { signal } = new AbortController();
-    await remember!.execute(
-      "call-1",
-      { content: "canonical", sessionId: "model-selected-session" },
-      signal,
-      undefined,
-      {
-        cwd: "/workspace/movie-enigma",
-        sessionManager: { getSessionId: () => "pi-session-123" },
-      },
-    );
+    const context = {
+      cwd: "/workspace/movie-enigma",
+      sessionManager: { getSessionId: () => "pi-session-123" },
+    };
+    await expect(
+      remember!.execute(
+        "call-0",
+        { content: "canonical", sessionId: "model-selected-session" },
+        signal,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow('unknown property "sessionId"');
+    expect(execute).not.toHaveBeenCalled();
+    await remember!.execute("call-1", { content: "canonical" }, signal, undefined, context);
 
     expect(execute).toHaveBeenCalledWith(
       {
@@ -245,16 +252,21 @@ describe("memory extensions", () => {
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
 
     const { signal } = new AbortController();
-    await remember!.execute(
-      "call-1",
-      { content: "canonical", sessionId: "model-selected-session" },
-      signal,
-      undefined,
-      {
-        cwd: "/workspace/movie-enigma",
-        sessionManager: { getSessionId: () => "omp-session-123" },
-      },
-    );
+    const context = {
+      cwd: "/workspace/movie-enigma",
+      sessionManager: { getSessionId: () => "omp-session-123" },
+    };
+    await expect(
+      remember!.execute(
+        "call-0",
+        { content: "canonical", sessionId: "model-selected-session" },
+        signal,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow('unknown property "sessionId"');
+    expect(execute).not.toHaveBeenCalled();
+    await remember!.execute("call-1", { content: "canonical" }, signal, undefined, context);
 
     expect(execute).toHaveBeenCalledWith(
       {
@@ -271,7 +283,7 @@ describe("memory extensions", () => {
     const labels: string[] = [];
 
     ompMemoryExtension({
-      typebox: OmpTypebox,
+      typebox: ompTypebox,
       setLabel: (label: string) => labels.push(label),
       registerTool() {},
     } as unknown as OmpExtensionAPI);
@@ -446,7 +458,7 @@ function piTools(): RegisteredTool[] {
 function ompTools(): RegisteredTool[] {
   const tools: RegisteredTool[] = [];
   ompMemoryExtension({
-    typebox: OmpTypebox,
+    typebox: ompTypebox,
     setLabel() {},
     registerTool(tool: RegisteredTool) {
       tools.push(tool);

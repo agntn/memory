@@ -55,7 +55,11 @@ Check provider `capabilities` before relying on backend-specific features. For e
 
 ## Use with an agent
 
-The MCP, Pi, and OMP tools use Cloudflare over HTTP. They don't expose Mnemopi. The CLI has one command, `mcp`, which runs the MCP server over stdio. There isn't a `remember` CLI command. The agent gets that job.
+The MCP, Pi, and OMP tools use Cloudflare over HTTP. They don't expose Mnemopi. The CLI now gives every agent tool a command, built from the same definitions.
+
+Drop the `memory_` prefix and use hyphens: `memory_remember` becomes `memory remember`. Arguments are flags, like `--content "Prefers short answers."`. Pass arrays and objects as JSON. Run `memory <command> --help` for the flags. You get exactly the text the agent sees, which makes the terminal a handy place to try things. Use `--json` for structured details.
+
+The agent doesn't get the whole job anymore. `memory mcp` still runs the MCP server over stdio.
 
 From the checkout, configure an MCP client with:
 

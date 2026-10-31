@@ -1,16 +1,12 @@
-import { defineCommand } from "citty";
-
-export default defineCommand({
-  meta: {
-    name: "mcp",
-    description: "Run the memory MCP server over stdio",
-  },
-  /** citty resolves every subcommand to print the usage, so the server and the SDK load here and `--help` stays light. */
-  async run() {
-    const [{ createMcpServer }, { StdioServerTransport }] = await Promise.all([
-      import("../mcp.ts"),
-      import("@modelcontextprotocol/sdk/server/stdio.js"),
-    ]);
-    await createMcpServer().connect(new StdioServerTransport());
-  },
-});
+/**
+ * Serve the MCP server over stdio. The SDK loads here and nowhere else in the CLI.
+ *
+ * @returns {Promise<void>} Once the transport is connected.
+ */
+export async function serveMcp(): Promise<void> {
+  const [{ createMcpServer }, { StdioServerTransport }] = await Promise.all([
+    import("../mcp.ts"),
+    import("@modelcontextprotocol/server/stdio"),
+  ]);
+  await createMcpServer().connect(new StdioServerTransport());
+}

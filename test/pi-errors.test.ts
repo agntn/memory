@@ -134,8 +134,13 @@ describe("Pi execution errors", () => {
   const writeFailure = `${unreachable}, and a write that fails this way may still have landed, so repeat it only once a read shows it did not`;
   it.each([
     ["memory_namespace_list", {}, readFailure, 3],
-    ["memory_remember", { content: "synthetic" }, writeFailure, 1],
-    ["memory_recall", { query: "synthetic" }, readFailure, 3],
+    [
+      "memory_remember",
+      { namespace: "test", profile: "agent", content: "synthetic" },
+      writeFailure,
+      1,
+    ],
+    ["memory_recall", { namespace: "test", profile: "agent", query: "synthetic" }, readFailure, 3],
   ])("keeps the network cause in %s", async (name, params, failure, calls) => {
     useRetryTimers();
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
@@ -150,13 +155,7 @@ describe("Pi execution errors", () => {
     if (!tool) throw new Error(`Missing tool: ${name}`);
 
     const execution = tool
-      .execute(
-        "call-1",
-        { namespace: "test", profile: "agent", ...params },
-        new AbortController().signal,
-        undefined,
-        context,
-      )
+      .execute("call-1", params, new AbortController().signal, undefined, context)
       .catch((cause: unknown) => cause);
     await settle(execution);
 
