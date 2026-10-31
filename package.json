@@ -60,8 +60,8 @@
   },
   "devDependencies": {
     "@agntn/ox": "0.1.0",
-    "@earendil-works/pi-coding-agent": "1.0.2",
-    "@earendil-works/pi-tui": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@earendil-works/pi-tui": "1.0.4",
     "@oh-my-pi/omptype": "18.0.5",
     "@oh-my-pi/pi-coding-agent": "18.0.5",
     "@oh-my-pi/pi-tui": "18.0.5",
