@@ -4,6 +4,7 @@ import {
   type ToolCallContext,
   type ToolDefinition,
   type ToolEffect,
+  ToolInputError,
 } from "@agntn/tools";
 import type { AbortOptions } from "@agntn/memory";
 import {
@@ -13,7 +14,12 @@ import {
   profileListParameters,
   profileOnlyParameters,
 } from "./memory-tool-schemas.ts";
-import { applyMemoryScope, applyMemoryWriteScope, memorySessionId } from "./memory-scope.ts";
+import {
+  applyMemoryScope,
+  applyMemoryWriteScope,
+  callerMemoryScope,
+  memorySessionId,
+} from "./memory-scope.ts";
 import { memoryToolMeta, memoryToolProgress } from "./memory-tool-contract.ts";
 import type * as MemoryTools from "./memory-tools.ts";
 import type { MemoryToolResult, ProfileParams } from "./memory-tools.types.ts";
@@ -23,7 +29,7 @@ export type MemoryToolName = keyof typeof memoryToolMeta;
 
 /** How each surface binds the calls it serves. */
 export interface MemoryToolOptions {
-  /** Namespace and profile the host fixes, which also take them out of the schemas. */
+  /** Namespace and profile a call gets when it names neither of them. */
   readonly scope?: ProfileParams;
   /** The host's conversation session for a write, read from the call's `host`. */
   readonly writeSession?: (host: unknown) => string | undefined;
@@ -68,11 +74,11 @@ const administrationTools: ReadonlySet<MemoryToolName> = new Set([
 ]);
 
 /**
- * Arguments as a call line shows them: a scoped tool hides namespace and profile from the model.
+ * Arguments as a call line shows them, with the default scope filled in where the call left it out.
  *
  * @param name - Tool the arguments belong to.
  * @param args - Arguments the model sent.
- * @param scope - Namespace and profile the host fixes, if any.
+ * @param scope - Namespace and profile the host defaults to, if any.
  * @returns {object} The arguments with the scope filled in where the tool takes it.
  */
 export function scopedCallArguments(
@@ -132,6 +138,20 @@ function startProgress(name: MemoryToolName, params: object, context: ToolCallCo
 }
 
 /**
+ * Refuse half a pair: completing it from the default would land the call in a third profile.
+ *
+ * @param input - Arguments the core validated.
+ * @param scope - The host's default scope.
+ * @throws {ToolInputError} When exactly one of the two is present.
+ */
+function assertWholeScope(input: object, scope: ProfileParams | undefined): void {
+  if (scope === undefined || callerMemoryScope(input) !== "half") return;
+  throw new ToolInputError([
+    `Invalid arguments: pass namespace and profile together, or neither for ${scope.namespace}/${scope.profile}`,
+  ]);
+}
+
+/**
  * Bind the scope and stream progress. The causes go into the message, the only part hosts show.
  *
  * @param spec - The tool being called.
@@ -139,6 +159,7 @@ function startProgress(name: MemoryToolName, params: object, context: ToolCallCo
  * @param context - Per-call context from the adapter.
  * @param binding - Scope and session binding of the surface.
  * @returns {Promise<MemoryToolResult>} The executor's result.
+ * @throws {ToolInputError} When the call names only half of its scope.
  * @throws {Error} The executor's failure with its causes in the message.
  */
 async function runMemoryTool(
@@ -147,6 +168,7 @@ async function runMemoryTool(
   context: ToolCallContext,
   binding: MemoryToolOptions,
 ): Promise<MemoryToolResult> {
+  if (spec.reach !== "none") assertWholeScope(input, binding.scope);
   const params =
     spec.reach === "none"
       ? input
@@ -168,11 +190,11 @@ async function runMemoryTool(
 /**
  * The tool table, in the order every surface lists it.
  *
- * @param scoped - Whether the host fixes namespace and profile.
+ * @param scope - Namespace and profile the host defaults to, if any.
  * @returns {readonly MemoryToolSpec[]} One entry per tool.
  */
-function memoryToolSpecs(scoped: boolean): readonly MemoryToolSpec[] {
-  const schemas = createOperationalMemoryToolSchemas(scoped);
+function memoryToolSpecs(scope: ProfileParams | undefined): readonly MemoryToolSpec[] {
+  const schemas = createOperationalMemoryToolSchemas(scope);
   return [
     {
       name: "memory_namespace_list",
@@ -357,7 +379,7 @@ function memoryToolSpecs(scoped: boolean): readonly MemoryToolSpec[] {
  * @returns {readonly ToolDefinition[]} The definitions, in listing order.
  */
 export function createMemoryTools(options: MemoryToolOptions = {}): readonly ToolDefinition[] {
-  return memoryToolSpecs(options.scope !== undefined).map((spec) =>
+  return memoryToolSpecs(options.scope).map((spec) =>
     defineTool({
       name: spec.name,
       title: memoryToolMeta[spec.name].label,

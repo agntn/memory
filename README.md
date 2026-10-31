@@ -80,7 +80,7 @@ From the checkout, configure an MCP client with:
 }
 ```
 
-Run the command from the checkout so `pnpm` can find the package. The namespace and profile bind the tools to that scope. Pi does not load `.env`. Without these variables, Pi checks `~/.pi/agent/memory-scope.json`.
+Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/memory-scope.json`. The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused. Writes keep the host's session ID wherever they go, and the model can't pass `sessionId` as an argument. A default should be a starting point, not a fence.
 
 Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account.
 
