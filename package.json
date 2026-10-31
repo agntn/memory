@@ -55,7 +55,7 @@
     "release": "pnpm test && pnpm build && changelogen --release --push"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "citty": "0.2.2"
   },
   "devDependencies": {
@@ -65,11 +65,11 @@
     "@oh-my-pi/omptype": "18.0.5",
     "@oh-my-pi/pi-coding-agent": "18.0.5",
     "@oh-my-pi/pi-tui": "18.0.5",
-    "@types/node": "26.2.0",
+    "@types/node": "26.6.6",
     "changelogen": "0.6.2",
     "obuild": "0.4.40",
     "tsx": "4.23.13",
-    "typebox": "1.3.33",
+    "typebox": "1.4.3",
     "typescript": "7.0.2",
     "vite-plus": "catalog:"
   },
