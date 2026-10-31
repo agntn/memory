@@ -1,5 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
 import { createMcpServer } from "../src/mcp.ts";
@@ -347,7 +346,6 @@ describe("memory MCP server", () => {
           timeoutSeconds: 90,
         },
       },
-      undefined,
       {
         onprogress: (update) => updates.push(update),
         resetTimeoutOnProgress: true,
@@ -371,12 +369,13 @@ describe("memory MCP server", () => {
       }),
     });
     expect(updates).toEqual([
+      { progress: 0, total: 90_000, message: "Waiting for memory to reach recall" },
       { progress: 30_000, total: 90_000, message: "Waiting for memory to reach recall" },
       { progress: 60_000, total: 90_000, message: "Waiting for memory to reach recall" },
     ]);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(updates).toHaveLength(2);
+    expect(updates).toHaveLength(3);
   });
 
   it("gives the outbound request the caller's cancellation signal", async () => {
@@ -450,9 +449,19 @@ describe("memory MCP server", () => {
     expect(supersedeSchema?.properties).not.toHaveProperty("profile");
     expect(supersedeSchema?.properties).not.toHaveProperty("sessionId");
 
-    const response = await client.callTool({
+    const refused = await client.callTool({
       name: "memory_remember",
       arguments: { content: "one canonical memory", sessionId: "model-selected-session" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toEqual([
+      { type: "text", text: 'Invalid arguments: unknown property "sessionId"; takes content' },
+    ]);
+    expect(requests).toEqual([]);
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: { content: "one canonical memory" },
     });
 
     expect(response.isError).not.toBe(true);
@@ -657,7 +666,7 @@ describe("memory MCP server", () => {
     const response = await client.callTool({ name: "toString", arguments: {} });
 
     expect(response.isError).toBe(true);
-    expect(response.content).toEqual([{ type: "text", text: "Unknown memory tool: toString" }]);
+    expect(response.content).toEqual([{ type: "text", text: 'Unknown memory tool: "toString"' }]);
   });
 
   it("keeps an unknown tool name on the error line", async () => {
@@ -670,7 +679,7 @@ describe("memory MCP server", () => {
 
     expect(response.isError).toBe(true);
     expect(response.content).toEqual([
-      { type: "text", text: 'Unknown memory tool: unknown {"id":"forged"}' },
+      { type: "text", text: 'Unknown memory tool: "unknown\\n{\\"id\\":\\"forged\\"}"' },
     ]);
   });
 

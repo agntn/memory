@@ -20,9 +20,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import * as OmpTypeBox from "@oh-my-pi/omptype/typebox";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -136,6 +134,7 @@ try {
     "dist/cli.mjs",
     "dist/mcp.mjs",
     "extensions/shared/memory-tools.ts",
+    "extensions/shared/memory-tool-definitions.ts",
     "extensions/pi/memory.ts",
     "extensions/omp/memory.ts",
   ]) {
@@ -147,16 +146,14 @@ try {
     [],
     "Pi supplies these packages, so they belong in peerDependencies",
   );
-  assert.equal(manifest.peerDependencies?.typebox, "*", 'Pi asks for a "*" range on typebox');
-  // typebox is only an optional peer now, so the CLI and the MCP server have to
-  // carry their own copy. This checkout's node_modules would hide a bare import.
+  /* OMP rewrites a bare typebox import, and this checkout's node_modules would hide one. */
   for (const file of await readdir(path.join(packageRoot, "dist"), { recursive: true })) {
     if (!file.endsWith(".mjs")) continue;
     const code = await readFile(path.join(packageRoot, "dist", file), "utf8");
     assert.doesNotMatch(
       code,
       /(?:from|import)\s*\(?\s*["']typebox(?:\/[^"']*)?["']/,
-      `dist/${file} imports typebox instead of bundling it`,
+      `dist/${file} imports typebox, which OMP would rewrite`,
     );
   }
   assert.ok(
@@ -177,7 +174,7 @@ try {
   await writeFile(path.join(stubRoot, "index.mjs"), "export class Text {}\n");
 
   const ompTools = await registerPacked(path.join(packageRoot, "extensions/omp/memory.ts"), {
-    typebox: OmpTypeBox,
+    typebox: { Type: { Unsafe: (schema) => schema } },
     setLabel() {},
   });
   const ctx = { cwd: root, sessionManager: { getSessionId: () => "packed-conversation" } };
@@ -216,8 +213,7 @@ try {
   assert.match(recalled.content[0].text, /packed recall answer/);
   assert.match(requests.at(-1).url, /\/namespaces\/packed\/profiles\/agent\/recall$/);
 
-  // The MCP bundle is the only entry that carries the SDK and typebox, so a
-  // missing dependency or a chunk split surfaces here first.
+  /* The MCP bundle is the only entry that loads the SDK: a missing dependency surfaces here. */
   const { createMcpServer } = await import(
     pathToFileURL(path.join(packageRoot, "dist/mcp.mjs")).href
   );

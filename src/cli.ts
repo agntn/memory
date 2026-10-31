@@ -1,27 +1,13 @@
 #!/usr/bin/env node
+/** Memory CLI: a command per memory tool, and `mcp` for the stdio server. */
 import { existsSync } from "node:fs";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineCommand, runMain } from "citty";
-import type McpCommand from "./commands/mcp.ts";
-import { version } from "./version.ts";
+import type * as McpCommand from "./commands/mcp.ts";
 
 /** The same file from `src/cli.ts` and `dist/cli.mjs`; the npm package ships only `dist`. */
 const sourceMcpCommand = new URL("../src/commands/mcp.ts", import.meta.url);
 const sourceMcpCommandPath = fileURLToPath(sourceMcpCommand);
-
-/**
- * typebox is the one devDependency `src/` loads, and the bundle carries its own copy.
- * @returns {boolean} Whether typebox resolves from this file.
- */
-function resolvesTypebox(): boolean {
-  try {
-    import.meta.resolve("typebox");
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Node won't strip types under `node_modules` or with stripping off, and `MEMORY_DIST=1` opts out.
@@ -33,43 +19,38 @@ function servesSource(): boolean {
     process.env.MEMORY_DIST !== "1" &&
     Boolean(process.features.typescript) &&
     !sourceMcpCommandPath.includes(`${sep}node_modules${sep}`) &&
-    existsSync(sourceMcpCommandPath) &&
-    resolvesTypebox()
+    existsSync(sourceMcpCommandPath)
   );
 }
 
 /**
  * Narrows the module a runtime URL import returned, which TypeScript types as `any`.
  * @param value - The imported module namespace.
- * @returns {value is { default: typeof McpCommand }} Whether it exports a default command.
+ * @returns {value is typeof McpCommand} Whether it exports `serveMcp`.
  */
-function isCommandModule(value: unknown): value is { default: typeof McpCommand } {
-  return typeof value === "object" && value !== null && "default" in value;
+function isMcpModule(value: unknown): value is typeof McpCommand {
+  return typeof value === "object" && value !== null && "serveMcp" in value;
 }
 
 /**
  * A checkout's bin serves live `src/`, so an edit wants a restart, not `pnpm build`.
- * @returns {Promise<typeof McpCommand>} The citty command that starts the stdio server.
- * @throws {TypeError} When the source file has no default export.
+ * @returns {Promise<typeof McpCommand>} The module that starts the stdio server.
+ * @throws {TypeError} When the source file has no `serveMcp`.
  */
 async function loadMcpCommand(): Promise<typeof McpCommand> {
-  if (!servesSource()) return (await import("./commands/mcp.ts")).default;
+  if (!servesSource()) return import("./commands/mcp.ts");
   const module: unknown = await import(sourceMcpCommand.href);
-  if (!isCommandModule(module)) {
-    throw new TypeError(`${sourceMcpCommandPath} has no default command`);
-  }
-  return module.default;
+  if (!isMcpModule(module)) throw new TypeError(`${sourceMcpCommandPath} has no serveMcp`);
+  return module;
 }
 
-const main = defineCommand({
-  meta: {
-    name: "memory",
-    version,
-    description: "Agent memory CLI",
-  },
-  subCommands: {
-    mcp: loadMcpCommand,
-  },
-});
+const argv = process.argv.slice(2);
 
-await runMain(main);
+/** `memory mcp` serves straight away, and a stray flag from a client config doesn't stop it. */
+const servesMcp = argv[0] === "mcp" && !argv.some((word) => word === "--help" || word === "-h");
+
+if (servesMcp) {
+  await (await loadMcpCommand()).serveMcp();
+} else {
+  await (await import("./cli-run.ts")).runMemoryCli(argv);
+}

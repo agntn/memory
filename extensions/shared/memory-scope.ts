@@ -8,7 +8,7 @@ import {
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_NAME_PATTERN,
-} from "./memory-tools.ts";
+} from "./memory-tool-contract.ts";
 
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";

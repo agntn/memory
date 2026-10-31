@@ -25,6 +25,7 @@ const readonlyParameterOptions = {
         "MemoryParams",
         "MemoryProfile",
         "MemoryToolResult",
+        "MemoryToolSpec",
         "MnemopiClient",
         "MnemopiMemoryOptions",
         "NamespaceListParams",
@@ -76,6 +77,11 @@ const readonlyParameterOptions = {
       from: "package" as const,
       name: ["RequestInit", "Response"],
       package: "undici-types",
+    },
+    {
+      from: "package" as const,
+      name: ["ToolCallContext"],
+      package: "@agntn/tools",
     },
     {
       from: "package" as const,
