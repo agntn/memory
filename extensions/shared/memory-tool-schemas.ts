@@ -1,4 +1,4 @@
-import { Type } from "@agntn/tools";
+import { Type, type TObject } from "@agntn/tools";
 import {
   ISO_INSTANT_PATTERN,
   MAX_TOOL_INGEST_MESSAGES,
@@ -15,6 +15,7 @@ import {
   MEMORY_NAME_PATTERN,
   memoryFieldDescriptions,
 } from "./memory-tool-contract.ts";
+import type { ProfileParams } from "./memory-tools.types.ts";
 
 /** Parameter schemas of the memory tools. OMP rewrites a bare `typebox` import, so none here. */
 /** `defineTool` refuses open objects: a misspelled key would change the call silently. */
@@ -325,55 +326,87 @@ export const summaryParameters = Type.Object(
 export const profileOnlyParameters = Type.Object(profileParameters, closed);
 
 /**
- * Build the model-facing schemas for either a fixed operational scope or raw administration.
+ * Namespace and profile as a bound host offers them: optional, and named after the default.
  *
- * @param scoped - Whether namespace, profile, and write provenance are bound by the host.
- * @returns {object} The schema set exposed to model-facing memory tools.
+ * @param target - The bound `namespace/profile`, for the descriptions.
+ * @returns {object} Optional namespace and profile properties.
  */
-export function createOperationalMemoryToolSchemas(scoped: boolean) {
-  if (!scoped) {
-    return {
-      rememberParameters,
-      supersedeParameters,
-      resumeSupersessionParameters,
-      recallVisibilityParameters,
-      ingestParameters,
-      recallParameters,
-      listParameters,
-      getParameters,
-      memoryParameters,
-      summaryParameters,
-      sessionParameters,
-    };
-  }
-
+function boundProfileParameters(target: string) {
   return {
-    rememberParameters: Type.Omit(
-      rememberParameters,
-      ["namespace", "profile", "sessionId"],
-      closed,
+    namespace: Type.Optional(
+      Type.String({
+        description: memoryFieldDescriptions.boundNamespace(target),
+        minLength: 1,
+        maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
+        pattern: MEMORY_NAME_PATTERN,
+      }),
     ),
-    supersedeParameters: Type.Omit(
-      supersedeParameters,
-      ["namespace", "profile", "sessionId"],
-      closed,
+    profile: Type.Optional(
+      Type.String({
+        description: memoryFieldDescriptions.boundProfile(target),
+        minLength: 1,
+        maxLength: MAX_TOOL_PROFILE_CHARACTERS,
+        pattern: MEMORY_NAME_PATTERN,
+      }),
     ),
-    resumeSupersessionParameters: Type.Omit(
-      resumeSupersessionParameters,
-      ["namespace", "profile"],
-      closed,
-    ),
-    recallVisibilityParameters: Type.Omit(
-      recallVisibilityParameters,
-      ["namespace", "profile"],
-      closed,
-    ),
-    ingestParameters: Type.Omit(ingestParameters, ["namespace", "profile", "sessionId"], closed),
-    recallParameters: Type.Omit(recallParameters, ["namespace", "profile"], closed),
-    listParameters: Type.Omit(listParameters, ["namespace", "profile"], closed),
-    getParameters: Type.Omit(getParameters, ["namespace", "profile"], closed),
-    memoryParameters: Type.Omit(memoryParameters, ["namespace", "profile"], closed),
-    summaryParameters: Type.Omit(summaryParameters, ["namespace", "profile"], closed),
-    sessionParameters: Type.Omit(sessionParameters, ["namespace", "profile"], closed),
   };
+}
+
+/** The operational schemas as an unbound host serves them, namespace and profile required. */
+const rawOperationalSchemas = {
+  rememberParameters,
+  supersedeParameters,
+  resumeSupersessionParameters,
+  recallVisibilityParameters,
+  ingestParameters,
+  recallParameters,
+  listParameters,
+  getParameters,
+  memoryParameters,
+  summaryParameters,
+  sessionParameters,
+};
+
+type OperationalSchemaName = keyof typeof rawOperationalSchemas;
+
+/** Writes whose session the host stamps itself, so a bound model never gets to pass one. */
+const hostSessionSchemas: ReadonlySet<OperationalSchemaName> = new Set([
+  "rememberParameters",
+  "supersedeParameters",
+  "ingestParameters",
+]);
+
+/**
+ * One operational schema under a bound scope: the pair turns optional, a write loses `sessionId`.
+ *
+ * @param name - Which raw schema to rebuild.
+ * @param target - The bound `namespace/profile`.
+ * @returns {TObject} The closed schema the model sees.
+ */
+function boundSchema(name: OperationalSchemaName, target: string): TObject {
+  const hostOwned = hostSessionSchemas.has(name) ? ["sessionId"] : [];
+  const rest = Type.Omit(
+    rawOperationalSchemas[name],
+    ["namespace", "profile", ...hostOwned],
+    closed,
+  );
+  return Type.Object({ ...boundProfileParameters(target), ...rest.properties }, closed);
+}
+
+/**
+ * Build the model-facing schemas for raw administration or for a host that binds a default scope.
+ *
+ * @param scope - Namespace and profile the host defaults to, if any.
+ * @returns {Record<OperationalSchemaName, TObject>} The schemas the model sees.
+ */
+export function createOperationalMemoryToolSchemas(
+  scope: ProfileParams | undefined,
+): Record<OperationalSchemaName, TObject> {
+  if (scope === undefined) return rawOperationalSchemas;
+  const target = `${scope.namespace}/${scope.profile}`;
+  const names = Object.keys(rawOperationalSchemas) as OperationalSchemaName[];
+  return Object.fromEntries(names.map((name) => [name, boundSchema(name, target)])) as Record<
+    OperationalSchemaName,
+    TObject
+  >;
 }

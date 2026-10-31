@@ -40,10 +40,10 @@ function validateMemoryScope(
 }
 
 /**
- * Return the fixed operational scope, or undefined for the raw multi-profile surface.
+ * Return the default operational scope, or undefined for the raw multi-profile surface.
  *
  * @param env - Environment carrying the optional namespace and profile pair.
- * @returns {ProfileParams | undefined} The validated fixed scope, or `undefined` when neither variable is set.
+ * @returns {ProfileParams | undefined} The default scope, or `undefined` with neither variable set.
  */
 export function configuredMemoryScope(
   env: Readonly<NodeJS.ProcessEnv> = process.env,
@@ -114,7 +114,7 @@ function parsePiScope(value: unknown, configPath: string): ProfileParams {
  *
  * @param env - Pi process environment and optional scope override.
  * @param homeDirectory - Home directory used to expand the Pi agent path.
- * @returns {ProfileParams | undefined} The validated fixed scope, or `undefined` when Pi is unbound.
+ * @returns {ProfileParams | undefined} The default scope, or `undefined` when Pi is unbound.
  */
 export function configuredPiMemoryScope(
   env: Readonly<NodeJS.ProcessEnv> = process.env,
@@ -130,9 +130,7 @@ export function configuredPiMemoryScope(
 }
 
 /**
- * Inject a fixed scope after tool argument validation, so callers cannot select
- * another profile. Without a bound scope the params pass through unchanged and
- * keep the namespace and profile the caller picked.
+ * Fill in the host's scope when a call names neither namespace nor profile; a named pair stays.
  *
  * @param params - Already validated tool arguments.
  * @param scope - Host-bound namespace and profile, when configured.
@@ -142,11 +140,26 @@ export function applyMemoryScope<T extends object>(
   params: T,
   scope: ProfileParams | undefined,
 ): T & ProfileParams {
-  return scope ? { ...params, ...scope } : (params as T & ProfileParams);
+  if (scope === undefined || callerMemoryScope(params) !== "none") {
+    return params as T & ProfileParams;
+  }
+  return { ...params, ...scope };
 }
 
 /**
- * Own write provenance in bound mode; preserve caller-owned sessions only in raw mode.
+ * How much of the namespace and profile pair a call names itself.
+ *
+ * @param params - Tool arguments.
+ * @returns {"none" | "half" | "both"} Neither, only one of the two, or both.
+ */
+export function callerMemoryScope(params: object): "none" | "half" | "both" {
+  const { namespace, profile } = params as Partial<ProfileParams>;
+  if (namespace === undefined && profile === undefined) return "none";
+  return namespace === undefined || profile === undefined ? "half" : "both";
+}
+
+/**
+ * Bound writes carry the host session wherever they go; raw mode keeps the caller's session.
  *
  * @param params - Already validated write arguments.
  * @param scope - Host-bound namespace and profile, when configured.

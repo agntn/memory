@@ -400,7 +400,7 @@ describe("memory MCP server", () => {
     expect(signals[0]).toBeInstanceOf(AbortSignal);
   });
 
-  it("binds operational tools to configured scope and harness session", async () => {
+  it("defaults operational tools to the configured scope and harness session", async () => {
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
@@ -435,8 +435,10 @@ describe("memory MCP server", () => {
     const tools = await client.listTools();
     const rememberSchema = tools.tools.find((tool) => tool.name === "memory_remember")?.inputSchema;
     expect(rememberSchema).toMatchObject({ type: "object", required: ["content"] });
-    expect(rememberSchema?.properties).not.toHaveProperty("namespace");
-    expect(rememberSchema?.properties).not.toHaveProperty("profile");
+    expect(rememberSchema?.properties).toMatchObject({
+      namespace: { description: expect.stringContaining("default/oritwoen") },
+      profile: { description: expect.stringContaining("default/oritwoen") },
+    });
     expect(rememberSchema?.properties).not.toHaveProperty("sessionId");
     const supersedeSchema = tools.tools.find(
       (tool) => tool.name === "memory_supersede",
@@ -445,8 +447,8 @@ describe("memory MCP server", () => {
       type: "object",
       required: ["oldMemoryId", "content", "query", "timeoutSeconds"],
     });
-    expect(supersedeSchema?.properties).not.toHaveProperty("namespace");
-    expect(supersedeSchema?.properties).not.toHaveProperty("profile");
+    expect(supersedeSchema?.properties).toHaveProperty("namespace");
+    expect(supersedeSchema?.properties).toHaveProperty("profile");
     expect(supersedeSchema?.properties).not.toHaveProperty("sessionId");
 
     const refused = await client.callTool({
@@ -455,7 +457,10 @@ describe("memory MCP server", () => {
     });
     expect(refused.isError).toBe(true);
     expect(refused.content).toEqual([
-      { type: "text", text: 'Invalid arguments: unknown property "sessionId"; takes content' },
+      {
+        type: "text",
+        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content',
+      },
     ]);
     expect(requests).toEqual([]);
 
@@ -474,6 +479,83 @@ describe("memory MCP server", () => {
         },
       },
     ]);
+  });
+
+  it("lets a bound call pick its own namespace and profile", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("CLAUDE_PROJECT_DIR", "/workspace/movie-enigma");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "conversation-123");
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+        });
+        return Response.json({
+          success: true,
+          result: {
+            id: "memory-elsewhere",
+            type: "fact",
+            summary: "remembered",
+            content: "remembered",
+            sessionId: null,
+            createdAt: "2026-10-31T00:00:00.000Z",
+            updatedAt: "2026-10-31T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: { namespace: "puzzles", profile: "gsmg", content: "a project fact" },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/puzzles/profiles/gsmg/remember"),
+        body: {
+          content: "a project fact",
+          sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
+        },
+      },
+    ]);
+
+    requests.length = 0;
+    const read = await client.callTool({
+      name: "memory_get",
+      arguments: { namespace: "agntn", profile: "memory", memoryIds: ["memory-elsewhere"] },
+    });
+    expect(read.isError).not.toBe(true);
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/agntn/profiles/memory/memories/memory-elsewhere"),
+        body: {},
+      },
+    ]);
+
+    requests.length = 0;
+    for (const half of [{ namespace: "puzzles" }, { profile: "gsmg" }]) {
+      const refused = await client.callTool({
+        name: "memory_remember",
+        arguments: { ...half, content: "half a scope" },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        {
+          type: "text",
+          text: "Invalid arguments: pass namespace and profile together, or neither for default/oritwoen",
+        },
+      ]);
+    }
+    expect(requests).toEqual([]);
   });
 
   it("falls back to the Grok session when no Claude session is in the environment", async () => {

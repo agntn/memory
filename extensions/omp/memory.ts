@@ -24,10 +24,10 @@ function resultLine(result: RenderedToolResult, options: RenderOptions, theme: S
 }
 
 /**
- * OMP calls the call renderer with `(args, options, theme)`. Scoped tools show the scope they hide.
+ * OMP calls the call renderer with `(args, options, theme)`. Unscoped calls show the default.
  *
  * @param name - Tool the renderers draw.
- * @param scope - Namespace and profile the host fixes, if any.
+ * @param scope - Namespace and profile the host defaults to, if any.
  * @returns {OmpRenderers} Call and result renderers for the tool.
  */
 function renderers(name: MemoryToolName, scope: ProfileParams | undefined): OmpRenderers {

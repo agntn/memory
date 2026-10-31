@@ -178,6 +178,54 @@ describe("memory extensions", () => {
     );
   });
 
+  it("lets bound Pi and OMP writes pick a profile and keeps the host session", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    const execute = vi
+      .spyOn(memoryToolExecutors, "remember")
+      .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+    const { signal } = new AbortController();
+
+    for (const [harness, tools] of [
+      ["pi", piTools()],
+      ["omp", ompTools()],
+    ] as const) {
+      const remember = tool(tools, "memory_remember") as RegisteredTool & {
+        execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+      };
+      const context = {
+        cwd: "/workspace/movie-enigma",
+        sessionManager: { getSessionId: () => `${harness}-session` },
+      };
+      await expect(
+        remember.execute(
+          "call-0",
+          { profile: "gsmg", content: "half" },
+          signal,
+          undefined,
+          context,
+        ),
+      ).rejects.toThrow("pass namespace and profile together, or neither for default/oritwoen");
+      await remember.execute(
+        "call-1",
+        { namespace: "puzzles", profile: "gsmg", content: "project fact" },
+        signal,
+        undefined,
+        context,
+      );
+      expect(execute).toHaveBeenLastCalledWith(
+        {
+          namespace: "puzzles",
+          profile: "gsmg",
+          content: "project fact",
+          sessionId: expect.stringMatching(new RegExp(`^${harness}-movie-enigma-[0-9a-f]{16}$`)),
+        },
+        { signal },
+      );
+    }
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it("binds Pi operational tools from its agent-local scope file", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
     try {
@@ -510,6 +558,21 @@ describe("memory tool renderers", () => {
     for (const tools of [piTools(), ompTools()]) {
       const { text } = tool(tools, "memory_recall").renderCall!({ query: "bound" }, {}, {});
       expect(text).toContain("default/oritwoen");
+    }
+  });
+
+  it("names the profile a bound call picked instead of the default", () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+
+    for (const tools of [piTools(), ompTools()]) {
+      const { text } = tool(tools, "memory_recall").renderCall!(
+        { namespace: "puzzles", profile: "gsmg", query: "elsewhere" },
+        {},
+        {},
+      );
+      expect(text).toContain("puzzles/gsmg");
+      expect(text).not.toContain("oritwoen");
     }
   });
 

@@ -34,10 +34,10 @@ function resultLine(
 }
 
 /**
- * Pi calls the call renderer with `(args, theme, context)`. Scoped tools show the scope they hide.
+ * Pi calls the call renderer with `(args, theme, context)`. Unscoped calls show the default.
  *
  * @param name - Tool the renderers draw.
- * @param scope - Namespace and profile the host fixes, if any.
+ * @param scope - Namespace and profile the host defaults to, if any.
  * @returns {PiRenderers} Call and result renderers for the tool.
  */
 function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRenderers {
