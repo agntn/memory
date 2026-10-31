@@ -4,7 +4,7 @@ import {
   MEMORY_ID_CLOCK_SKEW_MS,
   isIngestedMessageId,
   ulidTime,
-} from "../packages/shared/memory-ids.ts";
+} from "../extensions/shared/memory-ids.ts";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const NOW = Date.UTC(2026, 8, 19, 18, 0, 0);

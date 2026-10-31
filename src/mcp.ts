@@ -1,4 +1,4 @@
-import { toolErrorMessage } from "../packages/shared/tool-errors.ts";
+import { toolErrorMessage } from "../extensions/shared/tool-errors.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   CallToolRequestSchema,
@@ -15,20 +15,20 @@ import {
   namespaceParameters,
   profileListParameters,
   profileOnlyParameters,
-} from "../packages/shared/memory-tool-schemas.ts";
+} from "../extensions/shared/memory-tool-schemas.ts";
 import {
   applyMemoryScope,
   applyMemoryWriteScope,
   claudeCodeMemorySessionId,
   configuredMemoryScope,
   grokMemorySessionId,
-} from "../packages/shared/memory-scope.ts";
+} from "../extensions/shared/memory-scope.ts";
 import {
   memoryToolExecutors,
   memoryToolMeta,
   memoryToolProgress,
   singleLineToolText,
-} from "../packages/shared/memory-tools.ts";
+} from "../extensions/shared/memory-tools.ts";
 import type {
   GetParams,
   IngestParams,
@@ -46,7 +46,7 @@ import type {
   SessionParams,
   SummaryParams,
   SupersedeParams,
-} from "../packages/shared/memory-tools.types.ts";
+} from "../extensions/shared/memory-tools.types.ts";
 import { version } from "./version.ts";
 
 /** One row of the MCP server's tool table; Pi and OMP register their own shapes. */

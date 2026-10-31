@@ -6,10 +6,10 @@ import { settle, useRetryTimers } from "./fake-timers.ts";
 import type { ExtensionAPI as PiExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI as OmpExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import * as OmpTypebox from "@oh-my-pi/omptype/typebox";
-import piMemoryExtension from "../packages/pi/extensions/memory.ts";
-import ompMemoryExtension from "../packages/omp/extensions/memory.ts";
+import piMemoryExtension from "../extensions/pi/memory.ts";
+import ompMemoryExtension from "../extensions/omp/memory.ts";
 import { painted, type RegisteredTool } from "./extensions.types.ts";
-import { memoryToolExecutors, memoryToolProgress } from "../packages/shared/memory-tools.ts";
+import { memoryToolExecutors, memoryToolProgress } from "../extensions/shared/memory-tools.ts";
 
 /**
  * Keep the rendered string so a test can read what the harness would print.
