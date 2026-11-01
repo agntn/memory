@@ -25,7 +25,16 @@ function validateMemoryName(name: string, label: string, maxLength: number): str
   return name;
 }
 
-function validateMemoryScope(
+/**
+ * Check a namespace and profile pair before it becomes the default for every call.
+ *
+ * @param namespace - Namespace from the host's configuration.
+ * @param profile - Profile from the host's configuration.
+ * @param source - Where the pair came from, named in the error.
+ * @returns {ProfileParams} The pair, unchanged.
+ * @throws {Error} When either half is missing or not a valid memory name.
+ */
+export function validateMemoryScope(
   namespace: string | undefined,
   profile: string | undefined,
   source: string,

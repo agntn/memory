@@ -1,6 +1,6 @@
 # @agntn/memory
 
-Give an agent a way to remember facts between conversations. `@agntn/memory` provides one library contract for Cloudflare Agent Memory and OMP Mnemopi, plus memory tools for MCP, Pi, and OMP.
+Give an agent a way to remember facts between conversations. `@agntn/memory` provides one library contract for Cloudflare Agent Memory and OMP Mnemopi, plus memory tools for MCP, Pi, OMP, and the AI SDK.
 
 > **Experimental and unstable.** APIs and behavior can change. Cloudflare Agent Memory is in private beta.
 
@@ -55,7 +55,7 @@ Check provider `capabilities` before relying on backend-specific features. For e
 
 ## Use with an agent
 
-The MCP, Pi, and OMP tools use Cloudflare over HTTP. They don't expose Mnemopi. The CLI now gives every agent tool a command, built from the same definitions.
+The MCP, Pi, OMP, and AI SDK tools use Cloudflare over HTTP. They don't expose Mnemopi. The CLI now gives every agent tool a command, built from the same definitions.
 
 Drop the `memory_` prefix and use hyphens: `memory_remember` becomes `memory remember`. Arguments are flags, like `--content "Prefers short answers."`. Pass arrays and objects as JSON. Run `memory <command> --help` for the flags. You get exactly the text the agent sees, which makes the terminal a handy place to try things. Use `--json` for structured details.
 
@@ -80,9 +80,43 @@ From the checkout, configure an MCP client with:
 }
 ```
 
-Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/memory-scope.json`. The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused. Writes keep the host's session ID wherever they go, and the model can't pass `sessionId` as an argument. A default should be a starting point, not a fence.
+Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/memory-scope.json`.
 
-Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account. `CLOUDFLARE_ACCOUNT_ID` counts too, so the one your shell already exports for wrangler just works. And when Cloudflare refuses a cf token mid-session, the next call goes back to cf for a fresh one instead of sulking until it expires.
+The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
+
+Writes keep the host's session ID wherever they go, and the model can't pass `sessionId` as an argument. A default should be a starting point, not a fence.
+
+Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account.
+
+`CLOUDFLARE_ACCOUNT_ID` counts too, so the one your shell already exports for wrangler just works. And when Cloudflare refuses a cf token mid-session, the next call goes back to cf for a fresh one instead of sulking until it expires.
+
+### AI SDK
+
+You get the same 17 tools as MCP, Pi, and OMP. No more writing your own wrappers. Install the optional AI SDK peer, version 7 or newer.
+
+```bash
+pnpm add @agntn/memory ai
+```
+
+```ts
+import { createMemoryAiTools } from "@agntn/memory/ai";
+import { generateText, isStepCount } from "ai";
+
+const tools = createMemoryAiTools({
+  namespace: "support",
+  profile: "user-42",
+  sessionId: "chat-7",
+});
+
+const { text } = await generateText({
+  model,
+  tools,
+  stopWhen: isStepCount(5),
+  prompt: "What does this user prefer?",
+});
+```
+
+Set namespace and profile together, or tool creation throws. Calls can name both to reach another profile, but never just one. With a profile set, the model can't override your write session. No Claude Code session hides in your chat app: scope and session come from your code, not environment variables.
 
 ## Behavior worth knowing
 

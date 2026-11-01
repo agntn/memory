@@ -71,7 +71,7 @@ export const RECALL_RELEVANCE_FLOOR_TEXT = `${RECALL_RELEVANCE_FLOOR * 100}% of 
 export const RECALL_SCORE_DIGITS = 3;
 
 /**
- * Names and descriptions every tool surface shares: MCP, Pi, OMP and the CLI.
+ * Names and descriptions every tool surface shares: MCP, Pi, OMP, the CLI and the AI SDK.
  *
  * Descriptions state what the service does with a call, including the parts a
  * caller cannot control: assigned memory types, asynchronous extraction, and

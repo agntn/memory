@@ -373,7 +373,7 @@ function memoryToolSpecs(scope: ProfileParams | undefined): readonly MemoryToolS
 }
 
 /**
- * Every memory tool as one `@agntn/tools` definition, for MCP, Pi, OMP and the CLI alike.
+ * Every memory tool as one `@agntn/tools` definition, for every surface from MCP to the AI SDK.
  *
  * @param options - Scope and session binding of the surface serving them.
  * @returns {readonly ToolDefinition[]} The definitions, in listing order.
