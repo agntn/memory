@@ -54,22 +54,22 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@agntn/credentials": "0.0.2",
-    "@agntn/tools": "0.2.4",
-    "@modelcontextprotocol/server": "2.4.0"
+    "@agntn/credentials": "catalog:deps",
+    "@agntn/tools": "catalog:deps",
+    "@modelcontextprotocol/server": "catalog:deps"
   },
   "devDependencies": {
-    "@agntn/ox": "0.1.0",
-    "@earendil-works/pi-coding-agent": "1.0.2",
-    "@earendil-works/pi-tui": "1.0.2",
-    "@modelcontextprotocol/client": "2.4.0",
-    "@oh-my-pi/omptype": "18.0.5",
-    "@oh-my-pi/pi-coding-agent": "18.0.5",
-    "@oh-my-pi/pi-tui": "18.0.5",
-    "@types/node": "26.2.0",
-    "obuild": "0.4.40",
-    "tsx": "4.23.13",
-    "typescript": "7.0.2",
+    "@agntn/ox": "catalog:dev",
+    "@earendil-works/pi-coding-agent": "catalog:dev",
+    "@earendil-works/pi-tui": "catalog:dev",
+    "@modelcontextprotocol/client": "catalog:dev",
+    "@oh-my-pi/omptype": "catalog:dev",
+    "@oh-my-pi/pi-coding-agent": "catalog:dev",
+    "@oh-my-pi/pi-tui": "catalog:dev",
+    "@types/node": "catalog:dev",
+    "obuild": "catalog:dev",
+    "tsx": "catalog:dev",
+    "typescript": "catalog:dev",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
@@ -95,7 +95,7 @@
   "engines": {
     "node": ">=26"
   },
-  "packageManager": "pnpm@11.22.0",
+  "packageManager": "pnpm@12.16.1",
   "omp": {
     "extensions": [
       "./extensions/omp/memory.ts"

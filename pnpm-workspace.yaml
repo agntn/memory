@@ -12,6 +12,26 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0
   vite-plus: 1.0.0
 
+catalogs:
+  deps:
+    "@agntn/credentials": 0.0.2
+    "@agntn/tools": 0.2.4
+    "@modelcontextprotocol/server": 2.4.0
+  dev:
+    "@agntn/ox": 0.1.0
+    "@earendil-works/pi-coding-agent": 1.0.2
+    "@earendil-works/pi-tui": 1.0.2
+    "@modelcontextprotocol/client": 2.4.0
+    "@oh-my-pi/omptype": 18.0.5
+    "@oh-my-pi/pi-coding-agent": 18.0.5
+    "@oh-my-pi/pi-tui": 18.0.5
+    "@types/node": 26.2.0
+    obuild: 0.4.40
+    tsx: 4.23.13
+    typescript: 7.0.2
+
+cleanupUnusedCatalogs: true
+
 overrides:
   vite@*: "catalog:"
 
@@ -20,3 +40,6 @@ peerDependencyRules:
     - vite
   allowedVersions:
     vite: "*"
+
+# Keeps pnpm 12's env document out of the lockfile. GitHub reads that one as zero dependencies.
+pmOnFail: ignore
