@@ -55,16 +55,18 @@ async function loadCredentials(): Promise<
 }
 
 /* A fresh Pi extension starts with an empty credential cache; its host only needs registerTool. */
-async function piTool(name: string): Promise<Pick<ToolDefinition, "execute">> {
+async function piTools(): Promise<(name: string) => Pick<ToolDefinition, "execute">> {
   vi.resetModules();
   const { default: memoryExtension } = await import("../extensions/pi/memory.ts");
   const registered: Pick<ToolDefinition, "name" | "execute">[] = [];
   memoryExtension({
     registerTool: (tool: Pick<ToolDefinition, "name" | "execute">) => registered.push(tool),
   } as unknown as ExtensionAPI);
-  const tool = registered.find((candidate) => candidate.name === name);
-  if (!tool) throw new Error(`Missing ${name}`);
-  return tool;
+  return (name) => {
+    const tool = registered.find((candidate) => candidate.name === name);
+    if (!tool) throw new Error(`Missing ${name}`);
+    return tool;
+  };
 }
 
 const piContext = {
@@ -168,7 +170,11 @@ describe("memory tools with the cf OAuth session", () => {
     expect(urls.every((url) => url.includes("/accounts/acct-1/agent-memory/"))).toBe(true);
   });
 
-  it("ask cf for a fresh token after a 401 and never resend the refused one", async () => {
+  /* memory_get with two ids turns each failed read into text, so its 401 never reaches a catch. */
+  it.each([
+    ["memory_namespace_list", {}],
+    ["memory_get", { namespace: "default", profile: "agent", memoryIds: ["m-1", "m-2"] }],
+  ])("ask cf for a fresh token after %s meets a 401", async (name, input) => {
     const authorizations: (string | null)[] = [];
     vi.stubGlobal(
       "fetch",
@@ -184,15 +190,18 @@ describe("memory tools with the cf OAuth session", () => {
         return Response.json({ success: true, result: [], result_info: {} });
       }),
     );
-    const tool = await piTool("memory_namespace_list");
+    const tool = await piTools();
 
-    await expect(tool.execute("call-1", {}, undefined, undefined, piContext)).rejects.toThrow(
-      "Authentication error",
-    );
+    await expect(
+      tool(name).execute("call-1", input, undefined, undefined, piContext),
+    ).rejects.toThrow("Authentication error");
     cf.token = "oauth-2";
-    await tool.execute("call-2", {}, undefined, undefined, piContext);
+    await tool("memory_namespace_list").execute("call-2", {}, undefined, undefined, piContext);
 
-    expect(authorizations).toEqual(["Bearer oauth-1", "Bearer oauth-2"]);
+    expect(authorizations.at(-1)).toBe("Bearer oauth-2");
+    expect(authorizations.filter((value) => value === "Bearer oauth-1")).toHaveLength(
+      name === "memory_get" ? 2 : 1,
+    );
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 });

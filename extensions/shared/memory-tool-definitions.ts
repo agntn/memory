@@ -177,14 +177,9 @@ async function runMemoryTool(
         : applyMemoryWriteScope(input, binding.scope, binding.writeSession?.(context.host));
   const stopProgress = startProgress(spec.name, params, context);
   try {
-    const tools = await loadExecutors();
+    const { memoryToolExecutors } = await loadExecutors();
     const options: AbortOptions = { signal: context.signal };
-    try {
-      return await tools.memoryToolExecutors[spec.operation](params as never, options);
-    } catch (error) {
-      tools.noteToolFailure(error);
-      throw error;
-    }
+    return await memoryToolExecutors[spec.operation](params as never, options);
   } catch (error) {
     throw new Error(toolErrorMessage(error), { cause: error });
   } finally {
