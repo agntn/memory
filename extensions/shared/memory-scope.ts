@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "@agntn/hashes/sha2";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -195,10 +195,8 @@ export function memorySessionId(harness: string, cwd: string, conversationId: st
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replaceAll(/^-|-$/g, "")
     .slice(0, 24);
-  const digest = createHash("sha256")
-    .update(`${normalizedHarness}\0${resolve(cwd)}\0${conversationId}`)
-    .digest("hex")
-    .slice(0, 16);
+  const key = new TextEncoder().encode(`${normalizedHarness}\0${resolve(cwd)}\0${conversationId}`);
+  const digest = Buffer.from(sha256(key)).toString("hex").slice(0, 16);
   return `${normalizedHarness}-${project || "root"}-${digest}`.slice(
     0,
     MAX_TOOL_SESSION_ID_CHARACTERS,
