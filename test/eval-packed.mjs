@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-// Packed-package smoke test for every published entry: the Pi and OMP extensions
-// and the MCP server.
-//
-// Unit tests always run from the checkout, where the shared executors load
-// src/index.ts directly. The published tarball ships no src/, so there the
-// executors resolve "@agntn/memory" through the package's own export map
-// instead. That distribution path never runs in the repository, which is why
-// this test packs the real tarball, loads every entry from it, and executes one
-// tool per surface against a stubbed fetch. A missing file in "files", a broken
-// export map, or a dist layout the self-reference cannot resolve surfaces here
-// and nowhere else.
-//
-// Run: pnpm test:packed
+/*
+ * Packed-package smoke test for every published entry: the Pi and OMP extensions,
+ * the MCP server and the AI SDK tools.
+ *
+ * Unit tests always run from the checkout, where the shared executors load
+ * src/index.ts directly. The published tarball ships no src/, so there the
+ * executors resolve "@agntn/memory" through the package's own export map
+ * instead. That distribution path never runs in the repository, which is why
+ * this test packs the real tarball, loads every entry from it, and executes one
+ * tool per surface against a stubbed fetch. A missing file in "files", a broken
+ * export map, or a dist layout the self-reference cannot resolve surfaces here
+ * and nowhere else.
+ *
+ * Run: pnpm test:packed
+ */
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -133,6 +135,7 @@ try {
     "dist/index.mjs",
     "dist/cli.mjs",
     "dist/mcp.mjs",
+    "dist/ai.mjs",
     "extensions/shared/memory-tools.ts",
     "extensions/shared/memory-tool-definitions.ts",
     "extensions/pi/memory.ts",
@@ -238,8 +241,26 @@ try {
     await Promise.all([client.close(), server.close()]);
   }
 
+  /* A self-reference inside the package walks the export map, like an app importing it. */
+  const aiProbe = path.join(packageRoot, "ai-probe.mjs");
+  await writeFile(aiProbe, 'export { createMemoryAiTools } from "@agntn/memory/ai";\n');
+  const { createMemoryAiTools } = await import(pathToFileURL(aiProbe).href);
+  const aiTools = createMemoryAiTools({ namespace: "packed", profile: "app", sessionId: "chat-1" });
+  assert.deepEqual(
+    Object.keys(aiTools),
+    expectedToolNames,
+    "wrong tool set from packed dist/ai.mjs",
+  );
+  const aiOutput = await aiTools.memory_remember.execute(
+    { content: "one packed ai memory" },
+    { toolCallId: "packed-ai", messages: [], context: {} },
+  );
+  assert.match(aiOutput.text, /packed-memory-1/);
+  assert.match(requests.at(-1).url, /\/namespaces\/packed\/profiles\/app\/remember$/);
+  assert.equal(requests.at(-1).body.sessionId, "chat-1");
+
   console.log(
-    `Packed entries served ${expectedToolNames.length} tools each on Pi, OMP and MCP against the stubbed API`,
+    `Packed entries served ${expectedToolNames.length} tools each on Pi, OMP, MCP and the AI SDK against the stubbed API`,
   );
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });

@@ -36,6 +36,10 @@
     "./mcp": {
       "types": "./dist/mcp.d.mts",
       "import": "./dist/mcp.mjs"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.mts",
+      "import": "./dist/ai.mjs"
     }
   },
   "publishConfig": {
@@ -68,6 +72,7 @@
     "@oh-my-pi/pi-coding-agent": "catalog:dev",
     "@oh-my-pi/pi-tui": "catalog:dev",
     "@types/node": "catalog:dev",
+    "ai": "catalog:dev",
     "obuild": "catalog:dev",
     "tsx": "catalog:dev",
     "typescript": "catalog:dev",
@@ -77,7 +82,8 @@
     "@earendil-works/pi-coding-agent": ">=0.84.2 <2",
     "@earendil-works/pi-tui": ">=0.84.2 <2",
     "@oh-my-pi/pi-coding-agent": ">=18.0.0 <19",
-    "@oh-my-pi/pi-tui": ">=18.0.0 <19"
+    "@oh-my-pi/pi-tui": ">=18.0.0 <19",
+    "ai": ">=7.0.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
@@ -90,6 +96,9 @@
       "optional": true
     },
     "@oh-my-pi/pi-tui": {
+      "optional": true
+    },
+    "ai": {
       "optional": true
     }
   },
