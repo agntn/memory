@@ -142,5 +142,7 @@ export default defineConfig({
   },
   test: {
     setupFiles: ["./test/setup.ts"],
+    /** Inlined so the setup `execFile` mock reaches cf, not a contributor's real login. */
+    server: { deps: { inline: ["@agntn/credentials"] } },
   },
 });

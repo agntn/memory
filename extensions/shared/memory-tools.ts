@@ -73,6 +73,19 @@ let namespaceClientPromise:
   | undefined;
 const providerPromises = new Map<string, Promise<MemoryProvider>>();
 let credentialsKey: string | undefined;
+let credentialsRefused = false;
+
+/**
+ * Sees each 401 before an executor can fold it into text, so the next call asks cf again.
+ * @param input - The request target, as for fetch.
+ * @param init - The request options, as for fetch.
+ * @returns {Promise<Response>} The response, untouched.
+ */
+const watchedFetch: typeof globalThis.fetch = async (input, init) => {
+  const response = await globalThis.fetch(input, init);
+  if (response.status === 401) credentialsRefused = true;
+  return response;
+};
 
 const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
 const isoInstantPattern = new RegExp(ISO_INSTANT_PATTERN);
@@ -97,7 +110,8 @@ function loadMemory(): Promise<MemoryModule> {
  * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
  */
 async function getCredentials(): Promise<CloudflareCredentials> {
-  const credentials = await getCloudflareCredentials();
+  const credentials = await getCloudflareCredentials({ refresh: credentialsRefused });
+  credentialsRefused = false;
   const key = `${credentials.accountId}\n${credentials.apiToken}`;
   if (key !== credentialsKey) {
     credentialsKey = key;
@@ -152,7 +166,7 @@ async function getNamespaceClient(): Promise<
 > {
   const credentials = await getCredentials();
   namespaceClientPromise ??= loadMemory().then(
-    (memory) => new memory.CloudflareNamespaceClient(credentials),
+    (memory) => new memory.CloudflareNamespaceClient({ ...credentials, fetch: watchedFetch }),
   );
   return namespaceClientPromise;
 }
@@ -165,6 +179,7 @@ async function getProvider(namespace: string): Promise<MemoryProvider> {
       memory.registerAll();
       return memory.create<CloudflareMemoryOptions>("cloudflare", {
         ...credentials,
+        fetch: watchedFetch,
         namespace,
       });
     });

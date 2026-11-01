@@ -54,6 +54,7 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
+    "@agntn/credentials": "0.0.2",
     "@agntn/tools": "0.2.4",
     "@modelcontextprotocol/server": "2.4.0"
   },
