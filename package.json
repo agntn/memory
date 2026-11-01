@@ -55,6 +55,7 @@
   },
   "dependencies": {
     "@agntn/credentials": "catalog:deps",
+    "@agntn/hashes": "catalog:deps",
     "@agntn/tools": "catalog:deps",
     "@modelcontextprotocol/server": "catalog:deps"
   },
