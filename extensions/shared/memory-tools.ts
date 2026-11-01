@@ -73,6 +73,7 @@ let namespaceClientPromise:
   | undefined;
 const providerPromises = new Map<string, Promise<MemoryProvider>>();
 let credentialsKey: string | undefined;
+let credentialsRefused = false;
 
 const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
 const isoInstantPattern = new RegExp(ISO_INSTANT_PATTERN);
@@ -97,7 +98,8 @@ function loadMemory(): Promise<MemoryModule> {
  * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
  */
 async function getCredentials(): Promise<CloudflareCredentials> {
-  const credentials = await getCloudflareCredentials();
+  const credentials = await getCloudflareCredentials({ refresh: credentialsRefused });
+  credentialsRefused = false;
   const key = `${credentials.accountId}\n${credentials.apiToken}`;
   if (key !== credentialsKey) {
     credentialsKey = key;
@@ -1298,3 +1300,18 @@ export const memoryToolExecutors = {
     };
   },
 };
+
+/**
+ * Send the next call to cf for a fresh token after Cloudflare refused this one with a 401.
+ * @param error - Failure from a memory tool executor, wrapped or not.
+ */
+export function noteToolFailure(error: unknown): void {
+  let current = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if ("statusCode" in current && current.statusCode === 401) {
+      credentialsRefused = true;
+      return;
+    }
+    current = current.cause;
+  }
+}

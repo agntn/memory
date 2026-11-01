@@ -38,7 +38,7 @@
 
 The first provider follows the Cloudflare Agent Memory Workers and HTTP APIs documented on 2026-06-03. Agent Memory is private beta. Both binding and HTTP transports are supported. Over HTTP a read gets three tries on a 5xx or an answer that never arrives in full, except a read by id on 500, which is how the service answers an unknown id. A write goes out once, and its error says it may have landed anyway. Keep validation limits aligned with current Cloudflare documentation, and prefer a limit you measured against the live API over one from the docs page.
 
-The tools take `CLOUDFLARE_API_TOKEN` first. Without it `extensions/shared/cloudflare-credentials.ts` borrows the cf CLI's OAuth session: `cf auth whoami` refreshes an expired token and names the credentials file. The token rotates while a server runs, so cached clients are rebuilt when it changes. `test/setup.ts` mocks `execFile`, so the suite never borrows a contributor's login. The account comes only from `AGNTN_CLOUDFLARE_ACCOUNT_ID`: `CLOUDFLARE_ACCOUNT_ID` belongs to cf and wrangler and is never read.
+Credentials come from `resolve()` in `@agntn/credentials/cloudflare`: `CLOUDFLARE_API_TOKEN` first, then the cf CLI's OAuth session, fetched again a minute before it expires. The account comes from `AGNTN_CLOUDFLARE_ACCOUNT_ID`, then `CLOUDFLARE_ACCOUNT_ID`, then the cf session when it reaches exactly one. The token rotates while a server runs, so cached clients are rebuilt when it changes, and a 401 sends the next call back to cf without resending the refused one. `test/setup.ts` mocks `execFile`, and `vite.config.ts` inlines the package so that mock reaches it. Without the inline the suite borrows a contributor's cf login.
 
 ## Commands
 
