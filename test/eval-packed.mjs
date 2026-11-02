@@ -83,12 +83,18 @@ const memoryResult = {
   updatedAt: "2026-08-22T00:00:00.000Z",
 };
 const requests = [];
+/* Set it and the next request gets a 500, so a tool fails the way a real outage would. */
+let failNextRequest = false;
 globalThis.fetch = async (input, init) => {
   const url = String(input);
   requests.push({
     url,
     body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
   });
+  if (failNextRequest) {
+    failNextRequest = false;
+    return new Response("unavailable", { status: 500 });
+  }
   const result = url.endsWith("/recall")
     ? {
         count: 1,
@@ -243,8 +249,11 @@ try {
 
   /* A self-reference inside the package walks the export map, like an app importing it. */
   const aiProbe = path.join(packageRoot, "ai-probe.mjs");
-  await writeFile(aiProbe, 'export { createMemoryAiTools } from "@agntn/memory/ai";\n');
-  const { createMemoryAiTools } = await import(pathToFileURL(aiProbe).href);
+  await writeFile(
+    aiProbe,
+    'export { createMemoryAiTools } from "@agntn/memory/ai";\nexport { MemoryError } from "@agntn/memory";\n',
+  );
+  const { createMemoryAiTools, MemoryError } = await import(pathToFileURL(aiProbe).href);
   const aiTools = createMemoryAiTools({ namespace: "packed", profile: "app", sessionId: "chat-1" });
   assert.deepEqual(
     Object.keys(aiTools),
@@ -258,6 +267,22 @@ try {
   assert.match(aiOutput.text, /packed-memory-1/);
   assert.match(requests.at(-1).url, /\/namespaces\/packed\/profiles\/app\/remember$/);
   assert.equal(requests.at(-1).body.sessionId, "chat-1");
+
+  /* An app that imports MemoryError has to recognize the one a failed tool call carries. */
+  failNextRequest = true;
+  const aiFailure = await aiTools.memory_remember
+    .execute(
+      { content: "one failed ai memory" },
+      { toolCallId: "packed-ai-failure", messages: [], context: {} },
+    )
+    .then(
+      () => assert.fail("memory_remember succeeded against a 500"),
+      (error) => error,
+    );
+  assert.ok(
+    aiFailure.cause instanceof MemoryError,
+    `the AI tools threw a ${aiFailure.cause?.name} from their own copy of the core`,
+  );
 
   console.log(
     `Packed entries served ${expectedToolNames.length} tools each on Pi, OMP, MCP and the AI SDK against the stubbed API`,
