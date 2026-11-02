@@ -40,6 +40,24 @@ const memoryId = Type.String({
   minLength: 1,
   pattern: MEMORY_ID_PATTERN,
 });
+const oldMemoryId = Type.String({
+  description: memoryFieldDescriptions.supersedeOldMemoryId,
+  minLength: 1,
+  pattern: MEMORY_ID_PATTERN,
+});
+/** One recall poll, three callers: `memory_recall_wait` and both supersession tools. */
+const recallCheckParameters = {
+  query: Type.String({
+    description: memoryFieldDescriptions.recallVisibilityQuery,
+    minLength: 1,
+    maxLength: MAX_TOOL_QUERY_CHARACTERS,
+  }),
+  timeoutSeconds: Type.Integer({
+    description: memoryFieldDescriptions.recallVisibilityTimeout,
+    minimum: 1,
+    maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
+  }),
+};
 
 export const namespaceParameters = Type.Object({ namespace: namespaceName }, closed);
 export const namespaceListParameters = Type.Object(
@@ -95,26 +113,13 @@ export const rememberParameters = Type.Object(
 export const supersedeParameters = Type.Object(
   {
     ...profileParameters,
-    oldMemoryId: Type.String({
-      description: memoryFieldDescriptions.supersedeOldMemoryId,
-      minLength: 1,
-      pattern: MEMORY_ID_PATTERN,
-    }),
+    oldMemoryId,
     content: Type.String({
       description: memoryFieldDescriptions.rememberContent,
       minLength: 1,
       maxLength: MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
     }),
-    query: Type.String({
-      description: memoryFieldDescriptions.recallVisibilityQuery,
-      minLength: 1,
-      maxLength: MAX_TOOL_QUERY_CHARACTERS,
-    }),
-    timeoutSeconds: Type.Integer({
-      description: memoryFieldDescriptions.recallVisibilityTimeout,
-      minimum: 1,
-      maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
-    }),
+    ...recallCheckParameters,
     sessionId: Type.Optional(
       Type.String({
         description: memoryFieldDescriptions.writeSessionId,
@@ -127,11 +132,7 @@ export const supersedeParameters = Type.Object(
 export const resumeSupersessionParameters = Type.Object(
   {
     ...profileParameters,
-    oldMemoryId: Type.String({
-      description: memoryFieldDescriptions.supersedeOldMemoryId,
-      minLength: 1,
-      pattern: MEMORY_ID_PATTERN,
-    }),
+    oldMemoryId,
     replacementMemoryId: Type.String({
       description: memoryFieldDescriptions.supersedeReplacementMemoryId,
       minLength: 1,
@@ -141,16 +142,7 @@ export const resumeSupersessionParameters = Type.Object(
       description: memoryFieldDescriptions.replacementContent,
       minLength: 1,
     }),
-    query: Type.String({
-      description: memoryFieldDescriptions.recallVisibilityQuery,
-      minLength: 1,
-      maxLength: MAX_TOOL_QUERY_CHARACTERS,
-    }),
-    timeoutSeconds: Type.Integer({
-      description: memoryFieldDescriptions.recallVisibilityTimeout,
-      minimum: 1,
-      maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
-    }),
+    ...recallCheckParameters,
   },
   closed,
 );
@@ -162,16 +154,7 @@ export const recallVisibilityParameters = Type.Object(
       minLength: 1,
       pattern: MEMORY_ID_PATTERN,
     }),
-    query: Type.String({
-      description: memoryFieldDescriptions.recallVisibilityQuery,
-      minLength: 1,
-      maxLength: MAX_TOOL_QUERY_CHARACTERS,
-    }),
-    timeoutSeconds: Type.Integer({
-      description: memoryFieldDescriptions.recallVisibilityTimeout,
-      minimum: 1,
-      maximum: MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
-    }),
+    ...recallCheckParameters,
   },
   closed,
 );

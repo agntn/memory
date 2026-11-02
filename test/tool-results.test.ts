@@ -818,43 +818,47 @@ describe("memory supersession", () => {
     expect(urls.filter((url) => url.endsWith("/memories/mem-new"))).toHaveLength(1);
   });
 
-  it("reports both ids and keeps the replacement when deleting the old memory fails", async () => {
-    const urls = stubCloudflare((url, init) => {
-      if (url.endsWith("/recall")) {
-        return {
-          result: {
-            count: 1,
-            answer: "ready",
-            candidates: [
-              { id: replacement.id, summary: replacement.summary, sessionId: null, score: 1 },
-            ],
-          },
-        };
-      }
-      if (url.endsWith("/memories/mem-old") && init?.method === "DELETE") {
-        return { failure: { status: 503, message: "delete unavailable" } };
-      }
-      return { result: replacement };
-    });
+  it.each(["supersede", "resumeSupersession"] as const)(
+    "%s reports both ids and keeps the replacement when deleting the old memory fails",
+    async (operation) => {
+      const urls = stubCloudflare((url, init) => {
+        if (url.endsWith("/recall")) {
+          return {
+            result: {
+              count: 1,
+              answer: "ready",
+              candidates: [
+                { id: replacement.id, summary: replacement.summary, sessionId: null, score: 1 },
+              ],
+            },
+          };
+        }
+        if (url.endsWith("/memories/mem-old") && init?.method === "DELETE") {
+          return { failure: { status: 503, message: "delete unavailable" } };
+        }
+        return { result: replacement };
+      });
 
-    const error = await memoryToolExecutors
-      .supersede({
+      const error = await memoryToolExecutors[operation]({
         namespace: "supersede-delete-fail",
         profile: "agent",
         oldMemoryId: "mem-old",
+        replacementMemoryId: replacement.id,
         content: replacement.content,
         query: "new checkpoint",
         timeoutSeconds: 30,
-      })
-      .catch((cause: unknown) => cause);
+      }).catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("mem-old");
-    expect((error as Error).message).toContain("mem-new");
-    expect((error as Error).message).toContain("deletion outcome is unknown");
-    expect((error as Error).message).not.toContain("delete the replacement");
-    expect(urls.filter((url) => url.endsWith("/memories/mem-new"))).toHaveLength(1);
-  });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(
+        /^Replacement memory "mem-new" is stored and verified, but deleting old memory "mem-old" failed: ".*delete unavailable"\. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup\.$/,
+      );
+      expect(urls.filter((url) => url.endsWith("/memories/mem-new"))).toHaveLength(1);
+      expect(urls.filter((url) => url.endsWith("/remember"))).toHaveLength(
+        operation === "supersede" ? 1 : 0,
+      );
+    },
+  );
 });
 
 describe("recall result", () => {
