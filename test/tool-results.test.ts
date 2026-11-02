@@ -2014,7 +2014,9 @@ describe("delete resilience", () => {
       .get({ namespace: "auth-fail", profile: "agent", memoryIds: ["mem-1"] })
       .catch((cause: unknown) => cause);
 
-    expect((error as Error).message).toBe("Invalid token");
+    expect((error as Error).message).toBe(
+      "Cloudflare Agent Memory refused the credentials with 401, its answer both to a bad token and to an account the token cannot reach: Invalid token",
+    );
   });
 
   it("explains that an unknown id fails the same way as a server error", async () => {

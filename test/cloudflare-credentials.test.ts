@@ -99,6 +99,7 @@ describe("Cloudflare credentials", () => {
     await expect(getCloudflareCredentials()).resolves.toEqual({
       accountId: "env-account",
       apiToken: "env-token",
+      source: "env",
     });
     expect(execFile).not.toHaveBeenCalled();
   });
@@ -111,6 +112,7 @@ describe("Cloudflare credentials", () => {
     await expect(getCloudflareCredentials()).resolves.toEqual({
       accountId: "wrangler-account",
       apiToken: "oauth-1",
+      source: "cli",
     });
 
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "acct-2");
@@ -192,9 +194,14 @@ describe("memory tools with the cf OAuth session", () => {
     );
     const tool = await piTools();
 
-    await expect(
-      tool(name).execute("call-1", input, undefined, undefined, piContext),
-    ).rejects.toThrow("Authentication error");
+    const error = await tool(name)
+      .execute("call-1", input, undefined, undefined, piContext)
+      .catch((failure: unknown) => failure);
+    const message = (error as Error).message;
+    expect(message).toContain("Authentication error");
+    expect(message.split("The next call asks cf for its token again")).toHaveLength(
+      name === "memory_get" ? 3 : 2,
+    );
     cf.token = "oauth-2";
     await tool("memory_namespace_list").execute("call-2", {}, undefined, undefined, piContext);
 
@@ -203,5 +210,53 @@ describe("memory tools with the cf OAuth session", () => {
       name === "memory_get" ? 2 : 1,
     );
     expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  /* An env token gets no refresh, so the step says retrying will not help. */
+  it.each([
+    ["memory_namespace_list", {}],
+    ["memory_get", { namespace: "default", profile: "agent", memoryIds: ["m-1", "m-2"] }],
+  ])("tell %s that an env token refused with 401 needs replacing", async (name, input) => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
+          { status: 401 },
+        ),
+      ),
+    );
+    const tool = await piTools();
+
+    const error = await tool(name)
+      .execute("call-1", input, undefined, undefined, piContext)
+      .catch((failure: unknown) => failure);
+
+    const message = (error as Error).message;
+    expect(message).toContain("CLOUDFLARE_API_TOKEN goes out unchanged next time");
+    expect(message).not.toContain("asks cf");
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("leaves the token step off a refusal that is not a 401", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ success: false, errors: [{ message: "denied" }] }, { status: 403 }),
+      ),
+    );
+    const tool = await piTools();
+
+    const error = await tool("memory_namespace_list")
+      .execute("call-1", {}, undefined, undefined, piContext)
+      .catch((failure: unknown) => failure);
+
+    expect((error as Error).message).toBe(
+      "Cloudflare Agent Memory refused the request with 403, so resending it with the same token will not help: denied",
+    );
   });
 });
