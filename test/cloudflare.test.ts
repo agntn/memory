@@ -22,6 +22,12 @@ import {
   type Memory,
 } from "../src/index.ts";
 
+const REFUSED_401 =
+  "Cloudflare Agent Memory refused the credentials with 401, its answer both to a bad token and to an account the token cannot reach";
+const REFUSED_403 =
+  "Cloudflare Agent Memory refused the request with 403, so resending it with the same token will not help";
+const RATE_LIMITED = "Cloudflare Agent Memory is rate limiting this token with 429, so wait";
+
 const memory: Memory = {
   id: "memory-1",
   type: "instruction",
@@ -193,30 +199,29 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     "HTTP errors with body %j",
     (body) => {
       it.each([
-        [401, MemoryAuthError],
-        [403, MemoryAuthError],
-        [404, MemoryNotFoundError],
-        [429, MemoryRateLimitError],
-      ] as const)("classifies status %i for profiles and namespaces", async (status, ErrorType) => {
-        const options = {
-          accountId: "account",
-          namespace: "namespace",
-          apiToken: "token",
-          fetch: vi.fn<typeof fetch>(async () => new Response(body, { status })),
-        };
-        const profile = await new CloudflareMemoryProvider(options).getProfile("user");
-        const namespaces = new CloudflareNamespaceClient(options);
+        [401, MemoryAuthError, REFUSED_401],
+        [403, MemoryAuthError, REFUSED_403],
+        [404, MemoryNotFoundError, "Cloudflare Agent Memory request failed (404)"],
+        [429, MemoryRateLimitError, `${RATE_LIMITED} before the next call`],
+      ] as const)(
+        "classifies status %i for profiles and namespaces",
+        async (status, ErrorType, message) => {
+          const options = {
+            accountId: "account",
+            namespace: "namespace",
+            apiToken: "token",
+            fetch: vi.fn<typeof fetch>(async () => new Response(body, { status })),
+          };
+          const profile = await new CloudflareMemoryProvider(options).getProfile("user");
+          const namespaces = new CloudflareNamespaceClient(options);
 
-        for (const operation of [() => profile.get("memory-1"), () => namespaces.list()]) {
-          const error = await operation().catch((cause: unknown) => cause);
-          expect(error).toBeInstanceOf(ErrorType);
-          expect(error).toMatchObject({
-            provider: "cloudflare",
-            statusCode: status,
-            message: `Cloudflare Agent Memory request failed (${status})`,
-          });
-        }
-      });
+          for (const operation of [() => profile.get("memory-1"), () => namespaces.list()]) {
+            const error = await operation().catch((cause: unknown) => cause);
+            expect(error).toBeInstanceOf(ErrorType);
+            expect(error).toMatchObject({ provider: "cloudflare", statusCode: status, message });
+          }
+        },
+      );
     },
   );
 
@@ -253,8 +258,35 @@ describe("CloudflareMemoryProvider HTTP transport", () => {
     await expect(namespaces.list()).rejects.toMatchObject({
       name: status === 401 ? "MemoryAuthError" : "MemoryHttpError",
       statusCode: status,
-      message: "First error; Second error",
+      message: `${status === 401 ? `${REFUSED_401}: ` : ""}First error; Second error`,
     });
+  });
+
+  it.each([
+    ["30", 30, `${RATE_LIMITED} 30 s before the next call: Too many requests`],
+    ["0", 0, `${RATE_LIMITED} before the next call: Too many requests`],
+    [
+      "Wed, 21 Oct 2026 07:28:00 GMT",
+      undefined,
+      `${RATE_LIMITED} before the next call: Too many requests`,
+    ],
+    [null, undefined, `${RATE_LIMITED} before the next call: Too many requests`],
+  ])("reads Retry-After %j off a 429", async (header, seconds, message) => {
+    const headers = header === null ? undefined : { "Retry-After": header };
+    const namespaces = new CloudflareNamespaceClient({
+      accountId: "account",
+      apiToken: "token",
+      fetch: vi.fn<typeof fetch>(async () =>
+        Response.json(
+          { success: false, errors: [{ message: "Too many requests" }] },
+          { status: 429, headers },
+        ),
+      ),
+    });
+
+    const error = await namespaces.list().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(MemoryRateLimitError);
+    expect(error).toMatchObject({ statusCode: 429, message, retryAfterSeconds: seconds });
   });
 
   it("preserves a body read cancellation instead of reporting a rate limit", async () => {

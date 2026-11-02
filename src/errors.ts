@@ -25,7 +25,19 @@ export class MemoryHttpError extends MemoryError {
 
 export class MemoryAuthError extends MemoryHttpError {}
 export class MemoryNotFoundError extends MemoryHttpError {}
-export class MemoryRateLimitError extends MemoryHttpError {}
+/** A 429. `retryAfterSeconds` is set only when the service said how long to wait. */
+export class MemoryRateLimitError extends MemoryHttpError {
+  readonly retryAfterSeconds?: number;
+
+  constructor(
+    message: string,
+    statusCode: number,
+    options: Readonly<{ provider?: string; cause?: unknown; retryAfterSeconds?: number }> = {},
+  ) {
+    super(message, statusCode, options);
+    this.retryAfterSeconds = options.retryAfterSeconds;
+  }
+}
 
 /** Any 5xx. Cloudflare answers an unknown memory id with 500 too, so it isn't proof of a blip. */
 export class MemoryServerError extends MemoryHttpError {}

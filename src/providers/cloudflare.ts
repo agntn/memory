@@ -580,30 +580,61 @@ function responseMessages(body: unknown): string[] {
   });
 }
 
+/**
+ * Read a 429's `Retry-After`, which Cloudflare's REST API sends as whole seconds, rounded up.
+ * @param response - The 429 answer.
+ * @returns {number | undefined} The seconds to wait, or undefined for a missing or other form.
+ */
+function retryAfterSeconds(response: Response): number | undefined {
+  const value = response.headers.get("Retry-After")?.trim() ?? "";
+  return /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+/**
+ * Say what a refusal means for the next call, since the service's own text is often just `Authentication error`.
+ * @param status - 401, 403 or 429.
+ * @param retryAfter - Seconds from `Retry-After`, if the 429 sent them.
+ * @returns {string} The refusal with its status and what to do next.
+ */
+function refusalText(status: number, retryAfter: number | undefined): string {
+  if (status === 401) {
+    return "Cloudflare Agent Memory refused the credentials with 401, its answer both to a bad token and to an account the token cannot reach";
+  }
+  if (status === 403) {
+    return "Cloudflare Agent Memory refused the request with 403, so resending it with the same token will not help";
+  }
+  const wait = retryAfter === undefined || retryAfter === 0 ? "wait" : `wait ${retryAfter} s`;
+  return `Cloudflare Agent Memory is rate limiting this token with 429, so ${wait} before the next call`;
+}
+
+function withServiceMessages(text: string, messages: readonly string[]): string {
+  return messages.length === 0 ? text : `${text}: ${messages.join("; ")}`;
+}
+
 function throwCloudflareResponseError(
   body: unknown,
   response: Response,
   attempts: Readonly<RequestAttempts>,
 ): never {
   const messages = responseMessages(body);
+  const { status } = response;
   const options = { provider: "cloudflare" };
-  if (response.status >= 500) {
-    const text = serverFailureText(response.status, attempts);
-    const message = messages.length === 0 ? text : `${text}: ${messages.join("; ")}`;
-    throw new MemoryServerError(message, response.status, options);
+  if (status >= 500) {
+    const message = withServiceMessages(serverFailureText(status, attempts), messages);
+    throw new MemoryServerError(message, status, options);
   }
-  const message =
-    messages.join("; ") || `Cloudflare Agent Memory request failed (${response.status})`;
-  if (response.status === 401 || response.status === 403) {
-    throw new MemoryAuthError(message, response.status, options);
+  if (status === 429) {
+    const retryAfter = retryAfterSeconds(response);
+    const message = withServiceMessages(refusalText(status, retryAfter), messages);
+    throw new MemoryRateLimitError(message, status, { ...options, retryAfterSeconds: retryAfter });
   }
-  if (response.status === 404) {
-    throw new MemoryNotFoundError(message, response.status, options);
+  if (status === 401 || status === 403) {
+    const message = withServiceMessages(refusalText(status, undefined), messages);
+    throw new MemoryAuthError(message, status, options);
   }
-  if (response.status === 429) {
-    throw new MemoryRateLimitError(message, response.status, options);
-  }
-  throw new MemoryHttpError(message, response.status, options);
+  const message = messages.join("; ") || `Cloudflare Agent Memory request failed (${status})`;
+  if (status === 404) throw new MemoryNotFoundError(message, status, options);
+  throw new MemoryHttpError(message, status, options);
 }
 
 function requireEnvelopeShape(value: unknown, response: Response): Record<string, unknown> {

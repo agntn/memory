@@ -9,10 +9,11 @@ import type {
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
+import type { CredentialSource } from "@agntn/credentials";
 import { type CloudflareCredentials, getCloudflareCredentials } from "./cloudflare-credentials.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
-import { toolErrorMessage } from "./tool-errors.ts";
+import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
 import {
   MAX_TOOL_LIST_LIMIT,
   MEMORY_ID_PATTERN,
@@ -74,6 +75,7 @@ let namespaceClientPromise:
 const providerPromises = new Map<string, Promise<MemoryProvider>>();
 let credentialsKey: string | undefined;
 let credentialsRefused = false;
+let credentialsSource: CredentialSource | undefined;
 
 /**
  * Sees each 401 before an executor can fold it into text, so the next call asks cf again.
@@ -110,8 +112,11 @@ function loadMemory(): Promise<MemoryModule> {
  * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
  */
 async function getCredentials(): Promise<CloudflareCredentials> {
-  const credentials = await getCloudflareCredentials({ refresh: credentialsRefused });
+  const { source, ...credentials } = await getCloudflareCredentials({
+    refresh: credentialsRefused,
+  });
   credentialsRefused = false;
+  credentialsSource = source;
   const key = `${credentials.accountId}\n${credentials.apiToken}`;
   if (key !== credentialsKey) {
     credentialsKey = key;
@@ -119,6 +124,46 @@ async function getCredentials(): Promise<CloudflareCredentials> {
     providerPromises.clear();
   }
   return credentials;
+}
+
+/**
+ * Find a 401 anywhere in the cause chain. It checks `statusCode`, not the class: a checkout loads `src/` and a package loads `dist/`.
+ * @param error - An executor's failure.
+ * @returns {boolean} True when some error in the chain is a 401.
+ */
+function refusedCredentials(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < MAX_TOOL_ERROR_CHAIN_DEPTH && current instanceof Error; depth += 1) {
+    if ((current as { statusCode?: unknown }).statusCode === 401) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
+ * What the caller can do after a 401. Only a cf login hands the next call a fresh token; every other source sends the same one again.
+ * @param error - An executor's failure, causes included.
+ * @returns {string} One sentence, or "" when the chain holds no 401.
+ */
+function credentialStep(error: unknown): string {
+  if (!refusedCredentials(error)) return "";
+  if (credentialsSource === "cli") {
+    return "The next call asks cf for its token again, so try once more; another 401 means someone has to run cf auth login or set an account id this login can reach";
+  }
+  const token = credentialsSource === "env" ? "CLOUDFLARE_API_TOKEN" : "The same token";
+  return `${token} goes out unchanged next time, so retrying will not help until someone replaces the token or fixes the account id`;
+}
+
+/**
+ * Append the 401 step to a failure's text, once.
+ * @param message - The failure as text, usually from `toolErrorMessage`.
+ * @param error - The failure it was written from.
+ * @returns {string} The text, with the step when the chain holds a 401.
+ */
+export function withCredentialStep(message: string, error: unknown): string {
+  const step = credentialStep(error);
+  if (step === "" || message.includes(step)) return message;
+  return `${message}${/[.!?]$/.test(message) ? " " : ". "}${step}`;
 }
 
 function optionalString(value: string | undefined): string | undefined {
@@ -583,7 +628,7 @@ function mayMeanMissing(error: unknown): boolean {
  * and the missing one beside it.
  */
 function describeReadError(params: ProfileParams, id: string, error: unknown): string {
-  const message = toolErrorMessage(error);
+  const message = withCredentialStep(toolErrorMessage(error), error);
   if (!mayMeanMissing(error)) return message;
   if (isIngestedMessageId(id)) {
     return `${message} (no memory carries an id of this shape; memory_recall gives it to a raw ingested message, whose text is on the candidate line, which nothing reads or deletes by id, and which memory_session_delete removes with its session; an id that does not exist fails this way too)`;

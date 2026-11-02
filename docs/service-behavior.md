@@ -15,6 +15,10 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 - An unknown memory id returns 500, not a 404, with code 10000 and the same `You may contact support with the following Cf-Ray request id` text a passing server failure carries, so the answer alone does not tell the two apart. Measured 2026-10-05. An unknown namespace name returns a real 404 from its own endpoint and from its profile listing.
 - A summary always covers the whole profile, and its `sessionId` only picks the session named on its `Current session` line.
 
+## Refusals
+
+- A token Cloudflare does not accept gets 401 with code 10000 and `Authentication error`. So does a working token sent to an account it cannot reach, and the answer alone won't say which one to fix. Measured 2026-11-02 on the namespace listing.
+
 ## Sessions
 
 - Deleting a session that holds nothing still succeeds.

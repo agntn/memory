@@ -176,12 +176,14 @@ async function runMemoryTool(
         ? applyMemoryScope(input, binding.scope)
         : applyMemoryWriteScope(input, binding.scope, binding.writeSession?.(context.host));
   const stopProgress = startProgress(spec.name, params, context);
+  let tools: typeof MemoryTools | undefined;
   try {
-    const { memoryToolExecutors } = await loadExecutors();
+    tools = await loadExecutors();
     const options: AbortOptions = { signal: context.signal };
-    return await memoryToolExecutors[spec.operation](params as never, options);
+    return await tools.memoryToolExecutors[spec.operation](params as never, options);
   } catch (error) {
-    throw new Error(toolErrorMessage(error), { cause: error });
+    const message = toolErrorMessage(error);
+    throw new Error(tools ? tools.withCredentialStep(message, error) : message, { cause: error });
   } finally {
     stopProgress();
   }

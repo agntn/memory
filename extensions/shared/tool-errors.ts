@@ -1,6 +1,7 @@
 import { singleLineToolText } from "./terminal-text.ts";
 
-const MAX_TOOL_ERROR_CHAIN_DEPTH = 8;
+/** How many causes a failure message follows, and so how deep a check on the chain looks. */
+export const MAX_TOOL_ERROR_CHAIN_DEPTH = 8;
 
 function errorMessagePart(value: unknown): string {
   if (value instanceof Error) return value.message;
