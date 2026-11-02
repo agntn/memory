@@ -168,14 +168,13 @@ export const memoryToolProgress = {
 
 /** Field descriptions for the parameter schemas in `memory-tool-schemas.ts`. */
 export const memoryFieldDescriptions = {
-  namespace:
-    "Cloudflare Agent Memory namespace. The service accepts lowercase letters, numbers, and internal hyphens only. List existing ones with memory_namespace_list.",
-  profile:
-    "Memory profile inside the namespace. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; memory_profile_list shows the ones a namespace holds.",
+  /** Scope fields repeat in most tools, and their `pattern` already spells out the name rule. */
+  namespace: "Name of a Cloudflare Agent Memory namespace.",
+  profile: "Profile inside the namespace. The first write creates it.",
   boundNamespace: (target: string) =>
-    `Cloudflare Agent Memory namespace to use instead of ${target}, the default this host binds. Pass it with profile, or leave both out for the default. The service accepts lowercase letters, numbers, and internal hyphens only; memory_namespace_list shows the existing ones.`,
+    `Namespace to use instead of the default ${target}. Pass it with profile, or leave both out.`,
   boundProfile: (target: string) =>
-    `Memory profile inside namespace, passed together with it; leave both out for ${target}. The service accepts lowercase letters, numbers, and internal hyphens only. A profile starts existing on its first write; memory_profile_list shows the ones a namespace holds.`,
+    `Profile inside namespace, passed with it; leave both out for ${target}. The first write creates it.`,
   writeSessionId:
     "Session identifier grouping related memories. It is the only unit memory_session_delete can remove, so pass one whenever the memories may need removing together. Left out, the host's conversation session applies when the host knows one; with no session at all, memory_remember and memory_supersede store the memory with no session, while memory_ingest gets one the service derives from the message content.",
   cursor:

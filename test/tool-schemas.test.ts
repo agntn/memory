@@ -192,6 +192,26 @@ describe("tool schemas", () => {
       }
     }
   });
+
+  it("leaves the name rule to the scope pattern and names the bound default", () => {
+    const bound = sharedSchemas.createOperationalMemoryToolSchemas({
+      namespace: "aeitwoen",
+      profile: "oritwoen",
+    });
+    const surfaces = [
+      ...Object.entries(sharedToolSchemas).map(([name, schema]) => [name, schema, false] as const),
+      ...Object.entries(bound).map(([name, schema]) => [`bound ${name}`, schema, true] as const),
+    ];
+    for (const [name, schema, isBound] of surfaces) {
+      const shape = sharedShape(schema);
+      for (const field of ["namespace", "profile"].filter((key) => key in shape)) {
+        const { pattern, description } = shape[field]!;
+        expect(pattern, `${name}.${field} pattern`).toBe(MEMORY_NAME_PATTERN);
+        expect(description, `${name}.${field} description`).not.toMatch(/lowercase|hyphen/i);
+        if (isBound) expect(description, `${name}.${field}`).toContain("aeitwoen/oritwoen");
+      }
+    }
+  });
 });
 
 describe("tool metadata", () => {
