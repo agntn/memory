@@ -44,7 +44,13 @@ const results = await profile.recall("What does the user prefer?");
 console.log(results);
 ```
 
-Cloudflare also supports HTTP with an `accountId`, `namespace`, and `apiToken`. Mnemopi requires Bun clients that you supply. The package doesn't import them for you.
+Over HTTP, you can leave credentials out. The library has finally caught up with its own tools, so you don't have to copy what they already find. On each request, `@agntn/credentials` looks up omitted fields in the environment or your `cf auth login`. Explicit values win, and passing both skips lookup. `new CloudflareNamespaceClient()` works without options too.
+
+```ts
+const provider = new CloudflareMemoryProvider({ namespace: "default" });
+```
+
+Mnemopi requires Bun clients that you supply. The package doesn't import them for you.
 
 | Provider     | Backend                 | Connection              |
 | ------------ | ----------------------- | ----------------------- |

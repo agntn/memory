@@ -1,5 +1,6 @@
 import {
   MemoryAuthError,
+  MemoryError,
   MemoryHttpError,
   MemoryInputError,
   MemoryNotFoundError,
@@ -71,9 +72,10 @@ export interface CloudflareBindingOptions {
   binding: AgentMemoryNamespaceBinding;
 }
 
+/** A field left out comes from the environment or the cf login on each request, as in the tools. */
 export interface CloudflareAccountOptions {
-  accountId: string;
-  apiToken: string;
+  accountId?: string;
+  apiToken?: string;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -266,8 +268,11 @@ function assertProfileName(profileName: string): void {
 }
 
 function assertAccountOptions(options: CloudflareAccountOptions): void {
-  assertString(options.accountId, "Account ID");
-  assertString(options.apiToken, "API token");
+  if (options.accountId !== undefined) {
+    assertString(options.accountId, "Account ID");
+    encodePath(options.accountId);
+  }
+  if (options.apiToken !== undefined) assertString(options.apiToken, "API token");
   if (options.fetch !== undefined && typeof options.fetch !== "function") {
     throw new MemoryInputError("Fetch must be a function", { provider: "cloudflare" });
   }
@@ -698,15 +703,67 @@ function retriesAfter(status: number, except: readonly number[]): boolean {
 /** One try ends with a response and its whole body, or with the error that cut it short. */
 type AttemptOutcome = { response: Response; text: string } | { cause: unknown };
 
-class CloudflareHttpClient {
-  private readonly fetcher?: typeof globalThis.fetch;
-  private readonly apiToken: string;
-  private readonly baseURL: string;
+/** The account and token one request goes out with. */
+interface RequestCredentials {
+  accountId: string;
+  token: string;
+}
 
-  constructor(options: CloudflareAccountOptions, path: string) {
+/** Shared by a provider's clients. A cf token rotates, so missing fields resolve per request. */
+class CloudflareAccount {
+  readonly fetcher?: typeof globalThis.fetch;
+  private readonly options: Readonly<CloudflareAccountOptions>;
+  private refused = false;
+
+  constructor(options: Readonly<CloudflareAccountOptions>) {
+    this.options = options;
     this.fetcher = options.fetch;
-    this.apiToken = options.apiToken;
-    this.baseURL = `${CLOUDFLARE_API_URL}/accounts/${encodePath(options.accountId)}/agent-memory${path}`;
+  }
+
+  /**
+   * Credentials for the next request. Passing both fields never loads `@agntn/credentials`.
+   * @param signal - Checked first, since the cf lookup cannot be interrupted once it runs.
+   * @returns {Promise<RequestCredentials>} The given fields, with the missing ones resolved.
+   * @throws {MemoryError} When neither the environment nor cf has what is missing.
+   */
+  async credentials(signal?: AbortSignal | null): Promise<RequestCredentials> {
+    signal?.throwIfAborted();
+    const { accountId, apiToken } = this.options;
+    if (accountId !== undefined && apiToken !== undefined) return { accountId, token: apiToken };
+    const { resolve } = await import("@agntn/credentials/cloudflare");
+    const refresh = this.refused;
+    this.refused = false;
+    try {
+      return await resolve({
+        refresh,
+        ...(accountId === undefined ? {} : { accountId }),
+        ...(apiToken === undefined ? {} : { token: apiToken }),
+      });
+    } catch (error) {
+      throw new MemoryError(`No Cloudflare credentials for Agent Memory: ${errorText(error)}`, {
+        provider: "cloudflare",
+        cause: error,
+      });
+    }
+  }
+
+  /** After a 401 the next request asks cf again instead of reusing its cached token. */
+  refuse(): void {
+    this.refused = true;
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class CloudflareHttpClient {
+  private readonly account: CloudflareAccount;
+  private readonly path: string;
+
+  constructor(account: CloudflareAccount, path: string) {
+    this.account = account;
+    this.path = path;
   }
 
   /**
@@ -724,16 +781,18 @@ class CloudflareHttpClient {
     retryExcept?: readonly number[],
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
+      const { accountId, token } = await this.account.credentials(init.signal);
       const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${this.apiToken}`);
+      headers.set("Authorization", `Bearer ${token}`);
       if (init.body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
       const { response, text, attempts } = await this.send(
-        `${this.baseURL}${path}`,
+        `${CLOUDFLARE_API_URL}/accounts/${encodePath(accountId)}/agent-memory${this.path}${path}`,
         { ...init, headers },
         retryExcept,
       );
+      if (response.status === 401) this.account.refuse();
       const parse = <R>(step: () => R): R => {
         try {
           return step();
@@ -787,7 +846,7 @@ class CloudflareHttpClient {
    */
   private async attempt(url: string, init: RequestInit): Promise<AttemptOutcome> {
     try {
-      const response = await (this.fetcher ?? globalThis.fetch)(url, init);
+      const response = await (this.account.fetcher ?? globalThis.fetch)(url, init);
       return { response, text: await response.text() };
     } catch (error) {
       if (init.signal?.aborted === true) throw error;
@@ -841,10 +900,11 @@ async function requestProfilePage(
  * never end, so it is reported as a malformed response instead.
  */
 async function listHttpProfiles(
-  options: CloudflareHttpOptions,
+  account: CloudflareAccount,
+  namespace: string,
   abort: AbortOptions,
 ): Promise<string[]> {
-  const client = new CloudflareHttpClient(options, profilesPath(options.namespace));
+  const client = new CloudflareHttpClient(account, profilesPath(namespace));
   const names: string[] = [];
   let cursor: string | undefined;
   do {
@@ -1068,14 +1128,17 @@ class CloudflareHttpProfile extends MemoryProfile implements CloudflareMemoryPro
 export class CloudflareNamespaceClient {
   private readonly client: CloudflareHttpClient;
 
-  constructor(options: CloudflareAccountOptions) {
+  /**
+   * @param options - Account and token, or nothing to take both from the environment or cf.
+   */
+  constructor(options: CloudflareAccountOptions = {}) {
     if (!isUnknownRecord(options)) {
       throw new MemoryInputError("Cloudflare account options must be an object", {
         provider: "cloudflare",
       });
     }
     assertAccountOptions(options);
-    this.client = new CloudflareHttpClient(options, "/namespaces");
+    this.client = new CloudflareHttpClient(new CloudflareAccount(options), "/namespaces");
   }
 
   /**
@@ -1172,11 +1235,20 @@ export class CloudflareNamespaceClient {
   }
 }
 
+/** An HTTP provider's account and the namespace it is bound to. */
+interface CloudflareHttpTransport {
+  account: CloudflareAccount;
+  namespace: string;
+}
+
 export class CloudflareMemoryProvider extends MemoryProvider {
   override readonly name = "cloudflare";
   override readonly capabilities: Readonly<MemoryCapabilities>;
-  private readonly options: CloudflareMemoryOptions;
+  private readonly transport: CloudflareBindingOptions | CloudflareHttpTransport;
 
+  /**
+   * @param options - A Workers binding, or a namespace over HTTP with optional account and token.
+   */
   constructor(options: CloudflareMemoryOptions) {
     super();
     if (!isUnknownRecord(options)) {
@@ -1192,52 +1264,51 @@ export class CloudflareMemoryProvider extends MemoryProvider {
       ) {
         throw new MemoryInputError("Cloudflare binding is invalid", { provider: "cloudflare" });
       }
-    } else {
-      assertAccountOptions(options);
-      assertNamespaceName(options.namespace);
-    }
-    this.options = options;
-    if (isBindingOptions(options)) {
+      this.transport = options;
       this.capabilities = bindingCapabilities;
-    } else {
-      this.capabilities = httpCapabilities;
-      /*
-       * The Workers binding has no profile listing, so the method is attached
-       * to an HTTP provider only and stays absent on a binding-backed one
-       * instead of failing at call time.
-       */
-      this.listProfiles = (abort = {}) => listHttpProfiles(options, abort);
+      return;
     }
+    assertAccountOptions(options);
+    assertNamespaceName(options.namespace);
+    const transport = { account: new CloudflareAccount(options), namespace: options.namespace };
+    this.transport = transport;
+    this.capabilities = httpCapabilities;
+    /*
+     * The Workers binding has no profile listing, so the method is attached
+     * to an HTTP provider only and stays absent on a binding-backed one
+     * instead of failing at call time.
+     */
+    this.listProfiles = (abort = {}) =>
+      listHttpProfiles(transport.account, transport.namespace, abort);
   }
 
   override async getProfile(profileName: string): Promise<CloudflareMemoryProfile> {
     assertProfileName(profileName);
-    const options = this.options;
-    if (isBindingOptions(options)) {
-      const profile = await withCloudflareError(() => options.binding.getProfile(profileName));
+    const transport = this.transport;
+    if ("binding" in transport) {
+      const profile = await withCloudflareError(() => transport.binding.getProfile(profileName));
       return new CloudflareBindingProfile(profile);
     }
     return new CloudflareHttpProfile(
-      new CloudflareHttpClient(options, profilePath(options.namespace, profileName)),
+      new CloudflareHttpClient(transport.account, profilePath(transport.namespace, profileName)),
     );
   }
 
   override async deleteProfile(profileName: string, abort: AbortOptions = {}): Promise<void> {
     assertProfileName(profileName);
-    const options = this.options;
-    if (isBindingOptions(options)) {
+    const transport = this.transport;
+    if ("binding" in transport) {
       abort.signal?.throwIfAborted();
-      await withCloudflareError(() => options.binding.deleteProfile(profileName));
+      await withCloudflareError(() => transport.binding.deleteProfile(profileName));
       return;
     }
-    await new CloudflareHttpClient(options, profilePath(options.namespace, profileName)).request(
-      "",
-      parseEmpty,
-      {
-        method: "DELETE",
-        signal: abort.signal,
-      },
-    );
+    await new CloudflareHttpClient(
+      transport.account,
+      profilePath(transport.namespace, profileName),
+    ).request("", parseEmpty, {
+      method: "DELETE",
+      signal: abort.signal,
+    });
   }
 }
 
