@@ -260,3 +260,112 @@ describe("memory tools with the cf OAuth session", () => {
     );
   });
 });
+
+/* A fresh module graph gives the provider an empty cf cache, like a new process. */
+async function loadMemory(): Promise<typeof import("../src/index.ts")> {
+  vi.resetModules();
+  return import("../src/index.ts");
+}
+
+function refusedWith401(): Response {
+  return Response.json(
+    { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
+    { status: 401 },
+  );
+}
+
+describe("Cloudflare HTTP clients without explicit credentials", () => {
+  it("take the env token and account when the options leave both out", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ success: true, result: [], result_info: {} }),
+    );
+    const { CloudflareMemoryProvider } = await loadMemory();
+
+    const provider = new CloudflareMemoryProvider({ namespace: "default", fetch: fetcher });
+    await (await provider.getProfile("agent")).list();
+
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain(
+      "/accounts/env-account/agent-memory/namespaces/default/profiles/agent/memories",
+    );
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer env-token",
+    );
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("keep a field the caller passed over the environment", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ success: true, result: [], result_info: {} }),
+    );
+    const { CloudflareNamespaceClient } = await loadMemory();
+
+    await new CloudflareNamespaceClient({ apiToken: "given-token", fetch: fetcher }).list();
+    await new CloudflareNamespaceClient({ accountId: "given-account", fetch: fetcher }).list();
+
+    const sent = fetcher.mock.calls.map(([input, init]) => [
+      String(input).replace(/^.*\/accounts\/([^/]+)\/.*$/, "$1"),
+      new Headers(init?.headers).get("Authorization"),
+    ]);
+    expect(sent).toEqual([
+      ["env-account", "Bearer given-token"],
+      ["given-account", "Bearer env-token"],
+    ]);
+  });
+
+  it("ask cf for a fresh token after a 401 without resending the refused request", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) =>
+      new Headers(init?.headers).get("Authorization") === "Bearer oauth-1"
+        ? refusedWith401()
+        : Response.json({ success: true, result: [], result_info: {} }),
+    );
+    const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
+    const namespaces = new CloudflareNamespaceClient({ fetch: fetcher });
+
+    await expect(namespaces.list()).rejects.toBeInstanceOf(MemoryAuthError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    cf.token = "oauth-2";
+    await expect(namespaces.list()).resolves.toEqual({ namespaces: [] });
+
+    expect(String(fetcher.mock.calls[1]?.[0])).toContain("/accounts/acct-1/agent-memory/");
+    expect(new Headers(fetcher.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer oauth-2",
+    );
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("leave cf alone when the call was cancelled before it started", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const { CloudflareNamespaceClient } = await loadMemory();
+
+    await expect(
+      new CloudflareNamespaceClient({ fetch: fetcher }).list({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(execFile).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("say where credentials come from before sending anything", async () => {
+    vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error) => void;
+      queueMicrotask(() =>
+        callback(Object.assign(new Error("spawn cf ENOENT"), { code: "ENOENT" })),
+      );
+    }) as unknown as typeof execFile);
+    const fetcher = vi.fn<typeof fetch>();
+    const { CloudflareMemoryProvider, MemoryError } = await loadMemory();
+    const provider = new CloudflareMemoryProvider({ namespace: "default", fetch: fetcher });
+
+    const error = await provider.listProfiles?.().catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(MemoryError);
+    expect((error as Error).message).toBe(
+      "No Cloudflare credentials for Agent Memory: cf CLI not found. Set CLOUDFLARE_API_TOKEN, or run `cf auth login` to use the cf CLI's OAuth session",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

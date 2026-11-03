@@ -9,6 +9,7 @@ const readonlyParameterOptions = {
       name: [
         "AbortOptions",
         "AgentMemoryProfileBinding",
+        "CloudflareAccount",
         "CloudflareAccountOptions",
         "CloudflareHttpClient",
         "CloudflareHttpOptions",
