@@ -268,6 +268,23 @@ try {
   assert.match(requests.at(-1).url, /\/namespaces\/packed\/profiles\/app\/remember$/);
   assert.equal(requests.at(-1).body.sessionId, "chat-1");
 
+  /* The locked form README leads with: no administration tools, and no way out of the profile. */
+  const lockedTools = createMemoryAiTools({ namespace: "packed", profile: "app", locked: true });
+  assert.deepEqual(
+    Object.keys(lockedTools),
+    expectedToolNames.filter((name) => !/^memory_(namespace|profile)_/.test(name)),
+    "wrong locked tool set from packed dist/ai.mjs",
+  );
+  const sentBeforeEscape = requests.length;
+  await assert.rejects(
+    lockedTools.memory_recall.execute(
+      { namespace: "packed", profile: "other", query: "who?" },
+      { toolCallId: "packed-ai-locked", messages: [], context: {} },
+    ),
+    /unknown property "namespace"/,
+  );
+  assert.equal(requests.length, sentBeforeEscape, "a locked call left its profile");
+
   /* An app that imports MemoryError has to recognize the one a failed tool call carries. */
   failNextRequest = true;
   const aiFailure = await aiTools.memory_remember

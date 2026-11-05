@@ -360,6 +360,17 @@ const hostSessionSchemas: ReadonlySet<OperationalSchemaName> = new Set([
 ]);
 
 /**
+ * One operational schema with no namespace or profile, and no `sessionId` on a write.
+ *
+ * @param name - Which raw schema to rebuild.
+ * @returns {TObject} The closed schema a locked tool takes.
+ */
+function scopelessSchema(name: OperationalSchemaName): TObject {
+  const hostOwned = hostSessionSchemas.has(name) ? ["sessionId"] : [];
+  return Type.Omit(rawOperationalSchemas[name], ["namespace", "profile", ...hostOwned], closed);
+}
+
+/**
  * One operational schema under a bound scope: the pair turns optional, a write loses `sessionId`.
  *
  * @param name - Which raw schema to rebuild.
@@ -367,13 +378,35 @@ const hostSessionSchemas: ReadonlySet<OperationalSchemaName> = new Set([
  * @returns {TObject} The closed schema the model sees.
  */
 function boundSchema(name: OperationalSchemaName, target: string): TObject {
-  const hostOwned = hostSessionSchemas.has(name) ? ["sessionId"] : [];
-  const rest = Type.Omit(
-    rawOperationalSchemas[name],
-    ["namespace", "profile", ...hostOwned],
+  return Type.Object(
+    { ...boundProfileParameters(target), ...scopelessSchema(name).properties },
     closed,
   );
-  return Type.Object({ ...boundProfileParameters(target), ...rest.properties }, closed);
+}
+
+/**
+ * Rebuild every operational schema the same way.
+ *
+ * @param rebuild - Turns one raw schema name into the schema the model sees.
+ * @returns {Record<OperationalSchemaName, TObject>} The rebuilt schemas.
+ */
+function rebuildOperationalSchemas(
+  rebuild: (name: OperationalSchemaName) => TObject,
+): Record<OperationalSchemaName, TObject> {
+  const names = Object.keys(rawOperationalSchemas) as OperationalSchemaName[];
+  return Object.fromEntries(names.map((name) => [name, rebuild(name)])) as Record<
+    OperationalSchemaName,
+    TObject
+  >;
+}
+
+/**
+ * The schemas of a surface locked to one profile: no scope fields, and no `sessionId` on a write.
+ *
+ * @returns {Record<OperationalSchemaName, TObject>} The schemas the model sees.
+ */
+export function createLockedMemoryToolSchemas(): Record<OperationalSchemaName, TObject> {
+  return rebuildOperationalSchemas(scopelessSchema);
 }
 
 /**
@@ -387,9 +420,5 @@ export function createOperationalMemoryToolSchemas(
 ): Record<OperationalSchemaName, TObject> {
   if (scope === undefined) return rawOperationalSchemas;
   const target = `${scope.namespace}/${scope.profile}`;
-  const names = Object.keys(rawOperationalSchemas) as OperationalSchemaName[];
-  return Object.fromEntries(names.map((name) => [name, boundSchema(name, target)])) as Record<
-    OperationalSchemaName,
-    TObject
-  >;
+  return rebuildOperationalSchemas((name) => boundSchema(name, target));
 }
