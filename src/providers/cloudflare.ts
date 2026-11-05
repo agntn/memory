@@ -703,17 +703,21 @@ function retriesAfter(status: number, except: readonly number[]): boolean {
 /** One try ends with a response and its whole body, or with the error that cut it short. */
 type AttemptOutcome = { response: Response; text: string } | { cause: unknown };
 
+/** The answer a request ended with, and how many tries it took. */
+type SentRequest = { response: Response; text: string; attempts: RequestAttempts };
+
 /** The account and token one request goes out with. */
 interface RequestCredentials {
   accountId: string;
   token: string;
+  /** Only a token from the cf login can come back different after a 401. */
+  renewable: boolean;
 }
 
 /** Shared by a provider's clients. A cf token rotates, so missing fields resolve per request. */
 class CloudflareAccount {
   readonly fetcher?: typeof globalThis.fetch;
   private readonly options: Readonly<CloudflareAccountOptions>;
-  private refused = false;
 
   constructor(options: Readonly<CloudflareAccountOptions>) {
     this.options = options;
@@ -723,33 +727,33 @@ class CloudflareAccount {
   /**
    * Credentials for the next request. Passing both fields never loads `@agntn/credentials`.
    * @param signal - Checked first, since the cf lookup cannot be interrupted once it runs.
+   * @param refresh - Skip the cached cf token, which a 401 just refused.
    * @returns {Promise<RequestCredentials>} The given fields, with the missing ones resolved.
    * @throws {MemoryError} When neither the environment nor cf has what is missing.
    */
-  async credentials(signal?: AbortSignal | null): Promise<RequestCredentials> {
+  async credentials(
+    signal: AbortSignal | null | undefined,
+    refresh: boolean,
+  ): Promise<RequestCredentials> {
     signal?.throwIfAborted();
     const { accountId, apiToken } = this.options;
-    if (accountId !== undefined && apiToken !== undefined) return { accountId, token: apiToken };
+    if (accountId !== undefined && apiToken !== undefined) {
+      return { accountId, token: apiToken, renewable: false };
+    }
     const { resolve } = await import("@agntn/credentials/cloudflare");
-    const refresh = this.refused;
-    this.refused = false;
     try {
-      return await resolve({
+      const found = await resolve({
         refresh,
         ...(accountId === undefined ? {} : { accountId }),
         ...(apiToken === undefined ? {} : { token: apiToken }),
       });
+      return { accountId: found.accountId, token: found.token, renewable: found.source === "cli" };
     } catch (error) {
       throw new MemoryError(`No Cloudflare credentials for Agent Memory: ${errorText(error)}`, {
         provider: "cloudflare",
         cause: error,
       });
     }
-  }
-
-  /** After a 401 the next request asks cf again instead of reusing its cached token. */
-  refuse(): void {
-    this.refused = true;
   }
 }
 
@@ -781,18 +785,7 @@ class CloudflareHttpClient {
     retryExcept?: readonly number[],
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
-      const { accountId, token } = await this.account.credentials(init.signal);
-      const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${token}`);
-      if (init.body !== undefined && !headers.has("Content-Type")) {
-        headers.set("Content-Type", "application/json");
-      }
-      const { response, text, attempts } = await this.send(
-        `${CLOUDFLARE_API_URL}/accounts/${encodePath(accountId)}/agent-memory${this.path}${path}`,
-        { ...init, headers },
-        retryExcept,
-      );
-      if (response.status === 401) this.account.refuse();
+      const { response, text, attempts } = await this.authorizedSend(path, init, retryExcept);
       const parse = <R>(step: () => R): R => {
         try {
           return step();
@@ -814,11 +807,41 @@ class CloudflareHttpClient {
     });
   }
 
+  /**
+   * Retry once with a fresh cf token after a 401, which RFC 9110 (15.5.2) says applied nothing.
+   * @param path - Path under the client's base URL.
+   * @param init - Fetch options without the token.
+   * @param retryExcept - Passed on to `send`.
+   * @returns {Promise<SentRequest>} The last answer.
+   */
+  private async authorizedSend(
+    path: string,
+    init: RequestInit,
+    retryExcept: readonly number[] | undefined,
+  ): Promise<SentRequest> {
+    const sendAs = ({ accountId, token }: Readonly<RequestCredentials>) => {
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      if (init.body !== undefined && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+      return this.send(
+        `${CLOUDFLARE_API_URL}/accounts/${encodePath(accountId)}/agent-memory${this.path}${path}`,
+        { ...init, headers },
+        retryExcept,
+      );
+    };
+    const credentials = await this.account.credentials(init.signal, false);
+    const answer = await sendAs(credentials);
+    if (answer.response.status !== 401 || !credentials.renewable) return answer;
+    return sendAs(await this.account.credentials(init.signal, true));
+  }
+
   private async send(
     url: string,
     init: RequestInit,
     retryExcept: readonly number[] | undefined,
-  ): Promise<{ response: Response; text: string; attempts: RequestAttempts }> {
+  ): Promise<SentRequest> {
     const read = retryExcept !== undefined;
     const limit = read ? READ_ATTEMPTS : 1;
     for (let count = 1; ; count += 1) {
