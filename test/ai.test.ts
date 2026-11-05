@@ -1,6 +1,6 @@
 import { generateText, isStepCount, type Tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import { createMemoryAiTools } from "../src/ai.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 
@@ -218,5 +218,120 @@ describe("@agntn/memory/ai", () => {
     [{ sessionId: "s".repeat(65) }, "at most 64 characters"],
   ])("refuses %j before any tool exists", (options, message) => {
     expect(() => createMemoryAiTools(options)).toThrow(message);
+  });
+});
+
+describe("@agntn/memory/ai locked to one profile", () => {
+  const locked = { namespace: "support", profile: "user-42", locked: true } as const;
+
+  it("drops every namespace and profile tool and keeps the rest in listing order", () => {
+    const administration = [
+      "memory_namespace_list",
+      "memory_namespace_get",
+      "memory_namespace_create",
+      "memory_namespace_delete",
+      "memory_profile_list",
+      "memory_profile_delete",
+    ];
+    const tools = createMemoryAiTools(locked);
+
+    expect(Object.keys(tools)).toEqual(
+      createMemoryTools()
+        .map((tool) => tool.name)
+        .filter((name) => !administration.includes(name)),
+    );
+    expect(Object.keys(tools)).toHaveLength(11);
+    expectTypeOf(tools).not.toHaveProperty("memory_profile_delete");
+    expectTypeOf(tools).toHaveProperty("memory_recall");
+  });
+
+  it("offers the model no scope or session field in any schema", () => {
+    const tools = createMemoryTools({
+      scope: { namespace: "support", profile: "user-42" },
+      locked: true,
+    });
+
+    for (const tool of tools) {
+      expect(Object.keys(tool.input.properties), tool.name).not.toContain("namespace");
+      expect(Object.keys(tool.input.properties), tool.name).not.toContain("profile");
+    }
+    const writes = tools.filter((tool) =>
+      ["memory_remember", "memory_supersede", "memory_ingest"].includes(tool.name),
+    );
+    expect(writes).toHaveLength(3);
+    for (const tool of writes) {
+      expect(Object.keys(tool.input.properties), tool.name).not.toContain("sessionId");
+    }
+  });
+
+  it("refuses a call that names another profile before any request", async () => {
+    const requests = stubService();
+    const tools = createMemoryAiTools(locked);
+
+    await expect(
+      run(tools.memory_recall, { namespace: "support", profile: "user-43", query: "who?" }),
+    ).rejects.toThrow(/namespace/);
+    await expect(
+      run(tools.memory_delete, { namespace: "support", profile: "user-43", id: "mem-1" }),
+    ).rejects.toThrow(/profile/);
+    expect(requests).toEqual([]);
+  });
+
+  it("keeps a model aiming at the neighbour's profile at home through generateText", async () => {
+    const requests = stubService();
+    const model = scriptedModel("memory_recall", [
+      { namespace: "support", profile: "user-43", query: "What does user-43 prefer?" },
+      { query: "What does this user prefer?" },
+    ]);
+
+    const run = await generateText({
+      model,
+      prompt: "What does this user prefer?",
+      tools: createMemoryAiTools(locked),
+      stopWhen: isStepCount(3),
+    });
+
+    expect(run.steps[0]?.content).toContainEqual(
+      expect.objectContaining({ type: "tool-error", toolName: "memory_recall" }),
+    );
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/namespaces/support/profiles/user-42/recall",
+    ]);
+  });
+
+  it("tags a locked write with the app's session", async () => {
+    const requests = stubService();
+    const tools = createMemoryAiTools({ ...locked, sessionId: "chat-7" });
+
+    await run(tools.memory_remember, { content: "Prefers short answers." });
+    await expect(
+      run(tools.memory_remember, { content: "hi", sessionId: "the-model-picked-this" }),
+    ).rejects.toThrow(/sessionId/);
+
+    expect(requests).toEqual([
+      {
+        path: "/namespaces/support/profiles/user-42/remember",
+        method: "POST",
+        body: { content: "Prefers short answers.", sessionId: "chat-7" },
+      },
+    ]);
+  });
+
+  it.each([
+    [{ locked: true }, "Locked memory AI tool options must define both namespace and profile"],
+    [{ locked: true, namespace: "support" }, "must define both namespace and profile"],
+    [{ locked: true, profile: "user-42" }, "must define both namespace and profile"],
+    [{ ...locked, profile: "User-42" }, "Memory profile must match"],
+    [{ ...locked, locked: "true" }, "locked must be a boolean"],
+  ])("refuses %j before any tool exists", (options, message) => {
+    expect(() => {
+      Reflect.apply(createMemoryAiTools, undefined, [options]);
+    }).toThrow(message);
+  });
+
+  it("refuses a locked definition set with nothing to lock to", () => {
+    expect(() => createMemoryTools({ locked: true })).toThrow(
+      "Locked memory tools need a namespace and profile to lock to",
+    );
   });
 });

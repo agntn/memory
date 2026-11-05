@@ -8,6 +8,7 @@ import {
 } from "@agntn/tools";
 import type { AbortOptions } from "@agntn/memory";
 import {
+  createLockedMemoryToolSchemas,
   createOperationalMemoryToolSchemas,
   namespaceListParameters,
   namespaceParameters,
@@ -27,12 +28,29 @@ import { toolErrorMessage } from "./tool-errors.ts";
 
 export type MemoryToolName = keyof typeof memoryToolMeta;
 
+const administrationToolNames = [
+  "memory_namespace_list",
+  "memory_namespace_get",
+  "memory_namespace_create",
+  "memory_namespace_delete",
+  "memory_profile_list",
+  "memory_profile_delete",
+] as const satisfies readonly MemoryToolName[];
+
+/** The tools that work inside one profile, all a locked surface keeps. */
+export type ProfileMemoryToolName = Exclude<
+  MemoryToolName,
+  (typeof administrationToolNames)[number]
+>;
+
 /** How each surface binds the calls it serves. */
 export interface MemoryToolOptions {
   /** Namespace and profile a call gets when it names neither of them. */
   readonly scope?: ProfileParams;
   /** The host's conversation session for a write, read from the call's `host`. */
   readonly writeSession?: (host: unknown) => string | undefined;
+  /** Keep every call in `scope`: no scope fields for the model, and no administration tools. */
+  readonly locked?: boolean;
 }
 
 /** How far the configured scope reaches into a call: administration, a profile read, or a write. */
@@ -64,14 +82,7 @@ function loadExecutors(): Promise<typeof MemoryTools> {
 /** MCP sends a still-waiting note this often while a call can run up to its timeout. */
 const PROGRESS_INTERVAL_MS = 30_000;
 
-const administrationTools: ReadonlySet<MemoryToolName> = new Set([
-  "memory_namespace_list",
-  "memory_namespace_get",
-  "memory_namespace_create",
-  "memory_namespace_delete",
-  "memory_profile_list",
-  "memory_profile_delete",
-]);
+const administrationTools: ReadonlySet<MemoryToolName> = new Set(administrationToolNames);
 
 /**
  * Arguments as a call line shows them, with the default scope filled in where the call left it out.
@@ -192,11 +203,14 @@ async function runMemoryTool(
 /**
  * The tool table, in the order every surface lists it.
  *
- * @param scope - Namespace and profile the host defaults to, if any.
+ * @param options - Scope binding of the surface, which decides the schemas the model sees.
  * @returns {readonly MemoryToolSpec[]} One entry per tool.
  */
-function memoryToolSpecs(scope: ProfileParams | undefined): readonly MemoryToolSpec[] {
-  const schemas = createOperationalMemoryToolSchemas(scope);
+function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] {
+  const schemas =
+    options.locked === true
+      ? createLockedMemoryToolSchemas()
+      : createOperationalMemoryToolSchemas(options.scope);
   return [
     {
       name: "memory_namespace_list",
@@ -378,10 +392,16 @@ function memoryToolSpecs(scope: ProfileParams | undefined): readonly MemoryToolS
  * Every memory tool as one `@agntn/tools` definition, for every surface from MCP to the AI SDK.
  *
  * @param options - Scope and session binding of the surface serving them.
- * @returns {readonly ToolDefinition[]} The definitions, in listing order.
+ * @returns {readonly ToolDefinition[]} The definitions in listing order, locked ones without admin.
+ * @throws {Error} When the surface is locked without a scope to lock it to.
  */
 export function createMemoryTools(options: MemoryToolOptions = {}): readonly ToolDefinition[] {
-  return memoryToolSpecs(options.scope).map((spec) =>
+  const locked = options.locked === true;
+  if (locked && options.scope === undefined) {
+    throw new Error("Locked memory tools need a namespace and profile to lock to");
+  }
+  const specs = memoryToolSpecs(options);
+  return (locked ? specs.filter((spec) => spec.reach !== "none") : specs).map((spec) =>
     defineTool({
       name: spec.name,
       title: memoryToolMeta[spec.name].label,

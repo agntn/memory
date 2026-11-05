@@ -98,7 +98,7 @@ Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf
 
 ### AI SDK
 
-You get the same 17 tools as MCP, Pi, and OMP. No more writing your own wrappers. Install the optional AI SDK peer, version 7 or newer.
+For a per-user app, lock memory to that user. No more relying on the model to respect the neighbours. Install the optional AI SDK peer, version 7 or newer.
 
 ```bash
 pnpm add @agntn/memory ai
@@ -112,6 +112,7 @@ const tools = createMemoryAiTools({
   namespace: "support",
   profile: "user-42",
   sessionId: "chat-7",
+  locked: true,
 });
 
 const { text } = await generateText({
@@ -122,7 +123,13 @@ const { text } = await generateText({
 });
 ```
 
-Set namespace and profile together, or tool creation throws. Calls can name both to reach another profile, but never just one. With a profile set, the model can't override your write session. No Claude Code session hides in your chat app: scope and session come from your code, not environment variables.
+Locked gives you 11 tools that work inside one profile. The six `memory_namespace_*` and `memory_profile_*` tools aren't returned, and TypeScript knows they're missing.
+
+No tool schema has a `namespace` or `profile` field. Calls that name either are refused before reaching Cloudflare. The model in user-42's chat can't read or delete user-43's memories. Creation throws unless both namespace and profile are set.
+
+Without `locked`, you get the same 17 tools as MCP, Pi, and OMP. That's for an agent managing its own memory. Namespace and profile must still go together, or creation throws. Calls can name both to reach another profile, never just one.
+
+With a profile set, writes carry your `sessionId`, and the model can't pass its own. Scope and session come from your code, never environment variables. No Claude Code session hides in your chat app.
 
 ## Behavior worth knowing
 
