@@ -401,7 +401,7 @@ function rebuildOperationalSchemas(
 }
 
 /**
- * The schemas of a surface locked to one profile: the model can't name a scope or a session at all.
+ * The schemas of a surface locked to one profile: no scope fields, and no `sessionId` on a write.
  *
  * @returns {Record<OperationalSchemaName, TObject>} The schemas the model sees.
  */

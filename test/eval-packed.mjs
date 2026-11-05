@@ -281,7 +281,7 @@ try {
       { namespace: "packed", profile: "other", query: "who?" },
       { toolCallId: "packed-ai-locked", messages: [], context: {} },
     ),
-    /namespace/,
+    /unknown property "namespace"/,
   );
   assert.equal(requests.length, sentBeforeEscape, "a locked call left its profile");
 

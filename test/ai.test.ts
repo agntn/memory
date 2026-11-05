@@ -270,10 +270,10 @@ describe("@agntn/memory/ai locked to one profile", () => {
 
     await expect(
       run(tools.memory_recall, { namespace: "support", profile: "user-43", query: "who?" }),
-    ).rejects.toThrow(/namespace/);
+    ).rejects.toThrow('unknown property "namespace"');
     await expect(
-      run(tools.memory_delete, { namespace: "support", profile: "user-43", id: "mem-1" }),
-    ).rejects.toThrow(/profile/);
+      run(tools.memory_delete, { namespace: "support", profile: "user-43", memoryId: "mem-1" }),
+    ).rejects.toThrow('unknown property "profile"');
     expect(requests).toEqual([]);
   });
 
