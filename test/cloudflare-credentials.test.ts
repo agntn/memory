@@ -267,6 +267,12 @@ async function loadMemory(): Promise<typeof import("../src/index.ts")> {
   return import("../src/index.ts");
 }
 
+const namespace = {
+  id: "ns-1",
+  created_at: "2026-09-30T07:00:00.000Z",
+  updated_at: "2026-09-30T07:00:00.000Z",
+};
+
 function refusedWith401(): Response {
   return Response.json(
     { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
@@ -316,25 +322,79 @@ describe("Cloudflare HTTP clients without explicit credentials", () => {
     ]);
   });
 
-  it("ask cf for a fresh token after a 401 without resending the refused request", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (_input, init) =>
-      new Headers(init?.headers).get("Authorization") === "Bearer oauth-1"
-        ? refusedWith401()
-        : Response.json({ success: true, result: [], result_info: {} }),
-    );
-    const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
-    const namespaces = new CloudflareNamespaceClient({ fetch: fetcher });
+  it("send a write refused under a cf token once more with the token cf hands over next", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      if (new Headers(init?.headers).get("Authorization") !== "Bearer oauth-1") {
+        return Response.json({ success: true, result: { ...namespace, name: "fresh" } });
+      }
+      cf.token = "oauth-2";
+      return refusedWith401();
+    });
+    const { CloudflareNamespaceClient } = await loadMemory();
 
-    await expect(namespaces.list()).rejects.toBeInstanceOf(MemoryAuthError);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    cf.token = "oauth-2";
-    await expect(namespaces.list()).resolves.toEqual({ namespaces: [] });
+    await expect(
+      new CloudflareNamespaceClient({ fetch: fetcher }).create("fresh"),
+    ).resolves.toEqual({
+      id: "ns-1",
+      name: "fresh",
+      createdAt: new Date(namespace.created_at),
+      updatedAt: new Date(namespace.updated_at),
+    });
 
-    expect(String(fetcher.mock.calls[1]?.[0])).toContain("/accounts/acct-1/agent-memory/");
-    expect(new Headers(fetcher.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer oauth-2",
-    );
+    const sent = fetcher.mock.calls.map(([input, init]) => [
+      String(input),
+      init?.method,
+      init?.body,
+      new Headers(init?.headers).get("Authorization"),
+    ]);
+    const url = "https://api.cloudflare.com/client/v4/accounts/acct-1/agent-memory/namespaces";
+    expect(sent).toEqual([
+      [url, "POST", '{"name":"fresh"}', "Bearer oauth-1"],
+      [url, "POST", '{"name":"fresh"}', "Bearer oauth-2"],
+    ]);
     expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("give up after the fresh cf token is refused too", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
+    const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
+
+    await expect(new CloudflareNamespaceClient({ fetch: fetcher }).list()).rejects.toBeInstanceOf(
+      MemoryAuthError,
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("leave an env token refused with 401 at one request, since cf can't replace it", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+    const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
+    const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
+
+    await expect(new CloudflareNamespaceClient({ fetch: fetcher }).list()).rejects.toBeInstanceOf(
+      MemoryAuthError,
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("stop before the second cf lookup when the call is cancelled after a 401", async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      controller.abort();
+      return refusedWith401();
+    });
+    const { CloudflareNamespaceClient } = await loadMemory();
+
+    await expect(
+      new CloudflareNamespaceClient({ fetch: fetcher }).list({ signal: controller.signal }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
   it("leave cf alone when the call was cancelled before it started", async () => {
