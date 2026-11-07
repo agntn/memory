@@ -78,6 +78,17 @@ describe("call lines", () => {
     expect(line.meta).toEqual(["messages 3"]);
   });
 
+  it("counts the profiles a remember call copies into", () => {
+    const line = describeToolCall("Remember", {
+      namespace: "research",
+      profile: "project",
+      content: "shared fact",
+      copies: [{ namespace: "research", profile: "shared" }],
+    });
+
+    expect(line.meta).toEqual(["research/project", "copies 1"]);
+  });
+
   it("carries no icon when the harness reports no state", () => {
     expect(describeToolCall("Recall", { query: "q" }).icon).toBeUndefined();
   });

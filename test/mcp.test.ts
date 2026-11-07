@@ -459,7 +459,7 @@ describe("memory MCP server", () => {
     expect(refused.content).toEqual([
       {
         type: "text",
-        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content',
+        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content, copies',
       },
     ]);
     expect(requests).toEqual([]);
@@ -477,6 +477,59 @@ describe("memory MCP server", () => {
           content: "one canonical memory",
           sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
         },
+      },
+    ]);
+  });
+
+  it("stamps the harness session on every copy of a bound write", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "research");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "project");
+    vi.stubEnv("CLAUDE_PROJECT_DIR", "/workspace/project");
+    vi.stubEnv("CLAUDE_CODE_SESSION_ID", "conversation-123");
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        });
+        return Response.json({
+          success: true,
+          result: {
+            id: `memory-${requests.length}`,
+            type: "fact",
+            summary: "remembered",
+            content: "shared fact",
+            sessionId: null,
+            createdAt: "2026-08-18T00:00:00.000Z",
+            updatedAt: "2026-08-18T00:00:00.000Z",
+          },
+        });
+      }),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_remember",
+      arguments: {
+        content: "shared fact",
+        copies: [{ namespace: "research", profile: "shared" }],
+      },
+    });
+
+    expect(response.isError).not.toBe(true);
+    const session = memorySessionId("claude", "/workspace/project", "conversation-123");
+    expect(requests).toEqual([
+      {
+        url: expect.stringContaining("/namespaces/research/profiles/project/remember"),
+        body: { content: "shared fact", sessionId: session },
+      },
+      {
+        url: expect.stringContaining("/namespaces/research/profiles/shared/remember"),
+        body: { content: "shared fact", sessionId: session },
       },
     ]);
   });
@@ -514,13 +567,13 @@ describe("memory MCP server", () => {
 
     const response = await client.callTool({
       name: "memory_remember",
-      arguments: { namespace: "puzzles", profile: "gsmg", content: "a project fact" },
+      arguments: { namespace: "research", profile: "project", content: "a project fact" },
     });
 
     expect(response.isError).not.toBe(true);
     expect(requests).toEqual([
       {
-        url: expect.stringContaining("/namespaces/puzzles/profiles/gsmg/remember"),
+        url: expect.stringContaining("/namespaces/research/profiles/project/remember"),
         body: {
           content: "a project fact",
           sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
@@ -542,7 +595,7 @@ describe("memory MCP server", () => {
     ]);
 
     requests.length = 0;
-    for (const half of [{ namespace: "puzzles" }, { profile: "gsmg" }]) {
+    for (const half of [{ namespace: "research" }, { profile: "project" }]) {
       const refused = await client.callTool({
         name: "memory_remember",
         arguments: { ...half, content: "half a scope" },

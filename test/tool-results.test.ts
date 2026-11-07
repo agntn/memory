@@ -2030,6 +2030,146 @@ describe("delete resilience", () => {
   });
 });
 
+describe("remember copies", () => {
+  /** The `namespace/profile` a remember URL writes to. */
+  function writeTarget(url: string): string {
+    const match = /\/namespaces\/([^/]+)\/profiles\/([^/]+)\/remember$/.exec(url);
+    return match ? `${match[1]}/${match[2]}` : url;
+  }
+
+  /** Answer every write with a record named after its profile, or refuse the listed profiles. */
+  function stubWrites(failing: readonly string[] = []): { urls: string[]; bodies: RequestInit[] } {
+    const bodies: RequestInit[] = [];
+    const urls = stubCloudflare((url, init) => {
+      bodies.push(init ?? {});
+      const target = writeTarget(url);
+      if (failing.includes(target)) return { failure: { status: 400, message: "profile refused" } };
+      return {
+        result: {
+          ...memoryEntry(`mem-${target.replace("/", "-")}`, "s-1"),
+          content: "shared fact",
+        },
+      };
+    });
+    return { urls, bodies };
+  }
+
+  it("writes the same content and session to every profile, the main one first", async () => {
+    const { urls, bodies } = stubWrites();
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "shared fact",
+      sessionId: "s-1",
+      copies: [
+        { namespace: "research", profile: "shared" },
+        { namespace: "team", profile: "agent" },
+      ],
+    });
+
+    expect(urls.map((url) => writeTarget(url))).toEqual([
+      "research/project",
+      "research/shared",
+      "team/agent",
+    ]);
+    for (const body of bodies) {
+      expect(JSON.parse(String(body.body))).toEqual({ content: "shared fact", sessionId: "s-1" });
+    }
+    expect(textOf(result).split("\n")[0]).toBe(
+      "Stored the same memory in 3 profiles. A copy whose content matches the first record leaves it out.",
+    );
+    expect(records<{ target: string; id: string; content?: string }>(result)).toEqual([
+      expect.objectContaining({ target: "research/project", id: "mem-research-project" }),
+      expect.objectContaining({ target: "research/shared", id: "mem-research-shared" }),
+      expect.objectContaining({ target: "team/agent", id: "mem-team-agent" }),
+    ]);
+    expect(contentUnder(result, "mem-research-project")).toEqual(["shared fact"]);
+    expect(contentUnder(result, "mem-research-shared")).toEqual([]);
+    expect(textOf(result).match(/summaryTrust/g)).toHaveLength(3);
+  });
+
+  it("copies across namespaces, each write in its own namespace", async () => {
+    const { urls } = stubWrites();
+
+    await memoryToolExecutors.remember({
+      namespace: "notes",
+      profile: "main",
+      content: "shared fact",
+      copies: [{ namespace: "topics", profile: "general" }],
+    });
+
+    expect(urls.map((url) => writeTarget(url))).toEqual(["notes/main", "topics/general"]);
+  });
+
+  it("names what landed and which copy to retry when a copy fails", async () => {
+    stubWrites(["team/agent"]);
+
+    const error = await memoryToolExecutors
+      .remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copies: [
+          { namespace: "research", profile: "shared" },
+          { namespace: "team", profile: "agent" },
+        ],
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const { message } = error as Error;
+    expect(message).toContain(
+      'Stored memory in research/project "mem-research-project", research/shared "mem-research-shared", but 1 of 2 copies failed.',
+    );
+    expect(message).toMatch(/team\/agent: .*profile refused/);
+    expect(message).toContain("retry only the profiles that lack the memory");
+  });
+
+  it("writes no copy when the main profile refuses the memory", async () => {
+    const { urls } = stubWrites(["research/project"]);
+
+    await expect(
+      memoryToolExecutors.remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copies: [{ namespace: "research", profile: "shared" }],
+      }),
+    ).rejects.toThrow("profile refused");
+    expect(urls).toHaveLength(1);
+  });
+
+  it.each([
+    [[{ namespace: "research", profile: "project" }], 'Copies name "research/project" twice'],
+    [
+      [
+        { namespace: "research", profile: "shared" },
+        { namespace: "research", profile: "shared" },
+      ],
+      'Copies name "research/shared" twice',
+    ],
+    [[{ namespace: "research", profile: ".." }], "Memory profile must match"],
+    [[], "Copies must be a list of 1 to 4 profiles"],
+    [
+      Array.from({ length: 5 }, (_, index) => ({ namespace: "copy", profile: `p${index}` })),
+      "Copies must be a list of 1 to 4 profiles",
+    ],
+  ])("refuses copies %j before any write", async (copies, message) => {
+    const { urls } = stubWrites();
+
+    await expect(
+      memoryToolExecutors.remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copies,
+      }),
+    ).rejects.toThrow(message);
+    expect(urls).toEqual([]);
+  });
+});
+
 describe("get result", () => {
   it("reads several memories in one call, keeping request order", async () => {
     const urls = stubCloudflare((url) => {
