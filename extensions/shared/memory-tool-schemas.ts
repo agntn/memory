@@ -4,6 +4,7 @@ import {
   MAX_TOOL_INGEST_MESSAGES,
   MAX_TOOL_LIST_LIMIT,
   MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
+  MAX_TOOL_MEMORY_COPIES,
   MAX_TOOL_MESSAGE_CHARACTERS,
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
@@ -20,20 +21,38 @@ import type { ProfileParams } from "./memory-tools.types.ts";
 /** Parameter schemas of the memory tools. OMP rewrites a bare `typebox` import, so none here. */
 /** `defineTool` refuses open objects: a misspelled key would change the call silently. */
 const closed = { additionalProperties: false } as const;
-const namespaceName = Type.String({
-  description: memoryFieldDescriptions.namespace,
-  minLength: 1,
-  maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
-  pattern: MEMORY_NAME_PATTERN,
-});
-const profileParameters = {
-  namespace: namespaceName,
-  profile: Type.String({
-    description: memoryFieldDescriptions.profile,
+/**
+ * One name rule for every namespace field, whatever its description says.
+ *
+ * @param description - What the field means where it sits.
+ * @returns {TString} The namespace schema.
+ */
+function namespaceString(description: string) {
+  return Type.String({
+    description,
+    minLength: 1,
+    maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
+    pattern: MEMORY_NAME_PATTERN,
+  });
+}
+/**
+ * One name rule for every profile field, whatever its description says.
+ *
+ * @param description - What the field means where it sits.
+ * @returns {TString} The profile schema.
+ */
+function profileString(description: string) {
+  return Type.String({
+    description,
     minLength: 1,
     maxLength: MAX_TOOL_PROFILE_CHARACTERS,
     pattern: MEMORY_NAME_PATTERN,
-  }),
+  });
+}
+const namespaceName = namespaceString(memoryFieldDescriptions.namespace);
+const profileParameters = {
+  namespace: namespaceName,
+  profile: profileString(memoryFieldDescriptions.profile),
 };
 const memoryId = Type.String({
   description: memoryFieldDescriptions.memoryId,
@@ -106,6 +125,22 @@ export const rememberParameters = Type.Object(
         description: memoryFieldDescriptions.writeSessionId,
         maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
       }),
+    ),
+    copies: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            namespace: namespaceString(memoryFieldDescriptions.copyNamespace),
+            profile: profileString(memoryFieldDescriptions.copyProfile),
+          },
+          closed,
+        ),
+        {
+          description: memoryFieldDescriptions.rememberCopies,
+          minItems: 1,
+          maxItems: MAX_TOOL_MEMORY_COPIES,
+        },
+      ),
     ),
   },
   closed,
@@ -316,22 +351,8 @@ export const profileOnlyParameters = Type.Object(profileParameters, closed);
  */
 function boundProfileParameters(target: string) {
   return {
-    namespace: Type.Optional(
-      Type.String({
-        description: memoryFieldDescriptions.boundNamespace(target),
-        minLength: 1,
-        maxLength: MAX_TOOL_NAMESPACE_CHARACTERS,
-        pattern: MEMORY_NAME_PATTERN,
-      }),
-    ),
-    profile: Type.Optional(
-      Type.String({
-        description: memoryFieldDescriptions.boundProfile(target),
-        minLength: 1,
-        maxLength: MAX_TOOL_PROFILE_CHARACTERS,
-        pattern: MEMORY_NAME_PATTERN,
-      }),
-    ),
+    namespace: Type.Optional(namespaceString(memoryFieldDescriptions.boundNamespace(target))),
+    profile: Type.Optional(profileString(memoryFieldDescriptions.boundProfile(target))),
   };
 }
 
@@ -401,12 +422,17 @@ function rebuildOperationalSchemas(
 }
 
 /**
- * The schemas of a surface locked to one profile: no scope fields, and no `sessionId` on a write.
+ * The schemas of a surface locked to one profile: no scope fields, no `sessionId` on a write,
+ * and no `copies`, which would carry a write out of that profile.
  *
  * @returns {Record<OperationalSchemaName, TObject>} The schemas the model sees.
  */
 export function createLockedMemoryToolSchemas(): Record<OperationalSchemaName, TObject> {
-  return rebuildOperationalSchemas(scopelessSchema);
+  return rebuildOperationalSchemas((name) =>
+    name === "rememberParameters"
+      ? Type.Omit(scopelessSchema(name), ["copies"], closed)
+      : scopelessSchema(name),
+  );
 }
 
 /**

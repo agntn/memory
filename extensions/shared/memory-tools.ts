@@ -12,6 +12,7 @@ import type {
 import type { CredentialSource } from "@agntn/credentials";
 import { type CloudflareCredentials, getCloudflareCredentials } from "./cloudflare-credentials.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
+import { validateMemoryScope } from "./memory-scope.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
 import {
@@ -22,6 +23,7 @@ import {
   MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
   SERVICE_GENERATED_UNTRUSTED,
   MAX_TOOL_EXPAND,
+  MAX_TOOL_MEMORY_COPIES,
   DEFAULT_TOOL_RECALL_CANDIDATES,
   RECALL_RELEVANCE_FLOOR,
   RECALL_RELEVANCE_FLOOR_TEXT,
@@ -952,13 +954,121 @@ function emptyCascade(removed: RemovedCount): boolean {
   return removed?.count === 0 && !removed.atLeast;
 }
 
+/**
+ * Check the copies before the first write, since the schema guards only tool callers.
+ *
+ * @param params - The remember call, main profile included.
+ * @param copies - The extra profiles it names.
+ * @throws {Error} On a bad count, a bad name, or a profile named twice.
+ */
+function assertCopies(params: Readonly<ProfileParams>, copies: readonly ProfileParams[]): void {
+  const count = Array.isArray(copies as unknown) ? copies.length : 0;
+  if (count < 1 || count > MAX_TOOL_MEMORY_COPIES) {
+    throw new Error(`Copies must be a list of 1 to ${MAX_TOOL_MEMORY_COPIES} profiles`);
+  }
+  const targets = new Set([memoryTarget(params)]);
+  for (const copy of copies) {
+    const target = memoryTarget(validateMemoryScope(copy.namespace, copy.profile, "Each copy"));
+    if (targets.has(target)) {
+      throw new Error(`Copies name ${quoteToolText(target)} twice; each profile gets one record`);
+    }
+    targets.add(target);
+  }
+}
+
+interface StoredCopy {
+  readonly target: string;
+  readonly memory: Memory;
+}
+
+/**
+ * One line per stored record, the shared content only under the first.
+ *
+ * @param stored - Every record the call wrote, main profile first.
+ * @returns {string} The result text.
+ */
+function storedCopiesText(stored: readonly StoredCopy[]): string {
+  const shared = stored[0]?.memory.content;
+  const records = stored.map(({ target, memory }, index) => {
+    if (index === 0 || memory.content !== shared) return { target, ...memory };
+    const { content: _content, ...rest } = memory;
+    return { target, ...rest };
+  });
+  return `Stored the same memory in ${stored.length} profiles. A copy whose content matches the first record leaves it out.\n${recordLines(records)}`;
+}
+
+/**
+ * Name what landed and what did not, so a retry goes only to the missing profiles.
+ *
+ * @param stored - Records written before or beside the failed copies.
+ * @param failed - Each failed copy with its reason.
+ * @returns {Error} One error for the whole call.
+ */
+function failedCopiesError(
+  stored: readonly StoredCopy[],
+  failed: readonly { readonly target: string; readonly reason: unknown }[],
+): Error {
+  const storedText = stored
+    .map(({ target, memory }) => `${target} ${quoteToolText(memory.id)}`)
+    .join(", ");
+  const failedText = failed
+    .map(
+      ({ target, reason }) => `${target}: ${withCredentialStep(toolErrorMessage(reason), reason)}`,
+    )
+    .join("; ");
+  return new Error(
+    `Stored memory in ${storedText}, but ${failed.length} of ${stored.length + failed.length - 1} copies failed. ${failedText}. Check memory_list in each failed profile before retrying, since a failed write may have landed anyway, and retry only the profiles that lack the memory.`,
+  );
+}
+
+/**
+ * Write the same memory into every copy at once, after the main record is stored.
+ *
+ * @param main - The record already in the main profile.
+ * @param copies - Profiles that get the same content.
+ * @param write - Content and session of the main record.
+ * @param options - Abort signal shared by every write.
+ * @returns {Promise<MemoryToolResult>} One line per record, or an error naming the gaps.
+ */
+async function rememberCopies(
+  main: StoredCopy,
+  copies: readonly ProfileParams[],
+  write: Readonly<{ content: string; sessionId?: string }>,
+  options: AbortOptions,
+): Promise<MemoryToolResult> {
+  const settled = await Promise.allSettled(
+    copies.map(async (copy) =>
+      requireCapability(await getProfile(copy), "remember")(write, options),
+    ),
+  );
+  const stored: StoredCopy[] = [main];
+  const failed: { target: string; reason: unknown }[] = [];
+  settled.forEach((outcome, index) => {
+    const target = memoryTarget(copies[index] as ProfileParams);
+    if (outcome.status === "fulfilled") stored.push({ target, memory: outcome.value });
+    else failed.push({ target, reason: outcome.reason });
+  });
+  if (failed.length > 0) throw failedCopiesError(stored, failed);
+  return {
+    content: [{ type: "text", text: storedCopiesText(stored) }],
+    details: { records: stored.map(({ target, memory }) => ({ target, ...memory })) },
+  };
+}
+
 export const memoryToolExecutors = {
   async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+    if (params.copies !== undefined) assertCopies(params, params.copies);
+    const write = { content: params.content, sessionId: optionalString(params.sessionId) };
     const profile = await getProfile(params);
-    const memory = await requireCapability(profile, "remember")(
-      { content: params.content, sessionId: optionalString(params.sessionId) },
-      options,
-    );
+    const memory = await requireCapability(profile, "remember")(write, options);
+    if (params.copies !== undefined) {
+      return rememberCopies(
+        { target: memoryTarget(params), memory },
+        params.copies,
+        write,
+        options,
+      );
+    }
     return {
       content: [{ type: "text", text: json(withSummaryTrust(memory)) }],
       details: memory as unknown as Record<string, unknown>,

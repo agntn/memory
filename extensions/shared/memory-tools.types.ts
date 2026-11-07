@@ -61,6 +61,8 @@ export interface ProfileListParams extends NamespaceParams {
 export interface RememberParams extends ProfileParams {
   content: string;
   sessionId?: string;
+  /** More profiles that get the same content and session, written after the main one. */
+  copies?: readonly ProfileParams[];
 }
 
 export interface SupersedeParams extends ProfileParams {

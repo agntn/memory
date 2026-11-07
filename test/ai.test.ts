@@ -262,6 +262,21 @@ describe("@agntn/memory/ai locked to one profile", () => {
     for (const tool of writes) {
       expect(Object.keys(tool.input.properties), tool.name).not.toContain("sessionId");
     }
+    const remember = writes.find((tool) => tool.name === "memory_remember");
+    expect(Object.keys(remember!.input.properties)).not.toContain("copies");
+  });
+
+  it("refuses copies that would carry a write out of the locked profile", async () => {
+    const requests = stubService();
+    const tools = createMemoryAiTools(locked);
+
+    await expect(
+      run(tools.memory_remember, {
+        content: "prefers short answers",
+        copies: [{ namespace: "support", profile: "user-43" }],
+      }),
+    ).rejects.toThrow('unknown property "copies"');
+    expect(requests).toEqual([]);
   });
 
   it("refuses a call that names another profile before any request", async () => {

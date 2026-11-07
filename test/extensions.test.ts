@@ -200,7 +200,7 @@ describe("memory extensions", () => {
       await expect(
         remember.execute(
           "call-0",
-          { profile: "gsmg", content: "half" },
+          { profile: "project", content: "half" },
           signal,
           undefined,
           context,
@@ -208,15 +208,15 @@ describe("memory extensions", () => {
       ).rejects.toThrow("pass namespace and profile together, or neither for default/oritwoen");
       await remember.execute(
         "call-1",
-        { namespace: "puzzles", profile: "gsmg", content: "project fact" },
+        { namespace: "research", profile: "project", content: "project fact" },
         signal,
         undefined,
         context,
       );
       expect(execute).toHaveBeenLastCalledWith(
         {
-          namespace: "puzzles",
-          profile: "gsmg",
+          namespace: "research",
+          profile: "project",
           content: "project fact",
           sessionId: expect.stringMatching(new RegExp(`^${harness}-movie-enigma-[0-9a-f]{16}$`)),
         },
@@ -567,11 +567,11 @@ describe("memory tool renderers", () => {
 
     for (const tools of [piTools(), ompTools()]) {
       const { text } = tool(tools, "memory_recall").renderCall!(
-        { namespace: "puzzles", profile: "gsmg", query: "elsewhere" },
+        { namespace: "research", profile: "project", query: "elsewhere" },
         {},
         {},
       );
-      expect(text).toContain("puzzles/gsmg");
+      expect(text).toContain("research/project");
       expect(text).not.toContain("oritwoen");
     }
   });
