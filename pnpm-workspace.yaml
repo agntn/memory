@@ -16,7 +16,7 @@ catalogs:
   deps:
     "@agntn/credentials": 0.0.2
     "@agntn/hashes": 0.7.2
-    "@agntn/tools": 0.2.4
+    "@agntn/tools": 0.3.0
     "@modelcontextprotocol/server": 2.4.0
   dev:
     "@agntn/ox": 0.1.0
