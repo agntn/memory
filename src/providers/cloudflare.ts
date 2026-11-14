@@ -9,6 +9,7 @@ import {
   MemoryNetworkError,
   normalizeMemoryError,
 } from "../errors.ts";
+import type { CredentialSource } from "@agntn/credentials";
 import { MemoryProfile, MemoryProvider } from "../memory.ts";
 import { isUnknownRecord } from "../type-guards.ts";
 import type {
@@ -619,9 +620,10 @@ function withServiceMessages(text: string, messages: readonly string[]): string 
 function throwCloudflareResponseError(
   body: unknown,
   response: Response,
-  attempts: Readonly<RequestAttempts>,
+  sent: Readonly<{ attempts: Readonly<RequestAttempts>; source: CredentialSource }>,
 ): never {
   const messages = responseMessages(body);
+  const { attempts } = sent;
   const { status } = response;
   const options = { provider: "cloudflare" };
   if (status >= 500) {
@@ -635,7 +637,7 @@ function throwCloudflareResponseError(
   }
   if (status === 401 || status === 403) {
     const message = withServiceMessages(refusalText(status, undefined), messages);
-    throw new MemoryAuthError(message, status, options);
+    throw new MemoryAuthError(message, status, { ...options, credentialSource: sent.source });
   }
   const message = messages.join("; ") || `Cloudflare Agent Memory request failed (${status})`;
   if (status === 404) throw new MemoryNotFoundError(message, status, options);
@@ -703,15 +705,20 @@ function retriesAfter(status: number, except: readonly number[]): boolean {
 /** One try ends with a response and its whole body, or with the error that cut it short. */
 type AttemptOutcome = { response: Response; text: string } | { cause: unknown };
 
-/** The answer a request ended with, and how many tries it took. */
-type SentRequest = { response: Response; text: string; attempts: RequestAttempts };
+/** The answer a request ended with, how many tries it took, and where its token came from. */
+type SentRequest = {
+  response: Response;
+  text: string;
+  attempts: RequestAttempts;
+  source: CredentialSource;
+};
 
 /** The account and token one request goes out with. */
 interface RequestCredentials {
   accountId: string;
   token: string;
-  /** Only a token from the cf login can come back different after a 401. */
-  renewable: boolean;
+  /** Only a token from the cf login (`cli`) can come back different after a 401. */
+  source: CredentialSource;
 }
 
 /** Shared by a provider's clients. A cf token rotates, so missing fields resolve per request. */
@@ -738,7 +745,7 @@ class CloudflareAccount {
     signal?.throwIfAborted();
     const { accountId, apiToken } = this.options;
     if (accountId !== undefined && apiToken !== undefined) {
-      return { accountId, token: apiToken, renewable: false };
+      return { accountId, token: apiToken, source: "explicit" };
     }
     const { resolve } = await import("@agntn/credentials/cloudflare");
     try {
@@ -747,7 +754,7 @@ class CloudflareAccount {
         ...(accountId === undefined ? {} : { accountId }),
         ...(apiToken === undefined ? {} : { token: apiToken }),
       });
-      return { accountId: found.accountId, token: found.token, renewable: found.source === "cli" };
+      return { accountId: found.accountId, token: found.token, source: found.source };
     } catch (error) {
       throw new MemoryError(`No Cloudflare credentials for Agent Memory: ${errorText(error)}`, {
         provider: "cloudflare",
@@ -785,7 +792,8 @@ class CloudflareHttpClient {
     retryExcept?: readonly number[],
   ): Promise<{ result: T; cursor?: string }> {
     return withCloudflareError(async () => {
-      const { response, text, attempts } = await this.authorizedSend(path, init, retryExcept);
+      const sent = await this.authorizedSend(path, init, retryExcept);
+      const { response, text, attempts } = sent;
       const parse = <R>(step: () => R): R => {
         try {
           return step();
@@ -795,9 +803,9 @@ class CloudflareHttpClient {
       };
 
       const value = parse(() => parseResponseBody(text, response));
-      if (!response.ok) throwCloudflareResponseError(value, response, attempts);
+      if (!response.ok) throwCloudflareResponseError(value, response, sent);
       const body = parse(() => requireEnvelopeShape(value, response));
-      if (body.success !== true) throwCloudflareResponseError(body, response, attempts);
+      if (body.success !== true) throwCloudflareResponseError(body, response, sent);
       const result = parse(() => parseResult(body.result));
       const cursor =
         isUnknownRecord(body.result_info) && typeof body.result_info.cursor === "string"
@@ -819,21 +827,21 @@ class CloudflareHttpClient {
     init: RequestInit,
     retryExcept: readonly number[] | undefined,
   ): Promise<SentRequest> {
-    const sendAs = ({ accountId, token }: Readonly<RequestCredentials>) => {
+    const sendAs = async ({ accountId, token, source }: Readonly<RequestCredentials>) => {
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${token}`);
       if (init.body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      return this.send(
+      const answer = await this.send(
         `${CLOUDFLARE_API_URL}/accounts/${encodePath(accountId)}/agent-memory${this.path}${path}`,
         { ...init, headers },
         retryExcept,
       );
+      return { ...answer, source };
     };
-    const credentials = await this.account.credentials(init.signal, false);
-    const answer = await sendAs(credentials);
-    if (answer.response.status !== 401 || !credentials.renewable) return answer;
+    const answer = await sendAs(await this.account.credentials(init.signal, false));
+    if (answer.response.status !== 401 || answer.source !== "cli") return answer;
     return sendAs(await this.account.credentials(init.signal, true));
   }
 
@@ -841,7 +849,7 @@ class CloudflareHttpClient {
     url: string,
     init: RequestInit,
     retryExcept: readonly number[] | undefined,
-  ): Promise<SentRequest> {
+  ): Promise<Omit<SentRequest, "source">> {
     const read = retryExcept !== undefined;
     const limit = read ? READ_ATTEMPTS : 1;
     for (let count = 1; ; count += 1) {

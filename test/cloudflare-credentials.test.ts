@@ -47,11 +47,23 @@ function loggedIn(accounts: string[]): Record<string, unknown> {
   };
 }
 
-async function loadCredentials(): Promise<
-  typeof import("../extensions/shared/cloudflare-credentials.ts")
-> {
+/* A fresh module graph gives the tools an empty provider cache and the provider an empty cf cache. */
+async function listNamespaces(): Promise<unknown> {
   vi.resetModules();
-  return import("../extensions/shared/cloudflare-credentials.ts");
+  const { memoryToolExecutors } = await import("../extensions/shared/memory-tools.ts");
+  return memoryToolExecutors.listNamespaces({});
+}
+
+/* The account and token each request went out with. */
+function sentAs(fetcher: ReturnType<typeof vi.fn<typeof fetch>>): string[][] {
+  return fetcher.mock.calls.map(([input, init]) => [
+    String(input).replace(/^.*\/accounts\/([^/]+)\/.*$/, "$1"),
+    new Headers(init?.headers).get("Authorization") ?? "",
+  ]);
+}
+
+function listed(): Response {
+  return Response.json({ success: true, result: [], result_info: {} });
 }
 
 /* A fresh Pi extension starts with an empty credential cache; its host only needs registerTool. */
@@ -90,58 +102,57 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Cloudflare credentials", () => {
-  it("renames the env token for the memory client and never asks cf", async () => {
+describe("memory tools without credentials of their own", () => {
+  it("send the env token and account and never ask cf", async () => {
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
-    const { getCloudflareCredentials } = await loadCredentials();
+    const fetcher = vi.fn<typeof fetch>(async () => listed());
+    vi.stubGlobal("fetch", fetcher);
 
-    await expect(getCloudflareCredentials()).resolves.toEqual({
-      accountId: "env-account",
-      apiToken: "env-token",
-      source: "env",
-    });
+    await listNamespaces();
+
+    expect(sentAs(fetcher)).toEqual([["env-account", "Bearer env-token"]]);
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it("falls back to CLOUDFLARE_ACCOUNT_ID after AGNTN_CLOUDFLARE_ACCOUNT_ID", async () => {
+  it("fall back to CLOUDFLARE_ACCOUNT_ID after AGNTN_CLOUDFLARE_ACCOUNT_ID", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "wrangler-account");
     cf.whoami = loggedIn(["acct-1", "acct-2"]);
-    const { getCloudflareCredentials } = await loadCredentials();
+    const fetcher = vi.fn<typeof fetch>(async () => listed());
+    vi.stubGlobal("fetch", fetcher);
+    const { memoryToolExecutors } = await import("../extensions/shared/memory-tools.ts");
 
-    await expect(getCloudflareCredentials()).resolves.toEqual({
-      accountId: "wrangler-account",
-      apiToken: "oauth-1",
-      source: "cli",
-    });
-
+    await listNamespaces();
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "acct-2");
-    await expect(getCloudflareCredentials()).resolves.toMatchObject({ accountId: "acct-2" });
+    await memoryToolExecutors.listNamespaces({});
+
+    expect(sentAs(fetcher)).toEqual([
+      ["wrangler-account", "Bearer oauth-1"],
+      ["acct-2", "Bearer oauth-1"],
+    ]);
   });
 
-  it("names both ways out when cf is not installed", async () => {
+  it("name both ways out when cf is not installed", async () => {
     vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
       const callback = args.at(-1) as (error: Error) => void;
       queueMicrotask(() =>
         callback(Object.assign(new Error("spawn cf ENOENT"), { code: "ENOENT" })),
       );
     }) as unknown as typeof execFile);
-    const { getCloudflareCredentials } = await loadCredentials();
 
-    await expect(getCloudflareCredentials()).rejects.toThrow(
+    await expect(listNamespaces()).rejects.toThrow(
       "cf CLI not found. Set CLOUDFLARE_API_TOKEN, or run `cf auth login`",
     );
   });
 
-  it("reports a credentials file it cannot parse without quoting it", async () => {
+  it("report a credentials file they cannot parse without quoting it", async () => {
     vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
       const callback = args.at(-1) as (error: null, stdout: string) => void;
       writeFileSync(credentialsFile, "cfk_SECRET encrypted by the keyring");
       queueMicrotask(() => callback(null, JSON.stringify(loggedIn(["acct-1"]))));
     }) as unknown as typeof execFile);
-    const { getCloudflareCredentials } = await loadCredentials();
 
-    const error = await getCloudflareCredentials().catch((failure: unknown) => failure);
+    const error = await listNamespaces().catch((failure: unknown) => failure);
     const message = toolErrorMessage(error);
     expect(message).toContain("Cannot read the cf OAuth credentials file");
     expect(message).not.toContain("SECRET");
@@ -172,44 +183,50 @@ describe("memory tools with the cf OAuth session", () => {
     expect(urls.every((url) => url.includes("/accounts/acct-1/agent-memory/"))).toBe(true);
   });
 
+  it.each([
+    ["memory_namespace_list", {}],
+    ["memory_list", { namespace: "default", profile: "agent" }],
+  ])(
+    "resend %s refused under a cf token with the token cf hands over next",
+    async (name, input) => {
+      const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+        if (new Headers(init?.headers).get("Authorization") !== "Bearer oauth-1") return listed();
+        cf.token = "oauth-2";
+        return refusedWith401();
+      });
+      vi.stubGlobal("fetch", fetcher);
+      const tool = await piTools();
+
+      await tool(name).execute("call-1", input, undefined, undefined, piContext);
+
+      expect(sentAs(fetcher).map(([, authorization]) => authorization)).toEqual([
+        "Bearer oauth-1",
+        "Bearer oauth-2",
+      ]);
+      expect(execFile).toHaveBeenCalledTimes(2);
+    },
+  );
+
   /* memory_get with two ids turns each failed read into text, so its 401 never reaches a catch. */
   it.each([
     ["memory_namespace_list", {}],
     ["memory_get", { namespace: "default", profile: "agent", memoryIds: ["m-1", "m-2"] }],
-  ])("ask cf for a fresh token after %s meets a 401", async (name, input) => {
-    const authorizations: (string | null)[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        const authorization = new Headers(init?.headers).get("Authorization");
-        authorizations.push(authorization);
-        if (authorization === "Bearer oauth-1") {
-          return Response.json(
-            { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
-            { status: 401 },
-          );
-        }
-        return Response.json({ success: true, result: [], result_info: {} });
-      }),
-    );
+  ])("tell %s that a cf token refused twice needs a new login", async (name, input) => {
+    const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
+    vi.stubGlobal("fetch", fetcher);
     const tool = await piTools();
 
     const error = await tool(name)
       .execute("call-1", input, undefined, undefined, piContext)
       .catch((failure: unknown) => failure);
+
     const message = (error as Error).message;
     expect(message).toContain("Authentication error");
-    expect(message.split("The next call asks cf for its token again")).toHaveLength(
+    expect(message.split("cf was already asked for its token again")).toHaveLength(
       name === "memory_get" ? 3 : 2,
     );
-    cf.token = "oauth-2";
-    await tool("memory_namespace_list").execute("call-2", {}, undefined, undefined, piContext);
-
-    expect(authorizations.at(-1)).toBe("Bearer oauth-2");
-    expect(authorizations.filter((value) => value === "Bearer oauth-1")).toHaveLength(
-      name === "memory_get" ? 2 : 1,
-    );
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(message).not.toContain("try once more");
+    expect(fetcher).toHaveBeenCalledTimes(name === "memory_get" ? 4 : 2);
   });
 
   /* An env token gets no refresh, so the step says retrying will not help. */
@@ -355,31 +372,41 @@ describe("Cloudflare HTTP clients without explicit credentials", () => {
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
-  it("give up after the fresh cf token is refused too", async () => {
+  it("give up after the fresh cf token is refused too, and say it came from cf", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
     const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
 
-    await expect(new CloudflareNamespaceClient({ fetch: fetcher }).list()).rejects.toBeInstanceOf(
-      MemoryAuthError,
-    );
+    const error = await new CloudflareNamespaceClient({ fetch: fetcher })
+      .list()
+      .catch((failure: unknown) => failure);
 
+    expect(error).toBeInstanceOf(MemoryAuthError);
+    expect(error).toMatchObject({ statusCode: 401, credentialSource: "cli" });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
-  it("leave an env token refused with 401 at one request, since cf can't replace it", async () => {
-    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
-    const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
-    const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
+  it.each([
+    ["CLOUDFLARE_API_TOKEN", "env", {}],
+    ["a token the caller passed", "explicit", { accountId: "given-account", apiToken: "given" }],
+  ])(
+    "leave %s refused with 401 at one request, since cf can't replace it",
+    async (_, source, options) => {
+      vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "env-account");
+      vi.stubEnv("CLOUDFLARE_API_TOKEN", "env-token");
+      const fetcher = vi.fn<typeof fetch>(async () => refusedWith401());
+      const { CloudflareNamespaceClient, MemoryAuthError } = await loadMemory();
 
-    await expect(new CloudflareNamespaceClient({ fetch: fetcher }).list()).rejects.toBeInstanceOf(
-      MemoryAuthError,
-    );
+      const error = await new CloudflareNamespaceClient({ ...options, fetch: fetcher })
+        .list()
+        .catch((failure: unknown) => failure);
 
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(execFile).not.toHaveBeenCalled();
-  });
+      expect(error).toBeInstanceOf(MemoryAuthError);
+      expect(error).toMatchObject({ statusCode: 401, credentialSource: source });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(execFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("stop before the second cf lookup when the call is cancelled after a 401", async () => {
     const controller = new AbortController();

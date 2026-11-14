@@ -1,3 +1,5 @@
+import type { CredentialSource } from "@agntn/credentials";
+
 export class MemoryError extends Error {
   readonly provider?: string;
   override readonly cause?: unknown;
@@ -23,7 +25,23 @@ export class MemoryHttpError extends MemoryError {
   }
 }
 
-export class MemoryAuthError extends MemoryHttpError {}
+/** A 401 or 403. `credentialSource` says where the refused token came from, when a provider knows. */
+export class MemoryAuthError extends MemoryHttpError {
+  readonly credentialSource?: CredentialSource;
+
+  constructor(
+    message: string,
+    statusCode: number,
+    options: Readonly<{
+      provider?: string;
+      cause?: unknown;
+      credentialSource?: CredentialSource;
+    }> = {},
+  ) {
+    super(message, statusCode, options);
+    this.credentialSource = options.credentialSource;
+  }
+}
 export class MemoryNotFoundError extends MemoryHttpError {}
 /** A 429. `retryAfterSeconds` is set only when the service said how long to wait. */
 export class MemoryRateLimitError extends MemoryHttpError {
