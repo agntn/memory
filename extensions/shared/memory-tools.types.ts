@@ -133,5 +133,6 @@ export interface SummaryParams extends ProfileParams {
 
 export interface MemoryToolResult {
   content: Array<{ type: "text"; text: string }>;
+  /** MCP clients never see this, so the text carries everything the caller needs. */
   details: Record<string, unknown>;
 }
