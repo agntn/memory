@@ -106,6 +106,8 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 
 You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember`, `memory_supersede` or `memory_supersession_resume` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
 
+One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`. The MCP server writes `claude-code` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
+
 Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
 
 Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value stops the server, CLI or extension from starting, so it can't forge a second field.

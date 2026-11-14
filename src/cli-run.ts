@@ -1,10 +1,11 @@
 import { runCli } from "@agntn/tools/cli";
 import { sanitizeLine } from "@agntn/tools";
-import { configuredMemoryFields, type MemoryFields } from "../extensions/shared/memory-fields.ts";
+import { hostMemoryFields, type MemoryFields } from "../extensions/shared/memory-fields.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 import {
   claudeCodeMemorySessionId,
   configuredMemoryScope,
+  detectedMemoryHarness,
   grokMemorySessionId,
 } from "../extensions/shared/memory-scope.ts";
 import type { ProfileParams } from "../extensions/shared/memory-tools.types.ts";
@@ -21,7 +22,7 @@ export async function runMemoryCli(argv: readonly string[]): Promise<void> {
   let fields: MemoryFields | undefined;
   try {
     scope = configuredMemoryScope();
-    fields = configuredMemoryFields();
+    fields = hostMemoryFields(detectedMemoryHarness() ?? "cli");
   } catch (error) {
     process.stderr.write(`${sanitizeLine(error instanceof Error ? error.message : error)}\n`);
     process.exitCode = 1;

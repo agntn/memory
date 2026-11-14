@@ -171,7 +171,7 @@ describe("memory extensions", () => {
       {
         namespace: "default",
         profile: "oritwoen",
-        content: "canonical",
+        content: "canonical\n\nharness: pi",
         sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
       },
       { signal },
@@ -217,7 +217,7 @@ describe("memory extensions", () => {
         {
           namespace: "research",
           profile: "project",
-          content: "project fact",
+          content: `project fact\n\nharness: ${harness}`,
           sessionId: expect.stringMatching(new RegExp(`^${harness}-movie-enigma-[0-9a-f]{16}$`)),
         },
         { signal },
@@ -226,14 +226,17 @@ describe("memory extensions", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("stamps Pi and OMP writes with the fields from AGNTN_MEMORY_FIELDS", async () => {
+  it("stamps Pi and OMP writes with their harness, then the fields from AGNTN_MEMORY_FIELDS", async () => {
     vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"author":"Aei Two En"}');
     const execute = vi
       .spyOn(memoryToolExecutors, "remember")
       .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
     const { signal } = new AbortController();
 
-    for (const tools of [piTools(), ompTools()]) {
+    for (const [harness, tools] of [
+      ["pi", piTools()],
+      ["omp", ompTools()],
+    ] as const) {
       const remember = tool(tools, "memory_remember") as RegisteredTool & {
         execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
       };
@@ -245,7 +248,9 @@ describe("memory extensions", () => {
         {},
       );
       expect(execute).toHaveBeenLastCalledWith(
-        expect.objectContaining({ content: "project fact\n\nauthor: Aei Two En" }),
+        expect.objectContaining({
+          content: `project fact\n\nharness: ${harness}\nauthor: Aei Two En`,
+        }),
         { signal },
       );
     }
@@ -283,7 +288,7 @@ describe("memory extensions", () => {
         {
           namespace: "default",
           profile: "oritwoen",
-          content: "canonical",
+          content: "canonical\n\nharness: pi",
           sessionId: expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/),
         },
         { signal },
@@ -346,7 +351,7 @@ describe("memory extensions", () => {
       {
         namespace: "default",
         profile: "oritwoen",
-        content: "canonical",
+        content: "canonical\n\nharness: omp",
         sessionId: expect.stringMatching(/^omp-movie-enigma-[0-9a-f]{16}$/),
       },
       { signal },

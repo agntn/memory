@@ -7,7 +7,7 @@ import {
   type MemoryToolName,
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
-import { configuredMemoryFields } from "../shared/memory-fields.ts";
+import { hostMemoryFields } from "../shared/memory-fields.ts";
 import { configuredMemoryScope } from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
@@ -56,7 +56,7 @@ export default function memoryExtension(omp: ExtensionAPI) {
   const scope = configuredMemoryScope();
   const tools = createMemoryTools({
     scope,
-    fields: configuredMemoryFields(),
+    fields: hostMemoryFields("omp"),
     writeSession: (host) => hostSessionId("omp", host),
   });
   registerOmpTools(omp, tools, {

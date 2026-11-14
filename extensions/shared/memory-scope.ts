@@ -228,6 +228,19 @@ export function claudeCodeMemorySessionId(
 }
 
 /**
+ * Name the harness behind an MCP server or CLI, by the same variables its session key comes from.
+ *
+ * @param env - Child-process environment from the harness.
+ * @returns {string | undefined} `claude-code` or `grok`, or nothing for an unknown host.
+ */
+export function detectedMemoryHarness(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): string | undefined {
+  if (env.CLAUDE_PROJECT_DIR?.trim() && env.CLAUDE_CODE_SESSION_ID?.trim()) return "claude-code";
+  return env.GROK_SESSION_ID?.trim() ? "grok" : undefined;
+}
+
+/**
  * Derive Grok CLI's stable session key from the environment injected into MCP children.
  * Grok injects only GROK_SESSION_ID and starts the child in the project root, so the child's
  * own working directory stands in for a directory variable. Both harnesses leak their session

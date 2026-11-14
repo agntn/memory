@@ -1,10 +1,11 @@
 import { createMcpServer as createToolServer } from "@agntn/tools/mcp";
 import type { Server } from "@modelcontextprotocol/server";
-import { configuredMemoryFields } from "../extensions/shared/memory-fields.ts";
+import { hostMemoryFields } from "../extensions/shared/memory-fields.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 import {
   claudeCodeMemorySessionId,
   configuredMemoryScope,
+  detectedMemoryHarness,
   grokMemorySessionId,
 } from "../extensions/shared/memory-scope.ts";
 import { version } from "./version.ts";
@@ -20,7 +21,7 @@ export function createMcpServer(): Server {
     { name: "memory", version },
     createMemoryTools({
       scope: configuredMemoryScope(),
-      fields: configuredMemoryFields(),
+      fields: hostMemoryFields(detectedMemoryHarness()),
       writeSession: () => claudeCodeMemorySessionId() ?? grokMemorySessionId(),
     }),
   );

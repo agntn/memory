@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMemoryAiTools } from "../src/ai.ts";
 import type { AgentMemoryNamespaceBinding } from "../src/index.ts";
-import { configuredMemoryFields, parseMemoryFields } from "../extensions/shared/memory-fields.ts";
+import {
+  configuredMemoryFields,
+  hostMemoryFields,
+  parseMemoryFields,
+} from "../extensions/shared/memory-fields.ts";
+import { detectedMemoryHarness } from "../extensions/shared/memory-scope.ts";
 
 const callOptions = { toolCallId: "memory-fields", messages: [], context: {} };
 const oldId = "01M7AAAAAAAAAAAAAAAAAAAAAA";
@@ -174,6 +179,28 @@ describe("memory fields", () => {
     vi.stubEnv("AGNTN_MEMORY_FIELDS", value);
 
     expect(configuredMemoryFields()).toBe(expected);
+  });
+
+  it("puts the host's harness first and lets a harness key in the variable replace it", () => {
+    expect(hostMemoryFields("pi", {})).toEqual({ harness: "pi" });
+    expect(hostMemoryFields(undefined, {})).toBeUndefined();
+    const env = { AGNTN_MEMORY_FIELDS: '{"author":"Aei","harness":"pi-dev"}' };
+    expect(Object.entries(hostMemoryFields("pi", env) ?? {})).toEqual([
+      ["harness", "pi-dev"],
+      ["author", "Aei"],
+    ]);
+  });
+
+  it.each([
+    [
+      { CLAUDE_PROJECT_DIR: "/work", CLAUDE_CODE_SESSION_ID: "c-1", GROK_SESSION_ID: "g-1" },
+      "claude-code",
+    ],
+    [{ CLAUDE_CODE_SESSION_ID: "c-1", GROK_SESSION_ID: "g-1" }, "grok"],
+    [{ GROK_SESSION_ID: " " }, undefined],
+    [{}, undefined],
+  ])("names the harness behind %j as %s", (env, harness) => {
+    expect(detectedMemoryHarness(env)).toBe(harness);
   });
 
   it("names the variable when AGNTN_MEMORY_FIELDS is not JSON", () => {

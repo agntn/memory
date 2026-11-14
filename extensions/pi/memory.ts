@@ -7,7 +7,7 @@ import {
   type MemoryToolName,
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
-import { configuredMemoryFields } from "../shared/memory-fields.ts";
+import { hostMemoryFields } from "../shared/memory-fields.ts";
 import { configuredPiMemoryScope } from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
@@ -65,7 +65,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
   const tools = createMemoryTools({
     scope,
-    fields: configuredMemoryFields(),
+    fields: hostMemoryFields("pi"),
     writeSession: (host) => hostSessionId("pi", host),
   });
   registerPiTools(pi, tools, {

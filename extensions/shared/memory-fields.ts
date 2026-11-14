@@ -79,6 +79,23 @@ export function configuredMemoryFields(
 }
 
 /**
+ * The host's fields from `AGNTN_MEMORY_FIELDS`, after the harness the host knows it runs in.
+ *
+ * @param harness - Harness that writes, or nothing when the host can't tell.
+ * @param env - Environment that may carry the variable.
+ * @returns {MemoryFields | undefined} The fields, a `harness` key in the variable winning.
+ * @throws {Error} When the variable is malformed.
+ */
+export function hostMemoryFields(
+  harness: string | undefined,
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): MemoryFields | undefined {
+  const configured = configuredMemoryFields(env);
+  if (harness === undefined) return configured;
+  return Object.freeze({ harness, ...configured });
+}
+
+/**
  * Append the fields after a blank line, unless they already end the content or precede its copy line.
  *
  * @param content - Memory content the model sent.
