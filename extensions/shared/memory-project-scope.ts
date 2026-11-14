@@ -22,7 +22,7 @@ const projectRemotes = ["upstream", "origin"] as const;
  * @param maxLength - Longest name the service takes.
  * @returns {string | undefined} Lowercase with hyphens, or nothing when it can't be one.
  */
-function memoryName(name: string, maxLength: number): string | undefined {
+export function memoryName(name: string, maxLength: number): string | undefined {
   const converted = name
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/gu, "-")

@@ -14,6 +14,9 @@ export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
 export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
 export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
+export const MEMORY_AGENT_NAMESPACE_ENV = "AGNTN_MEMORY_AGENT_NAMESPACE";
+/** An OpenBot agent's namespace is its name unless a template says otherwise. */
+export const DEFAULT_AGENT_NAMESPACE_TEMPLATE = "{name}";
 /** Turns between Pi's background ingests when nothing sets a count. */
 export const DEFAULT_INGEST_TURNS = 10;
 
@@ -312,4 +315,41 @@ export function grokMemorySessionId(
   const conversationId = env.GROK_SESSION_ID?.trim();
   if (!conversationId) return undefined;
   return memorySessionId("grok", cwd, conversationId);
+}
+
+/**
+ * Check a template that turns an agent's name into its namespace.
+ *
+ * @param value - Template with `{name}` in it.
+ * @param source - Where it came from, named in the error.
+ * @returns {string} The template.
+ * @throws {Error} When it isn't a string holding `{name}`.
+ */
+function parseAgentNamespaceTemplate(value: unknown, source: string): string {
+  if (typeof value !== "string" || !value.includes("{name}")) {
+    throw new Error(`${source} must be a string with {name} in it`);
+  }
+  return value.trim();
+}
+
+/**
+ * Pi's template for an OpenBot agent's namespace: the environment, then `agentNamespace` in its scope file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {string} The template, `{name}` when none is set.
+ * @throws {Error} When the configured template has no `{name}`.
+ */
+export function configuredPiAgentNamespaceTemplate(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): string {
+  const configured = env[MEMORY_AGENT_NAMESPACE_ENV]?.trim();
+  if (configured) return parseAgentNamespaceTemplate(configured, MEMORY_AGENT_NAMESPACE_ENV);
+  const configPath = piScopePath(env, homeDirectory);
+  const value = readPiScope(configPath);
+  if (typeof value !== "object" || value === null || !("agentNamespace" in value)) {
+    return DEFAULT_AGENT_NAMESPACE_TEMPLATE;
+  }
+  return parseAgentNamespaceTemplate(value.agentNamespace, `agentNamespace in ${configPath}`);
 }

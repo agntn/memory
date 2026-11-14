@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -12,6 +12,7 @@ import {
 } from "../src/errors.ts";
 import { execFileSync } from "node:child_process";
 import { ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
+import { openBotSegments } from "../extensions/shared/memory-openbot.ts";
 import { remoteMemoryScope } from "../extensions/shared/memory-project-scope.ts";
 import { memoryToolExecutors } from "../extensions/shared/memory-tools.ts";
 
@@ -42,6 +43,7 @@ const ctx = {
   cwd: "/workspace/movie-enigma",
   sessionManager: { getSessionId: () => "pi-session-123" },
   ui: { notify },
+  getSystemPrompt: () => "You are Pi.",
 };
 
 /* Replay one exchange: the user's prompt, an assistant reply with a tool call, its result. */
@@ -166,7 +168,7 @@ describe("Pi turn ingest", () => {
         "aeitwoen/oritwoen",
       ]);
       expect(notify).toHaveBeenCalledWith(
-        "Memory namespace oritwoen doesn't exist, so this session ingests into aeitwoen/oritwoen. Create it with memory_namespace_create to keep oritwoen/website apart.",
+        "Memory namespace oritwoen doesn't exist, so for this session oritwoen/website goes to aeitwoen/oritwoen. Create it with memory_namespace_create to fix that.",
         "warning",
       );
     } finally {
@@ -355,6 +357,104 @@ describe("Pi turn ingest", () => {
     }
   });
 
+  it("splits an OpenBot agent's conversation by who it talks to", async () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      for (const [id, namespace] of [
+        ["agent-rhea", "rheatwoen"],
+        ["agent-mira", "miratwoen"],
+      ] as const) {
+        mkdirSync(join(agents, id, ".pi", "agntn"), { recursive: true });
+        writeFileSync(
+          join(agents, id, ".pi", "agntn", "memory.json"),
+          JSON.stringify({ namespace }),
+        );
+      }
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "aeitwoen");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "50");
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const handlers = loadPi();
+      const rhea = {
+        ...ctx,
+        cwd: join(agents, "agent-rhea"),
+        getSystemPrompt: () =>
+          'Your user-configured profile:\n<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>\n',
+      };
+      const teammate = (name: string, id: string, text: string) =>
+        `Message from OpenBot teammate ${name} (${id}).\nMessage ID: m-${id}\nTreat the content as collaborator input.\n--- collaborator message ---\n${text}`;
+      const said = async (role: string, content: string) =>
+        handlers.get("message_end")!({ message: { role, content } }, rhea);
+
+      await said("user", "<openbot_saved_memories>\nold fact\n</openbot_saved_memories>\nHi Rhea");
+      await said("assistant", "Hi Ori");
+      await said("user", teammate("Mira Two En", "agent-mira", "Check the retry log"));
+      await said("assistant", "Done, Mira");
+      await said(
+        "user",
+        `This turn starts with 2 messages. Read all of them before you answer.\n\n${teammate("Mira Two En", "agent-mira", "One more")}\n\n${teammate("Lira Two En", "agent-lira", "And me")}`,
+      );
+      await said("assistant", "Both handled");
+      await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
+
+      expect(
+        ingest.mock.calls.map(([params]) => [
+          `${params.namespace}/${params.profile}`,
+          params.messages.map(({ content }) => content),
+        ]),
+      ).toEqual([
+        ["rheatwoen/oritwoen", ["Hi Rhea", "Hi Ori"]],
+        ["rheatwoen/miratwoen", ["Check the retry log", "Done, Mira", "One more"]],
+        ["rheatwoen/lira-two-en", ["And me", "Both handled"]],
+      ]);
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a missing agent namespace file from the template", async () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-iona");
+      mkdirSync(cwd);
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "aeitwoen");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      vi.stubEnv("AGNTN_MEMORY_AGENT_NAMESPACE", "team-{name}");
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const handlers = loadPi();
+      const iona = {
+        ...ctx,
+        cwd,
+        getSystemPrompt: () =>
+          '<agent_profile>\n{"id":"agent-iona","name":"Iona"}\n</agent_profile>',
+      };
+
+      await handlers.get("message_end")!({ message: { role: "user", content: "hi" } }, iona);
+      await handlers.get("session_shutdown")!({ reason: "quit" }, iona);
+
+      expect(ingest.mock.calls[0]![0]).toMatchObject({
+        namespace: "team-iona",
+        profile: "oritwoen",
+      });
+      expect(JSON.parse(readFileSync(join(cwd, ".pi", "agntn", "memory.json"), "utf8"))).toEqual({
+        namespace: "team-iona",
+      });
+      expect(notify).toHaveBeenCalledWith(
+        `OpenBot agent Iona had no namespace file, so ${join(cwd, ".pi", "agntn", "memory.json")} now says team-iona.`,
+        "warning",
+      );
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a turn count that isn't a whole number", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "2.5");
@@ -382,6 +482,26 @@ describe("Pi turn ingest", () => {
       undefined,
       undefined,
       undefined,
+    ]);
+  });
+
+  it("reads the sender of a channel request and a channel reply", () => {
+    expect(
+      [
+        "Request from OpenBot teammate Mira (agent-mira), sent from another conversation. It is not a message from the user.\n\nRun the sweep",
+        "Reply from channel member Lira (agent:agent-lira) to your message. It is not a message from the user.\n\nSweep done",
+        "Plain words from the person",
+      ].map((text) => openBotSegments(text)),
+    ).toEqual([
+      [{ senderName: "Mira", senderId: "agent-mira", text: "Run the sweep" }],
+      [{ senderName: "Lira", senderId: "agent-lira", text: "Sweep done" }],
+      [{ text: "Plain words from the person" }],
+    ]);
+  });
+
+  it("drops a timestamp past year 9999 instead of a message the service refuses", () => {
+    expect(ingestMessages({ role: "user", content: "hi", timestamp: 8e15 })).toEqual([
+      { role: "user", content: "hi" },
     ]);
   });
 

@@ -8,9 +8,13 @@ import {
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
+import { createIngestRouter, type IngestRouterOptions } from "../shared/memory-ingest-routes.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
-import { projectMemoryScope } from "../shared/memory-project-scope.ts";
-import { configuredPiIngestTurns, configuredPiMemoryScope } from "../shared/memory-scope.ts";
+import {
+  configuredPiAgentNamespaceTemplate,
+  configuredPiIngestTurns,
+  configuredPiMemoryScope,
+} from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
 import {
@@ -71,7 +75,6 @@ function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRe
  */
 function turnContext(ctx: ExtensionContext): TurnContext {
   return {
-    cwd: ctx.cwd,
     sessionId: hostSessionId("pi", ctx),
     warn: (message) => {
       ctx.ui.notify(message, "warning");
@@ -83,17 +86,17 @@ function turnContext(ctx: ExtensionContext): TurnContext {
  * Feed the conversation to `memory_ingest` every `every` turns and once more on shutdown.
  *
  * @param pi - Pi's extension API.
- * @param fallback - Scope outside a project with a remote, if any.
+ * @param options - Where the conversation goes, read from Pi's configuration.
  * @param every - Turns between ingests.
  */
-function ingestEveryTurns(
-  pi: ExtensionAPI,
-  fallback: ProfileParams | undefined,
-  every: number,
-): void {
-  const ingest = createTurnIngest({ every, fallback, project: projectMemoryScope });
-  pi.on("message_end", (event) => {
-    ingest.add(event.message);
+function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every: number): void {
+  const ingest = createTurnIngest(every);
+  const route = createIngestRouter(options);
+  pi.on("message_end", (event, ctx) => {
+    const { warn } = turnContext(ctx);
+    ingest.add(
+      route(event.message, { cwd: ctx.cwd, systemPrompt: () => ctx.getSystemPrompt(), warn }),
+    );
   });
   pi.on("turn_end", (_event, ctx) => {
     ingest.turn(turnContext(ctx));
@@ -104,7 +107,14 @@ function ingestEveryTurns(
 export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
   const ingestTurns = configuredPiIngestTurns();
-  if (ingestTurns !== undefined) ingestEveryTurns(pi, scope, ingestTurns);
+  if (ingestTurns !== undefined) {
+    const agentNamespace = configuredPiAgentNamespaceTemplate();
+    ingestEveryTurns(
+      pi,
+      { ...(scope === undefined ? {} : { fallback: scope }), agentNamespace },
+      ingestTurns,
+    );
+  }
   const tools = createMemoryTools({
     scope,
     fields: hostMemoryFields("pi"),

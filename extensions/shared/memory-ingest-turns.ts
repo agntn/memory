@@ -6,28 +6,24 @@ type IngestMessage = IngestParams["messages"][number];
 
 /** The conversation a turn belongs to, as the host sees it at that moment. */
 export interface TurnContext {
-  /** Working directory the project scope comes from. */
-  readonly cwd: string;
   /** Session the ingested messages go under. */
   readonly sessionId?: string;
   /** Tells the person at the keyboard that an ingest failed. */
   readonly warn: (message: string) => void;
 }
 
-/** Where a turn ingest sends the conversation. */
-export interface TurnIngestOptions {
-  /** Turns between ingests. */
-  readonly every: number;
-  /** Scope outside a project, or for a project without its namespace; none means skip. */
-  readonly fallback?: ProfileParams;
-  /** The project's scope for a working directory, if it has one. */
-  readonly project?: (cwd: string) => ProfileParams | undefined;
+/** One message and the profile it goes into. */
+export interface RoutedMessage {
+  readonly scope: Readonly<ProfileParams>;
+  readonly message: Readonly<IngestMessage>;
+  /** Where it goes instead when the service has no namespace for `scope`; none means nowhere. */
+  readonly fallback?: Readonly<ProfileParams>;
 }
 
 /** Buffers a conversation and hands it to `memory_ingest` every few turns. */
 export interface TurnIngest {
-  /** Queue one host message; only user and assistant text goes in. */
-  add(message: unknown): void;
+  /** Queue messages already routed to their profiles. */
+  add(messages: readonly RoutedMessage[]): void;
   /** Count a finished turn and ingest the queue once enough of them went by. */
   turn(context: TurnContext): void;
   /** Ingest whatever is still queued, after any ingest already running. */
@@ -54,7 +50,7 @@ function isTextPart(part: unknown): part is { text: string } {
  * @param content - A string or an array of content parts.
  * @returns {string} The text parts joined by blank lines.
  */
-function messageText(content: unknown): string {
+export function messageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
@@ -92,12 +88,14 @@ function byteChunks(text: string): string[] {
  * The ISO instant of a host timestamp in milliseconds.
  *
  * @param timestamp - Milliseconds since the epoch.
- * @returns {{ timestamp?: string }} The instant, or nothing for a value that isn't one.
+ * @returns {{ timestamp?: string }} The instant, or nothing outside years 0 to 9999.
  */
 function isoTimestamp(timestamp: unknown): { timestamp?: string } {
   if (typeof timestamp !== "number") return {};
   const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? {} : { timestamp: date.toISOString() };
+  if (Number.isNaN(date.getTime())) return {};
+  const iso = date.toISOString();
+  return /^\d{4}-/u.test(iso) ? { timestamp: iso } : {};
 }
 
 /**
@@ -161,97 +159,135 @@ function failureWarning(
 }
 
 /**
- * The notice for a project whose namespace doesn't exist.
+ * A scope as one key.
  *
- * @param project - Scope the remote named.
- * @param fallback - Scope the session uses instead, if any.
- * @returns {string} One line for the terminal.
+ * @param scope - Namespace and profile.
+ * @returns {string} `namespace/profile`.
  */
-function fallbackNotice(project: ProfileParams, fallback: ProfileParams | undefined): string {
-  const instead =
-    fallback === undefined
-      ? "this session ingests nothing"
-      : `this session ingests into ${fallback.namespace}/${fallback.profile}`;
-  return `Memory namespace ${project.namespace} doesn't exist, so ${instead}. Create it with memory_namespace_create to keep ${project.namespace}/${project.profile} apart.`;
+function scopeKey(scope: ProfileParams): string {
+  return `${scope.namespace}/${scope.profile}`;
 }
 
 /**
- * Ingest a conversation every few turns, into its project when the remote names one.
+ * The notice for a namespace the service doesn't have.
  *
- * @param options - Interval and scopes.
+ * @param scope - Scope that failed.
+ * @param fallback - Scope used instead, if any.
+ * @returns {string} One line for the terminal.
+ */
+function fallbackNotice(scope: ProfileParams, fallback: ProfileParams | undefined): string {
+  const instead =
+    fallback === undefined
+      ? `nothing goes to ${scopeKey(scope)}`
+      : `${scopeKey(scope)} goes to ${scopeKey(fallback)}`;
+  return `Memory namespace ${scope.namespace} doesn't exist, so for this session ${instead}. Create it with memory_namespace_create to fix that.`;
+}
+
+/**
+ * Ingest a conversation every few turns, each message into the profile it was routed to.
+ *
+ * @param every - Turns between ingests.
  * @returns {TurnIngest} The buffer the host feeds.
  */
-export function createTurnIngest(options: Readonly<TurnIngestOptions>): TurnIngest {
-  const { every, fallback, project } = options;
-  const queued: IngestMessage[] = [];
+export function createTurnIngest(every: number): TurnIngest {
+  const queued: RoutedMessage[] = [];
+  /** Scopes whose namespace turned out missing, and where their messages go now. */
+  const redirects = new Map<string, ProfileParams | undefined>();
   let turns = 0;
   let running: Promise<void> | undefined;
-  let scope: ProfileParams | undefined;
-  let resolved = false;
 
   /**
-   * The scope for this session, read from the remote once.
+   * Where a message goes, after any redirect a missing namespace caused.
    *
-   * @param context - Conversation the scope is for.
-   * @returns {ProfileParams | undefined} The scope, or nothing when there's nowhere to ingest.
+   * @param routed - The queued message.
+   * @returns {ProfileParams | undefined} The scope, or nothing when it has nowhere to go.
    */
-  function sessionScope(context: TurnContext): ProfileParams | undefined {
-    if (!resolved) {
-      scope = project?.(context.cwd) ?? fallback;
-      resolved = true;
-    }
-    return scope;
+  function target(routed: RoutedMessage): ProfileParams | undefined {
+    const key = scopeKey(routed.scope);
+    return redirects.has(key) ? redirects.get(key) : routed.scope;
   }
 
   /**
-   * Send one request's worth of messages, falling back once when the project has no namespace.
+   * The target of a message as one key, so runs compare scopes by value.
    *
-   * @param messages - At most one request's worth.
-   * @param context - Session and warning channel of the conversation.
-   * @returns {Promise<void>} Settles once the service took them.
+   * @param routed - The queued message.
+   * @returns {string | undefined} `namespace/profile`, or nothing when it has nowhere to go.
    */
-  async function sendChunk(
-    messages: readonly Readonly<IngestMessage>[],
-    context: TurnContext,
-  ): Promise<void> {
+  function targetKey(routed: RoutedMessage): string | undefined {
+    const scope = target(routed);
+    return scope === undefined ? undefined : scopeKey(scope);
+  }
+
+  /**
+   * The run of messages from `start` that share one target, at most one request's worth.
+   *
+   * @param batch - Messages being sent.
+   * @param start - Index of the first one.
+   * @returns {number} How many messages the run holds.
+   */
+  function runLength(batch: readonly RoutedMessage[], start: number): number {
+    const first = targetKey(batch[start]!);
+    let end = start + 1;
+    while (
+      end < batch.length &&
+      end - start < MAX_TOOL_INGEST_MESSAGES &&
+      targetKey(batch[end]!) === first
+    ) {
+      end += 1;
+    }
+    return end - start;
+  }
+
+  /**
+   * Send one run, moving its scope to the fallback once when the namespace is missing.
+   *
+   * @param run - Messages sharing one target.
+   * @param context - Session and warning channel of the conversation.
+   * @returns {Promise<void>} Settles once the service took them or they had nowhere to go.
+   */
+  async function sendRun(run: readonly RoutedMessage[], context: TurnContext): Promise<void> {
+    const scope = target(run[0]!);
+    if (scope === undefined) return;
     const { memoryToolExecutors } = await import("./memory-tools.ts");
     const session = context.sessionId === undefined ? {} : { sessionId: context.sessionId };
-    const target = sessionScope(context);
-    if (target === undefined) return;
+    const messages = run.map((routed) => ({ ...routed.message }));
     try {
-      await memoryToolExecutors.ingest({ ...target, ...session, messages: [...messages] });
+      await memoryToolExecutors.ingest({ ...scope, ...session, messages });
     } catch (error) {
-      if (target === fallback || !isMissingNamespace(error)) throw error;
-      context.warn(fallbackNotice(target, fallback));
-      scope = fallback;
+      if (!isMissingNamespace(error) || redirects.has(scopeKey(run[0]!.scope))) throw error;
+      const { fallback } = run[0]!;
+      redirects.set(scopeKey(scope), fallback);
+      context.warn(fallbackNotice(scope, fallback));
       if (fallback !== undefined) {
-        await memoryToolExecutors.ingest({ ...fallback, ...session, messages: [...messages] });
+        await memoryToolExecutors.ingest({ ...fallback, ...session, messages });
       }
     }
   }
 
   /**
-   * Send what is queued now; a refused chunk and the ones after it go back for the next try.
+   * Send what is queued now; a refused run and the ones after it go back for the next try.
    *
    * @param context - Session and warning channel of the conversation.
    * @param last - Whether this is the session's final send.
-   * @returns {Promise<void>} Settles once the queue is empty or a chunk failed.
+   * @returns {Promise<void>} Settles once the queue is empty or a run failed.
    */
   async function send(context: TurnContext, last: boolean): Promise<void> {
     const batch = queued.splice(0);
-    for (let sent = 0; sent < batch.length; sent += MAX_TOOL_INGEST_MESSAGES) {
-      const messages = batch.slice(sent, sent + MAX_TOOL_INGEST_MESSAGES);
+    let sent = 0;
+    while (sent < batch.length) {
+      const length = runLength(batch, sent);
       try {
-        await sendChunk(messages, context);
+        await sendRun(batch.slice(sent, sent + length), context);
       } catch (error) {
         const landed = mayHaveLanded(error);
-        queued.unshift(...batch.slice(landed ? sent + messages.length : sent));
+        queued.unshift(...batch.slice(landed ? sent + length : sent));
         const { withCredentialStep } = await import("./memory-tools.ts");
         const reason = withCredentialStep(toolErrorMessage(error), error);
-        const unsent = landed ? messages.length : batch.length - sent;
+        const unsent = landed ? length : batch.length - sent;
         context.warn(failureWarning(error, reason, { unsent, last }));
         return;
       }
+      sent += length;
     }
   }
 
@@ -270,9 +306,8 @@ export function createTurnIngest(options: Readonly<TurnIngestOptions>): TurnInge
   }
 
   return {
-    add(message) {
-      if (resolved && scope === undefined) return;
-      queued.push(...ingestMessages(message));
+    add(messages) {
+      queued.push(...messages.filter((routed) => target(routed) !== undefined));
     },
     turn(context) {
       turns += 1;

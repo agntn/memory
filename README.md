@@ -94,6 +94,12 @@ Thinking, tool calls and tool results stay out, and whatever's left when the ses
 
 The batch lands in the project, not on you. A checkout whose `upstream` or `origin` remote is `github.com/agntn/memory` ingests into `agntn/memory`, and `upstream` wins on a fork. No remote? Then it's the scope above. The working directory alone doesn't count, since folders get renamed and moved. Neither one? Nothing gets sent.
 
+OpenBot agents get a split of their own. Pi spots one by the `<agent_profile>` OpenBot puts in the prompt. The agent's namespace comes from `.pi/agntn/memory.json` in its folder, like `{"namespace": "iona"}`.
+
+The profile is whoever's talking: your messages go to your profile, a teammate's to that teammate's namespace. Replies follow the last speaker, so Iona's chat with Mira lands in `iona/mira`. In channels that works for a teammate's request and a member's reply. A lead's `channel_assign` reaches the member with no sender at all, so it files under you.
+
+Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/memory-scope.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
+
 Cloudflare creates profiles on the first write, but not namespaces. When the project's namespace is missing, Pi says so once and uses your scope for the rest of the session. `memory_namespace_create` keeps the project apart next time.
 
 Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `memory-scope.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
