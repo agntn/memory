@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { MAX_TOOL_NAMESPACE_CHARACTERS, MEMORY_NAME_PATTERN } from "./memory-tool-contract.ts";
 import { memoryName } from "./memory-project-scope.ts";
@@ -61,13 +62,23 @@ export function openBotAgent(systemPrompt: string): OpenBotAgent | undefined {
 }
 
 /**
+ * A user message without the blocks OpenBot pastes into it.
+ *
+ * @param text - User message text as Pi got it.
+ * @returns {string} The text the sender wrote.
+ */
+export function withoutInjectedBlocks(text: string): string {
+  return text.replaceAll(injectedBlockPattern, "");
+}
+
+/**
  * Split a user message into what the person wrote and what each teammate sent.
  *
  * @param text - User message text as Pi got it.
  * @returns {OpenBotSegment[]} The stretches, OpenBot's injected blocks removed.
  */
 export function openBotSegments(text: string): OpenBotSegment[] {
-  const clean = text.replaceAll(injectedBlockPattern, "").replace(combinedHeaderPattern, "");
+  const clean = withoutInjectedBlocks(text).replace(combinedHeaderPattern, "");
   const channel = channelSenderPattern.exec(clean);
   if (channel !== null) {
     return [
@@ -145,6 +156,180 @@ export function agentNamespace(agentDirectory: string): string | undefined {
       ? name
       : undefined;
   } catch {
+    return undefined;
+  }
+}
+
+/** Who sent one message of a channel session: an agent id, or nobody for the person. */
+export interface ChannelSender {
+  readonly senderId?: string;
+}
+
+/** Finds the sender of a channel message in OpenBot's own records. */
+export type ChannelSenders = (text: string) => ChannelSender | undefined;
+
+/* The folder OpenBot loads its Pi extension from sits in its data folder, next to the database. */
+const providerStatePattern = /^(.*)[\\/]provider-state[\\/]openbot-pi-[^\\/]+[\\/][^\\/]+$/u;
+
+/**
+ * OpenBot's database, found from the extension path OpenBot passes Pi.
+ *
+ * @param argv - Pi's command line.
+ * @returns {string | undefined} Path of `openbot.db`, or nothing outside OpenBot.
+ */
+export function openBotDatabasePath(argv: readonly string[] = process.argv): string | undefined {
+  for (const argument of argv) {
+    const folder = providerStatePattern.exec(argument)?.[1];
+    if (folder !== undefined) return join(folder, "openbot.db");
+  }
+  return undefined;
+}
+
+/** A channel task as OpenBot stores it, reduced to what names its sender. */
+interface ChannelTask {
+  readonly instruction?: string;
+  readonly parentTaskId?: string | null;
+  readonly ownerAgentId?: string;
+  readonly requestMessageId?: string;
+  readonly sourceMessageIds?: readonly string[];
+}
+
+/**
+ * Parse one JSON column, or nothing for a missing row.
+ *
+ * @param row - The row, if any.
+ * @param column - Column holding JSON.
+ * @returns {T | undefined} The parsed value.
+ */
+function jsonColumn<T>(row: unknown, column: string): T | undefined {
+  const value = (row as Record<string, unknown> | undefined)?.[column];
+  return typeof value === "string" ? (JSON.parse(value) as T) : undefined;
+}
+
+/** Reads the rows a task's sender comes from. */
+interface TaskLookup {
+  readonly task: (id: string) => ChannelTask | undefined;
+  readonly author: (messageId: string) => unknown;
+}
+
+/**
+ * The task whose instruction a message carries, the longest when several fit.
+ *
+ * @param rows - The agent's task rows in the channel.
+ * @param text - The message text.
+ * @returns {ChannelTask | undefined} The task, or nothing for a message no task wrote.
+ */
+function matchingTask(rows: readonly unknown[], text: string): ChannelTask | undefined {
+  let best: ChannelTask | undefined;
+  let bestLength = 0;
+  for (const row of rows) {
+    const item = jsonColumn<ChannelTask>(row, "task_json");
+    const length = carriedLength(item, text);
+    if (length > bestLength) {
+      best = item;
+      bestLength = length;
+    }
+  }
+  return best;
+}
+
+/**
+ * How long a task's instruction is when the message carries it.
+ *
+ * @param item - A task, if the row held one.
+ * @param text - The message text.
+ * @returns {number} The instruction's length, or 0 when the message doesn't carry it.
+ */
+function carriedLength(item: ChannelTask | undefined, text: string): number {
+  const instruction = item?.instruction?.trim() ?? "";
+  return instruction !== "" && text.includes(instruction) ? instruction.length : 0;
+}
+
+/**
+ * Who a task came from: the parent task's owner for an assignment, else its request's author.
+ *
+ * @param matched - The task the message carries.
+ * @param lookup - Reads the parent task and the request's author.
+ * @returns {ChannelSender | undefined} The sender, or nothing when the records lack it.
+ */
+function taskSender(matched: ChannelTask, lookup: TaskLookup): ChannelSender | undefined {
+  if (matched.parentTaskId) {
+    const owner = lookup.task(matched.parentTaskId)?.ownerAgentId;
+    return owner === undefined ? undefined : { senderId: owner };
+  }
+  const author = lookup.author(matched.sourceMessageIds?.[0] ?? matched.requestMessageId ?? "");
+  const id = typeof author === "string" ? author : "";
+  return id.startsWith("agent:") ? { senderId: id.slice("agent:".length) } : {};
+}
+
+/**
+ * Open OpenBot's database read-only, where this runtime has `node:sqlite`.
+ *
+ * @param databasePath - Path of `openbot.db`.
+ * @returns {DatabaseSync | undefined} The handle, or nothing when it can't be opened.
+ */
+function openDatabase(databasePath: string): DatabaseSync | undefined {
+  const sqlite = process.getBuiltinModule("node:sqlite") as
+    | typeof import("node:sqlite")
+    | undefined;
+  try {
+    return sqlite === undefined
+      ? undefined
+      : new sqlite.DatabaseSync(databasePath, { readOnly: true });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Who sends each message of a Pi session in an OpenBot channel, read from its task records.
+ *
+ * @param databasePath - Path of `openbot.db`.
+ * @param sessionFile - Pi's session file, which OpenBot stores as the channel session.
+ * @returns {ChannelSenders | undefined} The lookup, or nothing outside a channel.
+ */
+export function openBotChannelSenders(
+  databasePath: string,
+  sessionFile: string,
+): ChannelSenders | undefined {
+  const database = openDatabase(databasePath);
+  if (database === undefined) return undefined;
+  try {
+    const context = database
+      .prepare("SELECT channel_id, agent_id FROM projection_channel_contexts WHERE session_id = ?")
+      .get(sessionFile) as { channel_id: string; agent_id: string } | undefined;
+    if (context === undefined) {
+      database.close();
+      return undefined;
+    }
+    const tasks = database.prepare(
+      "SELECT t.task_json FROM projection_channel_assignments a JOIN projection_channel_tasks t ON t.task_id = a.task_id WHERE a.channel_id = ? AND json_extract(a.assignment_json, '$.agentId') = ?",
+    );
+    const task = database.prepare(
+      "SELECT task_json FROM projection_channel_tasks WHERE task_id = ?",
+    );
+    const message = database.prepare(
+      "SELECT message_json FROM projection_channel_messages WHERE channel_id = ? AND message_id = ?",
+    );
+    const lookup: TaskLookup = {
+      task: (id) => jsonColumn<ChannelTask>(task.get(id), "task_json"),
+      author: (id) =>
+        jsonColumn<{ author?: { id?: unknown } }>(
+          message.get(context.channel_id, id),
+          "message_json",
+        )?.author?.id,
+    };
+    return (text) => {
+      try {
+        const rows = tasks.all(context.channel_id, context.agent_id);
+        const matched = matchingTask(rows, text);
+        return matched === undefined ? undefined : taskSender(matched, lookup);
+      } catch {
+        return undefined;
+      }
+    };
+  } catch {
+    database.close();
     return undefined;
   }
 }

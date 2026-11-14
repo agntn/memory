@@ -12,7 +12,8 @@ import {
 } from "../src/errors.ts";
 import { execFileSync } from "node:child_process";
 import { ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
-import { openBotSegments } from "../extensions/shared/memory-openbot.ts";
+import { DatabaseSync } from "node:sqlite";
+import { openBotDatabasePath, openBotSegments } from "../extensions/shared/memory-openbot.ts";
 import { remoteMemoryScope } from "../extensions/shared/memory-project-scope.ts";
 import { memoryToolExecutors } from "../extensions/shared/memory-tools.ts";
 
@@ -41,7 +42,7 @@ function loadPi(): Map<string, Handler> {
 const notify = vi.fn();
 const ctx = {
   cwd: "/workspace/movie-enigma",
-  sessionManager: { getSessionId: () => "pi-session-123" },
+  sessionManager: { getSessionId: () => "pi-session-123", getSessionFile: () => undefined },
   ui: { notify },
   getSystemPrompt: () => "You are Pi.",
 };
@@ -483,6 +484,127 @@ describe("Pi turn ingest", () => {
       undefined,
       undefined,
     ]);
+  });
+
+  it("files channel tasks under who gave them, from OpenBot's records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const agents = join(root, "Agents");
+      for (const [id, namespace] of [
+        ["agent-rhea", "rheatwoen"],
+        ["agent-mira", "miratwoen"],
+      ] as const) {
+        mkdirSync(join(agents, id, ".pi", "agntn"), { recursive: true });
+        writeFileSync(
+          join(agents, id, ".pi", "agntn", "memory.json"),
+          JSON.stringify({ namespace }),
+        );
+      }
+      const sessionFile = join(root, "session.jsonl");
+      const databasePath = join(root, "openbot.db");
+      const db = new DatabaseSync(databasePath);
+      db.exec(`
+        CREATE TABLE projection_channel_contexts (channel_id TEXT, agent_id TEXT, thread_id TEXT, session_id TEXT);
+        CREATE TABLE projection_channel_tasks (task_id TEXT PRIMARY KEY, channel_id TEXT, task_json TEXT);
+        CREATE TABLE projection_channel_assignments (assignment_id TEXT PRIMARY KEY, channel_id TEXT, task_id TEXT, delivery_id TEXT, assignment_json TEXT);
+        CREATE TABLE projection_channel_messages (channel_id TEXT, message_id TEXT, sequence INTEGER, message_json TEXT);
+      `);
+      db.prepare(
+        "INSERT INTO projection_channel_contexts VALUES ('c1', 'agent-rhea', 't1', ?)",
+      ).run(sessionFile);
+      const task = (id: string, json: object) => {
+        db.prepare("INSERT INTO projection_channel_tasks VALUES (?, 'c1', ?)").run(
+          id,
+          JSON.stringify(json),
+        );
+      };
+      const assign = (id: string, taskId: string, agentId: string) => {
+        db.prepare("INSERT INTO projection_channel_assignments VALUES (?, 'c1', ?, ?, ?)").run(
+          id,
+          taskId,
+          id,
+          JSON.stringify({ agentId }),
+        );
+      };
+      task("from-ori", {
+        instruction: "Plan the release",
+        parentTaskId: null,
+        requestMessageId: "m-ori",
+        ownerAgentId: "agent-rhea",
+      });
+      task("mira-root", {
+        instruction: "Coordinate the sweep",
+        parentTaskId: null,
+        requestMessageId: "m-x",
+        ownerAgentId: "agent-mira",
+      });
+      task("from-mira", {
+        instruction: "Check the retry log",
+        parentTaskId: "mira-root",
+        requestMessageId: "m-y",
+        ownerAgentId: "agent-rhea",
+      });
+      assign("a1", "from-ori", "agent-rhea");
+      assign("a2", "mira-root", "agent-mira");
+      assign("a3", "from-mira", "agent-rhea");
+      db.prepare("INSERT INTO projection_channel_messages VALUES ('c1', 'm-ori', 1, ?)").run(
+        JSON.stringify({ author: { kind: "member", id: "user", name: "Ori" } }),
+      );
+      db.close();
+
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "aeitwoen");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "50");
+      vi.spyOn(process, "argv", "get").mockReturnValue([
+        "node",
+        "pi",
+        "--extension",
+        join(root, "provider-state", "openbot-pi-abc123", "mcp.mjs"),
+      ]);
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const handlers = loadPi();
+      const rhea = {
+        ...ctx,
+        cwd: join(agents, "agent-rhea"),
+        sessionManager: { getSessionId: () => "s", getSessionFile: () => sessionFile },
+        getSystemPrompt: () =>
+          '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+      };
+      const said = async (role: string, content: string) =>
+        handlers.get("message_end")!({ message: { role, content } }, rhea);
+
+      await said("user", "Plan the release");
+      await said("assistant", "Planned");
+      await said("user", "Check the retry log");
+      await said("assistant", "Checked");
+      await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
+
+      expect(
+        ingest.mock.calls.map(([params]) => [
+          `${params.namespace}/${params.profile}`,
+          params.messages.map(({ content }) => content),
+        ]),
+      ).toEqual([
+        ["rheatwoen/oritwoen", ["Plan the release", "Planned"]],
+        ["rheatwoen/miratwoen", ["Check the retry log", "Checked"]],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds OpenBot's database from the extension it loads into Pi", () => {
+    expect(
+      openBotDatabasePath([
+        "pi",
+        "--extension",
+        "/data/OpenBot/provider-state/openbot-pi-x1/mcp.mjs",
+      ]),
+    ).toBe(join("/data/OpenBot", "openbot.db"));
+    expect(openBotDatabasePath(["pi", "--extension", "/home/me/ext.ts"])).toBeUndefined();
   });
 
   it("reads the sender of a channel request and a channel reply", () => {

@@ -10,6 +10,7 @@ import {
 import { hostMemoryFields } from "../shared/memory-fields.ts";
 import { createIngestRouter, type IngestRouterOptions } from "../shared/memory-ingest-routes.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
+import { openBotDatabasePath } from "../shared/memory-openbot.ts";
 import {
   configuredPiAgentNamespaceTemplate,
   configuredPiIngestTurns,
@@ -95,7 +96,12 @@ function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every:
   pi.on("message_end", (event, ctx) => {
     const { warn } = turnContext(ctx);
     ingest.add(
-      route(event.message, { cwd: ctx.cwd, systemPrompt: () => ctx.getSystemPrompt(), warn }),
+      route(event.message, {
+        cwd: ctx.cwd,
+        sessionFile: () => ctx.sessionManager.getSessionFile(),
+        systemPrompt: () => ctx.getSystemPrompt(),
+        warn,
+      }),
     );
   });
   pi.on("turn_end", (_event, ctx) => {
@@ -109,9 +115,14 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const ingestTurns = configuredPiIngestTurns();
   if (ingestTurns !== undefined) {
     const agentNamespace = configuredPiAgentNamespaceTemplate();
+    const openBotDatabase = openBotDatabasePath();
     ingestEveryTurns(
       pi,
-      { ...(scope === undefined ? {} : { fallback: scope }), agentNamespace },
+      {
+        ...(scope === undefined ? {} : { fallback: scope }),
+        ...(openBotDatabase === undefined ? {} : { openBotDatabase }),
+        agentNamespace,
+      },
       ingestTurns,
     );
   }

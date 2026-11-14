@@ -5,9 +5,13 @@ import { ingestMessages, messageText } from "./memory-ingest-turns.ts";
 import {
   agentNamespace,
   agentScopePath,
+  type ChannelSenders,
   openBotAgent,
+  openBotChannelSenders,
   openBotSegments,
+  type OpenBotSegment,
   templateNamespace,
+  withoutInjectedBlocks,
   writeAgentNamespace,
 } from "./memory-openbot.ts";
 import { memoryName, projectMemoryScope } from "./memory-project-scope.ts";
@@ -20,11 +24,14 @@ export interface IngestRouterOptions {
   readonly fallback?: ProfileParams;
   /** Turns an OpenBot agent's name into its namespace, like `{name}-bot`. */
   readonly agentNamespace?: string;
+  /** OpenBot's database, where a channel session's senders are recorded. */
+  readonly openBotDatabase?: string;
 }
 
 /** What the router reads from the host for one message. */
 export interface RouteHost {
   readonly cwd: string;
+  readonly sessionFile: () => string | undefined;
   readonly systemPrompt: () => string;
   readonly warn: (message: string) => void;
 }
@@ -35,7 +42,12 @@ export type IngestRouter = (message: unknown, host: RouteHost) => RoutedMessage[
 /** How the conversation is split once per session. */
 type Mode =
   | { readonly kind: "scope"; readonly scope: ProfileParams; readonly fallback?: ProfileParams }
-  | { readonly kind: "openbot"; readonly namespace: string; readonly agentsDirectory: string }
+  | {
+      readonly kind: "openbot";
+      readonly namespace: string;
+      readonly agentsDirectory: string;
+      readonly channel?: ChannelSenders;
+    }
   | { readonly kind: "off" };
 
 /**
@@ -88,7 +100,31 @@ function sessionMode(host: RouteHost, options: IngestRouterOptions): Mode {
   }
   const namespace = openBotNamespace(host, agent.name, options.agentNamespace);
   if (namespace === undefined) return { kind: "off" };
-  return { kind: "openbot", namespace, agentsDirectory: dirname(host.cwd) };
+  const agentsDirectory = dirname(host.cwd);
+  const sessionFile = host.sessionFile();
+  const channel =
+    options.openBotDatabase === undefined || sessionFile === undefined
+      ? undefined
+      : openBotChannelSenders(options.openBotDatabase, sessionFile);
+  return channel === undefined
+    ? { kind: "openbot", namespace, agentsDirectory }
+    : { kind: "openbot", namespace, agentsDirectory, channel };
+}
+
+/**
+ * The senders of one user message: the channel's records first, then OpenBot's headers.
+ *
+ * @param text - The message text.
+ * @param channel - The channel lookup, when the session is a channel's.
+ * @returns {OpenBotSegment[]} Its stretches and who wrote each.
+ */
+function userSegments(text: string, channel: ChannelSenders | undefined): OpenBotSegment[] {
+  const clean = withoutInjectedBlocks(text);
+  const sender = channel?.(clean);
+  if (sender === undefined) return openBotSegments(text);
+  return [
+    sender.senderId === undefined ? { text: clean } : { senderId: sender.senderId, text: clean },
+  ];
 }
 
 /**
@@ -134,7 +170,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
    */
   function routeOpenBot(
     message: unknown,
-    openbot: Readonly<{ namespace: string; agentsDirectory: string }>,
+    openbot: Readonly<{ namespace: string; agentsDirectory: string; channel?: ChannelSenders }>,
   ): RoutedMessage[] {
     const routed: RoutedMessage[] = [];
     const { role, content, timestamp } = message as Record<string, unknown>;
@@ -143,7 +179,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
       const scope = { namespace: openbot.namespace, profile: interlocutor };
       return ingestMessages(message).map((ingest) => ({ scope, message: ingest }));
     }
-    for (const segment of openBotSegments(messageText(content))) {
+    for (const segment of userSegments(messageText(content), openbot.channel)) {
       const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
       interlocutor = profile;
       if (profile === undefined) continue;
