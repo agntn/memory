@@ -259,9 +259,10 @@ describe("memory extensions", () => {
 
   it("binds Pi operational tools from its agent-local scope file", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    mkdirSync(join(agentDir, "agntn"), { recursive: true });
     try {
       writeFileSync(
-        join(agentDir, "memory-scope.json"),
+        join(agentDir, "agntn", "memory.json"),
         JSON.stringify({ namespace: "default", profile: "oritwoen" }),
       );
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
@@ -300,8 +301,9 @@ describe("memory extensions", () => {
 
   it("fails closed when Pi's scope file cannot be read", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    mkdirSync(join(agentDir, "agntn"), { recursive: true });
     try {
-      mkdirSync(join(agentDir, "memory-scope.json"));
+      mkdirSync(join(agentDir, "agntn", "memory.json"), { recursive: true });
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 
       expect(() =>

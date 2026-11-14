@@ -86,7 +86,35 @@ From the checkout, configure an MCP client with:
 }
 ```
 
-Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/memory-scope.json`.
+Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/agntn/memory.json`.
+
+Pi also ingests the conversation on its own, no tool call needed. Every tenth turn, what you and the model wrote since the last batch goes to `memory_ingest` under the session ID. Pi counts a turn as one model response with its tool calls.
+
+Thinking, tool calls and tool results stay out, and whatever's left when the session ends goes in one last batch.
+
+The batch lands in the project, not on you. A checkout whose `upstream` or `origin` remote is `github.com/agntn/memory` ingests into `agntn/memory`, and `upstream` wins on a fork. No remote? Then it's the scope above. The working directory alone doesn't count, since folders get renamed and moved. Neither one? Nothing gets sent.
+
+OpenBot agents get a split of their own. Pi spots one by the `<agent_profile>` OpenBot puts in the prompt. The agent's namespace comes from `.pi/agntn/memory.json` in its folder, like `{"namespace": "iona"}`.
+
+The profile is whoever's talking: your messages go to your profile, a teammate's to that teammate's namespace. Replies follow the last speaker, so Iona's chat with Mira lands in `iona/mira`.
+
+Channels need one more trick. A lead's `channel_assign` reaches the member as plain text, no sender attached, so Pi reads OpenBot's own database, read-only, to see who gave each task. It files under whoever assigned it, even after the channel picks a new lead.
+
+A channel about one project can skip the split and go straight there. Map its id, which survives a rename, in `openbotChannels`:
+
+```json
+{ "openbotChannels": { "bd143301-73a8-411f-9f4a-ecf8635ccac3": "puzzles/gsmg" } }
+```
+
+A channel with no project gets `null`. A channel missing from the map still works, it just splits by agent. The agent hears about it once per session, id included, so you can add it.
+
+Every ingested message ends with your fields, like a remembered memory does, plus `author` in OpenBot: you, the teammate, or the agent itself. `agent`, `channel` and `channel_name` say where the conversation happened, so a fact keeps its context. Shared namespaces stay readable that way.
+
+Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/agntn/memory.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
+
+Cloudflare creates profiles on the first write, but not namespaces. When the project's namespace is missing, Pi says so once and uses your scope for the rest of the session. `memory_namespace_create` keeps the project apart next time.
+
+Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `agntn/memory.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 
 The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
 
@@ -106,7 +134,7 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 
 You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
 
-One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
+One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`, and Pi running under OpenBot adds `app: openbot` after it. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
 
 Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
 

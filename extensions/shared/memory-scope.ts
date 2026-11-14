@@ -12,7 +12,14 @@ import {
 
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
-export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
+/** Pi's memory settings, under the agent folder next to the other agntn packages' files. */
+export const PI_MEMORY_CONFIG_PATH = join("agntn", "memory.json");
+export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
+export const MEMORY_AGENT_NAMESPACE_ENV = "AGNTN_MEMORY_AGENT_NAMESPACE";
+/** An OpenBot agent's namespace is its name unless a template says otherwise. */
+export const DEFAULT_AGENT_NAMESPACE_TEMPLATE = "{name}";
+/** Turns between Pi's background ingests when nothing sets a count. */
+export const DEFAULT_INGEST_TURNS = 10;
 
 const memoryNamePattern = new RegExp(MEMORY_NAME_PATTERN);
 
@@ -104,11 +111,12 @@ function trimmedString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
 }
 
-function parsePiScope(value: unknown, configPath: string): ProfileParams {
+function parsePiScope(value: unknown, configPath: string): ProfileParams | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Pi memory scope at ${configPath} must be a JSON object`);
   }
   const record = value as Record<string, unknown>;
+  if (record.namespace === undefined && record.profile === undefined) return undefined;
   return validateMemoryScope(
     trimmedString(record.namespace),
     trimmedString(record.profile),
@@ -118,7 +126,7 @@ function parsePiScope(value: unknown, configPath: string): ProfileParams {
 
 /**
  * Resolve Pi's operational scope from environment first, then its agent-local
- * `memory-scope.json`. Pi does not load `.env` files, so the extension owns this
+ * `agntn/memory.json`. Pi does not load `.env` files, so the extension owns this
  * narrow non-secret configuration path.
  *
  * @param env - Pi process environment and optional scope override.
@@ -132,10 +140,77 @@ export function configuredPiMemoryScope(
   const environmentScope = configuredMemoryScope(env);
   if (environmentScope) return environmentScope;
 
-  const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
-  const configPath = join(agentDir, PI_MEMORY_SCOPE_FILENAME);
-  const value = readPiScope(configPath);
+  const { configPath, value } = readPiConfig(env, homeDirectory);
   return value === undefined ? undefined : parsePiScope(value, configPath);
+}
+
+/**
+ * Where Pi keeps its memory scope file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {string} Path of `agntn/memory.json`.
+ */
+export function piScopePath(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): string {
+  const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
+  return join(agentDir, PI_MEMORY_CONFIG_PATH);
+}
+
+/**
+ * Read Pi's memory settings from `agntn/memory.json`.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {{ configPath: string; value: unknown }} The file and its JSON, `undefined` when it's missing.
+ * @throws {Error} When the file exists but can't be read or parsed.
+ */
+function readPiConfig(
+  env: Readonly<NodeJS.ProcessEnv>,
+  homeDirectory: string,
+): { configPath: string; value: unknown } {
+  const configPath = piScopePath(env, homeDirectory);
+  return { configPath, value: readPiScope(configPath) };
+}
+
+/**
+ * Parse how many turns go by between automatic ingests.
+ *
+ * @param value - A whole number, or its decimal string.
+ * @param source - Where the value came from, named in the error.
+ * @returns {number | undefined} The turn count, or nothing for 0.
+ * @throws {Error} When the value isn't a whole number from 0 up.
+ */
+export function parseIngestTurns(value: unknown, source: string): number | undefined {
+  const turns = typeof value === "string" && /^\s*\d+\s*$/u.test(value) ? Number(value) : value;
+  if (typeof turns !== "number" || !Number.isSafeInteger(turns) || turns < 0) {
+    throw new Error(`${source} must be a whole number of turns, or 0 to switch ingest off`);
+  }
+  return turns === 0 ? undefined : turns;
+}
+
+/**
+ * Pi's ingest interval: the environment, then `ingestTurns` in its scope file, then the default.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {number | undefined} Turns between ingests, or nothing when it's off.
+ * @throws {Error} When the configured value isn't a whole number.
+ */
+export function configuredPiIngestTurns(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): number | undefined {
+  const configured = env[MEMORY_INGEST_TURNS_ENV]?.trim();
+  if (configured) return parseIngestTurns(configured, MEMORY_INGEST_TURNS_ENV);
+
+  const { configPath, value } = readPiConfig(env, homeDirectory);
+  if (typeof value !== "object" || value === null || !("ingestTurns" in value)) {
+    return DEFAULT_INGEST_TURNS;
+  }
+  return parseIngestTurns(value.ingestTurns, `ingestTurns in ${configPath}`);
 }
 
 /**
@@ -258,4 +333,83 @@ export function grokMemorySessionId(
   const conversationId = env.GROK_SESSION_ID?.trim();
   if (!conversationId) return undefined;
   return memorySessionId("grok", cwd, conversationId);
+}
+
+/**
+ * Check a template that turns an agent's name into its namespace.
+ *
+ * @param value - Template with `{name}` in it.
+ * @param source - Where it came from, named in the error.
+ * @returns {string} The template.
+ * @throws {Error} When it isn't a string holding `{name}`.
+ */
+function parseAgentNamespaceTemplate(value: unknown, source: string): string {
+  if (typeof value !== "string" || !value.includes("{name}")) {
+    throw new Error(`${source} must be a string with {name} in it`);
+  }
+  return value.trim();
+}
+
+/**
+ * Pi's template for an OpenBot agent's namespace: the environment, then `agentNamespace` in its scope file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {string} The template, `{name}` when none is set.
+ * @throws {Error} When the configured template has no `{name}`.
+ */
+export function configuredPiAgentNamespaceTemplate(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): string {
+  const configured = env[MEMORY_AGENT_NAMESPACE_ENV]?.trim();
+  if (configured) return parseAgentNamespaceTemplate(configured, MEMORY_AGENT_NAMESPACE_ENV);
+  const { configPath, value } = readPiConfig(env, homeDirectory);
+  if (typeof value !== "object" || value === null || !("agentNamespace" in value)) {
+    return DEFAULT_AGENT_NAMESPACE_TEMPLATE;
+  }
+  return parseAgentNamespaceTemplate(value.agentNamespace, `agentNamespace in ${configPath}`);
+}
+
+/**
+ * Check one channel's scope, written as `namespace/profile`.
+ *
+ * @param value - The configured scope.
+ * @param source - Where it came from, named in the error.
+ * @returns {ProfileParams} The scope.
+ * @throws {Error} When it isn't two valid memory names.
+ */
+function parseChannelScope(value: unknown, source: string): ProfileParams {
+  const [namespace, profile, extra] = typeof value === "string" ? value.split("/") : [];
+  if (extra !== undefined) throw new Error(`${source} must be namespace/profile`);
+  return validateMemoryScope(namespace?.trim(), profile?.trim(), source);
+}
+
+/**
+ * The project each OpenBot channel ingests into, keyed by channel id: `openbotChannels` in Pi's file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {ReadonlyMap<string, ProfileParams | null>} The scopes, `null` for a channel left unmapped on purpose.
+ * @throws {Error} When the map or one of its scopes is malformed.
+ */
+export function configuredPiOpenBotChannels(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): ReadonlyMap<string, ProfileParams | null> {
+  const { configPath, value } = readPiConfig(env, homeDirectory);
+  if (typeof value !== "object" || value === null || !("openbotChannels" in value)) {
+    return new Map();
+  }
+  const channels = value.openbotChannels;
+  const source = `openbotChannels in ${configPath}`;
+  if (typeof channels !== "object" || channels === null || Array.isArray(channels)) {
+    throw new Error(`${source} must map channel ids to namespace/profile`);
+  }
+  return new Map(
+    Object.entries(channels).map(([id, scope]) => [
+      id,
+      scope === null ? null : parseChannelScope(scope, `${source}.${id}`),
+    ]),
+  );
 }

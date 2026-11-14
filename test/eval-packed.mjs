@@ -121,6 +121,7 @@ async function registerPacked(extensionPath, api) {
   const extension = await import(pathToFileURL(extensionPath).href);
   const tools = new Map();
   extension.default({
+    on() {},
     ...api,
     registerTool(tool) {
       tools.set(tool.name, tool);
