@@ -31,7 +31,7 @@ export function memoryName(name: string, maxLength: number): string | undefined 
 }
 
 /**
- * The memory scope a remote URL names: its owner as namespace, its repository as profile.
+ * The memory scope a remote URL names: its last two path segments, owner and repository.
  *
  * @param url - Remote URL, https, ssh or scp form.
  * @returns {ProfileParams | undefined} The scope, or nothing for a local path or odd URL.
@@ -45,7 +45,7 @@ export function remoteMemoryScope(url: string): ProfileParams | undefined {
       .split("/")
       .filter(Boolean) ?? [];
   if (segments.length < 2) return undefined;
-  const namespace = memoryName(segments[0]!, MAX_TOOL_NAMESPACE_CHARACTERS);
+  const namespace = memoryName(segments.at(-2)!, MAX_TOOL_NAMESPACE_CHARACTERS);
   const profile = memoryName(segments.at(-1)!, MAX_TOOL_PROFILE_CHARACTERS);
   return namespace === undefined || profile === undefined ? undefined : { namespace, profile };
 }
