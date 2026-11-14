@@ -104,7 +104,7 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 { "author": "support-bot", "platform": "web" }
 ```
 
-You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember`, `memory_supersede` or `memory_supersession_resume` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
+You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
 
 One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
 

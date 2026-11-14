@@ -12,6 +12,11 @@ export type MemoryFields = Readonly<Record<string, string>>;
 const fieldKeyPattern = new RegExp(MEMORY_FIELD_KEY_PATTERN, "u");
 /* Control characters and line breaks, so a value can't forge a second field. */
 const unprintablePattern = /[\p{Cc}\u2028\u2029]/u;
+/* A block of field lines after the blank line, as any host's fields stamp it. */
+const stampedBlockPattern = new RegExp(
+  `^(?:\\n${MEMORY_FIELD_KEY_PATTERN.slice(1, -1)}: [^\\n]+)+$`,
+  "u",
+);
 /* The line copySource ends a copy with, which a retried copy carries after the fields. */
 const copySourceSuffix = /\n\nCopied from memory "[^"\n]*" in [a-z0-9-]+\/[a-z0-9-]+\.$/u;
 
@@ -76,6 +81,19 @@ export function configuredMemoryFields(
     throw new Error(`${MEMORY_FIELDS_ENV} must be a JSON object`);
   }
   return parseMemoryFields(value, MEMORY_FIELDS_ENV);
+}
+
+/**
+ * Whether stored content is the given content, bare or with field lines some host stamped on it.
+ *
+ * @param stored - Content the service holds.
+ * @param content - Content the caller expects.
+ * @returns {boolean} True for the exact text, or for it followed by a blank line and field lines.
+ */
+export function isStampedContent(stored: string, content: string): boolean {
+  if (stored === content) return true;
+  if (!stored.startsWith(`${content}\n`)) return false;
+  return stampedBlockPattern.test(stored.slice(content.length + 1));
 }
 
 /**

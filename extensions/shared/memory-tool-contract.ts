@@ -204,7 +204,7 @@ export const memoryFieldDescriptions = {
   supersedeReplacementMemoryId:
     "Exact id of the replacement already stored by a failed memory_supersede call.",
   replacementContent:
-    "Exact content the existing replacement must carry before the old memory can be deleted.",
+    "Exact content the existing replacement must carry before the old memory can be deleted. Field lines a host stamped after it may follow.",
   recallVisibilityQuery:
     "The exact natural-language query the caller will use to retrieve this memory.",
   recallVisibilityTimeout:

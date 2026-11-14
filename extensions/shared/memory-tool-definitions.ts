@@ -364,7 +364,6 @@ function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] 
       effect: "destructive",
       idempotent: false,
       reach: "profile",
-      stamped: true,
       snippet: "Finish a supersession from the replacement memory already stored.",
       guidelines: [
         "Use both ids from the failed memory_supersede call and the same expected content and query.",

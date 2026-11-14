@@ -133,6 +133,39 @@ describe("memory fields", () => {
     expect(resumed.text).toContain(oldId);
   });
 
+  it.each([
+    ["another host's fields", "New note.\n\nharness: pi\nauthor: Aei"],
+    ["no fields from before they were set", "New note."],
+  ])("resumes a replacement stored with %s", async (_label, storedContent) => {
+    const { run, stored } = boundTools({ harness: "claude" });
+    stored.push({ id: "01M7CCCCCCCCCCCCCCCCCCCCCC", content: storedContent });
+
+    const resumed = await run("memory_supersession_resume", {
+      oldMemoryId: oldId,
+      replacementMemoryId: "01M7CCCCCCCCCCCCCCCCCCCCCC",
+      content: "New note.",
+      query: "note",
+      timeoutSeconds: 1,
+    });
+
+    expect(resumed.text).toContain("Resumed supersession");
+  });
+
+  it("refuses to resume a replacement whose extra text is not field lines", async () => {
+    const { run, stored } = boundTools({ harness: "claude" });
+    stored.push({ id: "01M7CCCCCCCCCCCCCCCCCCCCCC", content: "New note.\n\nSomething else." });
+
+    await expect(
+      run("memory_supersession_resume", {
+        oldMemoryId: oldId,
+        replacementMemoryId: "01M7CCCCCCCCCCCCCCCCCCCCCC",
+        content: "New note.",
+        query: "note",
+        timeoutSeconds: 1,
+      }),
+    ).rejects.toThrow("did not match the stored id and content");
+  });
+
   it("leaves content that already ends with the fields alone instead of stamping it twice", async () => {
     const { run, stored } = boundTools({ author: "Aei" });
 
