@@ -165,8 +165,12 @@ export interface ChannelSender {
   readonly senderId?: string;
 }
 
-/** Finds the sender of a channel message in OpenBot's own records. */
-export type ChannelSenders = (text: string) => ChannelSender | undefined;
+/** One OpenBot channel a Pi session works in, and the lookup for its senders. */
+export interface ChannelSenders {
+  readonly channelId: string;
+  readonly channelName?: string;
+  readonly sender: (text: string) => ChannelSender | undefined;
+}
 
 /* The folder OpenBot loads its Pi extension from sits in its data folder, next to the database. */
 const providerStatePattern = /^(.*)[\\/]provider-state[\\/]openbot-pi-[^\\/]+[\\/][^\\/]+$/u;
@@ -263,6 +267,21 @@ function taskSender(matched: ChannelTask, lookup: TaskLookup): ChannelSender | u
 }
 
 /**
+ * A channel's name, when OpenBot's records hold one.
+ *
+ * @param readRow - Reads the channel's row.
+ * @returns {string | undefined} The name, or nothing when it can't be read.
+ */
+function storedChannelName(readRow: () => unknown): string | undefined {
+  try {
+    const name = jsonColumn<{ name?: unknown }>(readRow(), "channel_json")?.name;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Open OpenBot's database read-only, where this runtime has `node:sqlite`.
  *
  * @param databasePath - Path of `openbot.db`.
@@ -319,7 +338,7 @@ export function openBotChannelSenders(
           "message_json",
         )?.author?.id,
     };
-    return (text) => {
+    const sender = (text: string): ChannelSender | undefined => {
       try {
         const rows = tasks.all(context.channel_id, context.agent_id);
         const matched = matchingTask(rows, text);
@@ -328,6 +347,14 @@ export function openBotChannelSenders(
         return undefined;
       }
     };
+    const channelName = storedChannelName(() =>
+      database
+        .prepare("SELECT channel_json FROM projection_channels WHERE channel_id = ?")
+        .get(context.channel_id),
+    );
+    return channelName === undefined
+      ? { channelId: context.channel_id, sender }
+      : { channelId: context.channel_id, channelName, sender };
   } catch {
     database.close();
     return undefined;

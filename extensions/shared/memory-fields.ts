@@ -96,21 +96,37 @@ export function isStampedContent(stored: string, content: string): boolean {
   return stampedBlockPattern.test(stored.slice(content.length + 1));
 }
 
+/** The harness that writes, and the app running it when there is one, like OpenBot over Pi. */
+export type MemoryHost = string | Readonly<{ harness: string; app?: string }>;
+
 /**
- * The host's fields from `AGNTN_MEMORY_FIELDS`, after the harness the host knows it runs in.
+ * The host's fields from `AGNTN_MEMORY_FIELDS`, after the harness and app the host knows it runs in.
  *
- * @param harness - Harness that writes, or nothing when the host can't tell.
+ * @param host - Harness, or harness and app, or nothing when the host can't tell.
  * @param env - Environment that may carry the variable.
- * @returns {MemoryFields | undefined} The fields, a `harness` key in the variable winning.
+ * @returns {MemoryFields | undefined} The fields, keys in the variable winning.
  * @throws {Error} When the variable is malformed.
  */
 export function hostMemoryFields(
-  harness: string | undefined,
+  host: MemoryHost | undefined,
   env: Readonly<NodeJS.ProcessEnv> = process.env,
 ): MemoryFields | undefined {
   const configured = configuredMemoryFields(env);
-  if (harness === undefined) return configured;
-  return Object.freeze({ harness, ...configured });
+  if (host === undefined) return configured;
+  const { harness, app } = typeof host === "string" ? { harness: host, app: undefined } : host;
+  return Object.freeze({ harness, ...(app === undefined ? {} : { app }), ...configured });
+}
+
+/**
+ * The lines fields add to content: a blank line, then one `key: value` line each.
+ *
+ * @param fields - Fields in the order they're written.
+ * @returns {string} The block, starting with the blank line.
+ */
+export function memoryFieldBlock(fields: MemoryFields): string {
+  return `\n\n${Object.entries(fields)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n")}`;
 }
 
 /**
@@ -122,9 +138,7 @@ export function hostMemoryFields(
  * @throws {ToolInputError} When the fields would push the content past the service's byte cap.
  */
 export function stampMemoryContent(content: string, fields: MemoryFields): string {
-  const block = `\n\n${Object.entries(fields)
-    .map(([key, value]) => `${key}: ${value}`)
-    .join("\n")}`;
+  const block = memoryFieldBlock(fields);
   if (content.replace(copySourceSuffix, "").endsWith(block)) return content;
   const encoder = new TextEncoder();
   const bytes = encoder.encode(content + block).length;

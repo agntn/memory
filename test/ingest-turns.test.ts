@@ -21,6 +21,12 @@ vi.mock("@earendil-works/pi-tui", () => ({ Text: class Text {} }));
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
+/* Message content as the ingest sends it, ending with Pi's fields. */
+const stamped = (text: string, author?: string, app?: string) =>
+  [`${text}\n\nharness: pi`, app && `app: ${app}`, author && `author: ${author}`]
+    .filter(Boolean)
+    .join("\n");
+
 afterEach(() => {
   notify.mockClear();
   vi.restoreAllMocks();
@@ -207,7 +213,7 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     expect(ingest.mock.calls.map(([params]) => params.messages.length)).toEqual([500, 1]);
-    expect(ingest.mock.calls[1]![0].messages[0]!.content).toBe("m500");
+    expect(ingest.mock.calls[1]![0].messages[0]!.content).toBe(stamped("m500"));
   });
 
   it("ingests the new messages every second turn and the rest on shutdown", async () => {
@@ -233,10 +239,10 @@ describe("Pi turn ingest", () => {
         profile: "oritwoen",
         sessionId,
         messages: [
-          { role: "user", content: "one", timestamp: "1970-01-01T00:00:00.000Z" },
-          { role: "assistant", content: "re: one", timestamp: "1970-01-01T00:00:00.001Z" },
-          { role: "user", content: "two", timestamp: "1970-01-01T00:00:01.000Z" },
-          { role: "assistant", content: "re: two", timestamp: "1970-01-01T00:00:01.001Z" },
+          { role: "user", content: stamped("one"), timestamp: "1970-01-01T00:00:00.000Z" },
+          { role: "assistant", content: stamped("re: one"), timestamp: "1970-01-01T00:00:00.001Z" },
+          { role: "user", content: stamped("two"), timestamp: "1970-01-01T00:00:01.000Z" },
+          { role: "assistant", content: stamped("re: two"), timestamp: "1970-01-01T00:00:01.001Z" },
         ],
       },
       {
@@ -244,8 +250,12 @@ describe("Pi turn ingest", () => {
         profile: "oritwoen",
         sessionId,
         messages: [
-          { role: "user", content: "three", timestamp: "1970-01-01T00:00:02.000Z" },
-          { role: "assistant", content: "re: three", timestamp: "1970-01-01T00:00:02.001Z" },
+          { role: "user", content: stamped("three"), timestamp: "1970-01-01T00:00:02.000Z" },
+          {
+            role: "assistant",
+            content: stamped("re: three"),
+            timestamp: "1970-01-01T00:00:02.001Z",
+          },
         ],
       },
     ]);
@@ -271,8 +281,8 @@ describe("Pi turn ingest", () => {
     );
     expect(ingest).toHaveBeenCalledTimes(2);
     expect(ingest.mock.calls[1]![0].messages.map(({ content }) => content)).toEqual([
-      "one",
-      "re: one",
+      stamped("one"),
+      stamped("re: one"),
     ]);
   });
 
@@ -319,16 +329,22 @@ describe("Pi turn ingest", () => {
 
   it("reads ingestTurns from Pi's scope file", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    mkdirSync(join(agentDir, "agntn"), { recursive: true });
     try {
       writeFileSync(
-        join(agentDir, "memory-scope.json"),
+        join(agentDir, "agntn", "memory.json"),
         JSON.stringify({ namespace: "default", profile: "oritwoen", ingestTurns: 5 }),
       );
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
       vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "");
-      expect([...loadPi().keys()]).toEqual(["message_end", "turn_end", "session_shutdown"]);
+      expect([...loadPi().keys()]).toEqual([
+        "before_agent_start",
+        "message_end",
+        "turn_end",
+        "session_shutdown",
+      ]);
       writeFileSync(
-        join(agentDir, "memory-scope.json"),
+        join(agentDir, "agntn", "memory.json"),
         JSON.stringify({ namespace: "default", profile: "oritwoen", ingestTurns: 0 }),
       );
       expect(loadPi().size).toBe(0);
@@ -339,8 +355,9 @@ describe("Pi turn ingest", () => {
 
   it("takes a scope file that sets only the interval", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    mkdirSync(join(agentDir, "agntn"), { recursive: true });
     try {
-      writeFileSync(join(agentDir, "memory-scope.json"), JSON.stringify({ ingestTurns: 5 }));
+      writeFileSync(join(agentDir, "agntn", "memory.json"), JSON.stringify({ ingestTurns: 5 }));
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
       vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "");
       const tools: string[] = [];
@@ -351,7 +368,10 @@ describe("Pi turn ingest", () => {
         on() {},
       } as unknown as ExtensionAPI);
       expect(tools).toContain("memory_namespace_list");
-      writeFileSync(join(agentDir, "memory-scope.json"), JSON.stringify({ namespace: "default" }));
+      writeFileSync(
+        join(agentDir, "agntn", "memory.json"),
+        JSON.stringify({ namespace: "default" }),
+      );
       expect(loadPi).toThrow("must define both namespace and profile");
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
@@ -407,9 +427,19 @@ describe("Pi turn ingest", () => {
           params.messages.map(({ content }) => content),
         ]),
       ).toEqual([
-        ["rheatwoen/oritwoen", ["Hi Rhea", "Hi Ori"]],
-        ["rheatwoen/miratwoen", ["Check the retry log", "Done, Mira", "One more"]],
-        ["rheatwoen/lira-two-en", ["And me", "Both handled"]],
+        ["rheatwoen/oritwoen", [stamped("Hi Rhea", "oritwoen"), stamped("Hi Ori", "rheatwoen")]],
+        [
+          "rheatwoen/miratwoen",
+          [
+            stamped("Check the retry log", "miratwoen"),
+            stamped("Done, Mira", "rheatwoen"),
+            stamped("One more", "miratwoen"),
+          ],
+        ],
+        [
+          "rheatwoen/lira-two-en",
+          [stamped("And me", "lira-two-en"), stamped("Both handled", "rheatwoen")],
+        ],
       ]);
     } finally {
       rmSync(agents, { recursive: true, force: true });
@@ -590,9 +620,51 @@ describe("Pi turn ingest", () => {
           params.messages.map(({ content }) => content),
         ]),
       ).toEqual([
-        ["rheatwoen/oritwoen", ["Plan the release", "Planned"]],
-        ["rheatwoen/miratwoen", ["Check the retry log", "Checked"]],
+        [
+          "rheatwoen/oritwoen",
+          [
+            stamped("Plan the release", "oritwoen", "openbot"),
+            stamped("Planned", "rheatwoen", "openbot"),
+          ],
+        ],
+        [
+          "rheatwoen/miratwoen",
+          [
+            stamped("Check the retry log", "miratwoen", "openbot"),
+            stamped("Checked", "rheatwoen", "openbot"),
+          ],
+        ],
       ]);
+
+      const piDir = join(root, "pi");
+      mkdirSync(join(piDir, "agntn"), { recursive: true });
+      writeFileSync(
+        join(piDir, "agntn", "memory.json"),
+        JSON.stringify({ openbotChannels: { c1: "puzzles/gsmg" } }),
+      );
+      vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
+      ingest.mockClear();
+      const mapped = loadPi();
+      await mapped.get("message_end")!(
+        { message: { role: "user", content: "Check the retry log" } },
+        rhea,
+      );
+      await mapped.get("session_shutdown")!({ reason: "quit" }, rhea);
+      expect(ingest.mock.calls.map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+        "puzzles/gsmg",
+      ]);
+      expect(await loadPi().get("before_agent_start")!({}, rhea)).toBeUndefined();
+
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      const unmapped = loadPi();
+      expect(await unmapped.get("before_agent_start")!({}, rhea)).toEqual({
+        message: {
+          customType: "agntn-memory",
+          content: expect.stringContaining("OpenBot channel (c1) has no entry in openbotChannels"),
+          display: true,
+        },
+      });
+      expect(await unmapped.get("before_agent_start")!({}, rhea)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -621,6 +693,16 @@ describe("Pi turn ingest", () => {
       [{ senderName: "Lira", senderId: "agent-lira", text: "Sweep done" }],
       [{ text: "Plain words from the person" }],
     ]);
+  });
+
+  it("leaves room for the fields when it cuts a long message", () => {
+    const fields = { harness: "pi", author: "rheatwoen" };
+    const chunks = ingestMessages({ role: "user", content: "ą".repeat(20_000) }, fields);
+    const sizes = chunks.map(({ content }) => new TextEncoder().encode(content).length);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(32_768);
+    expect(
+      chunks.every(({ content }) => content.endsWith("\n\nharness: pi\nauthor: rheatwoen")),
+    ).toBe(true);
   });
 
   it("drops a timestamp past year 9999 instead of a message the service refuses", () => {

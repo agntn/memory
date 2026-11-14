@@ -12,7 +12,8 @@ import {
 
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
-export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
+/** Pi's memory settings, under the agent folder next to the other agntn packages' files. */
+export const PI_MEMORY_CONFIG_PATH = join("agntn", "memory.json");
 export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
 export const MEMORY_AGENT_NAMESPACE_ENV = "AGNTN_MEMORY_AGENT_NAMESPACE";
 /** An OpenBot agent's namespace is its name unless a template says otherwise. */
@@ -125,7 +126,7 @@ function parsePiScope(value: unknown, configPath: string): ProfileParams | undef
 
 /**
  * Resolve Pi's operational scope from environment first, then its agent-local
- * `memory-scope.json`. Pi does not load `.env` files, so the extension owns this
+ * `agntn/memory.json`. Pi does not load `.env` files, so the extension owns this
  * narrow non-secret configuration path.
  *
  * @param env - Pi process environment and optional scope override.
@@ -149,11 +150,14 @@ export function configuredPiMemoryScope(
  *
  * @param env - Pi process environment.
  * @param homeDirectory - Home directory used to expand the Pi agent path.
- * @returns {string} Path of `memory-scope.json`.
+ * @returns {string} Path of `agntn/memory.json`.
  */
-function piScopePath(env: Readonly<NodeJS.ProcessEnv>, homeDirectory: string): string {
+export function piScopePath(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): string {
   const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
-  return join(agentDir, PI_MEMORY_SCOPE_FILENAME);
+  return join(agentDir, PI_MEMORY_CONFIG_PATH);
 }
 
 /**
@@ -352,4 +356,48 @@ export function configuredPiAgentNamespaceTemplate(
     return DEFAULT_AGENT_NAMESPACE_TEMPLATE;
   }
   return parseAgentNamespaceTemplate(value.agentNamespace, `agentNamespace in ${configPath}`);
+}
+
+/**
+ * Check one channel's scope, written as `namespace/profile`.
+ *
+ * @param value - The configured scope.
+ * @param source - Where it came from, named in the error.
+ * @returns {ProfileParams} The scope.
+ * @throws {Error} When it isn't two valid memory names.
+ */
+function parseChannelScope(value: unknown, source: string): ProfileParams {
+  const [namespace, profile, extra] = typeof value === "string" ? value.split("/") : [];
+  if (extra !== undefined) throw new Error(`${source} must be namespace/profile`);
+  return validateMemoryScope(namespace?.trim(), profile?.trim(), source);
+}
+
+/**
+ * The project each OpenBot channel ingests into, keyed by channel id: `openbotChannels` in Pi's file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {ReadonlyMap<string, ProfileParams | null>} The scopes, `null` for a channel left unmapped on purpose.
+ * @throws {Error} When the map or one of its scopes is malformed.
+ */
+export function configuredPiOpenBotChannels(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): ReadonlyMap<string, ProfileParams | null> {
+  const configPath = piScopePath(env, homeDirectory);
+  const value = readPiScope(configPath);
+  if (typeof value !== "object" || value === null || !("openbotChannels" in value)) {
+    return new Map();
+  }
+  const channels = value.openbotChannels;
+  const source = `openbotChannels in ${configPath}`;
+  if (typeof channels !== "object" || channels === null || Array.isArray(channels)) {
+    throw new Error(`${source} must map channel ids to namespace/profile`);
+  }
+  return new Map(
+    Object.entries(channels).map(([id, scope]) => [
+      id,
+      parseChannelScope(scope, `${source}.${id}`),
+    ]),
+  );
 }

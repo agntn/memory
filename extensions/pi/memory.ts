@@ -8,13 +8,20 @@ import {
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
-import { createIngestRouter, type IngestRouterOptions } from "../shared/memory-ingest-routes.ts";
+import {
+  createIngestRouter,
+  type IngestRouterOptions,
+  type RouteHost,
+  unmappedChannelNotice,
+} from "../shared/memory-ingest-routes.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
 import { openBotDatabasePath } from "../shared/memory-openbot.ts";
 import {
   configuredPiAgentNamespaceTemplate,
   configuredPiIngestTurns,
   configuredPiMemoryScope,
+  configuredPiOpenBotChannels,
+  piScopePath,
 } from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
@@ -84,6 +91,21 @@ function turnContext(ctx: ExtensionContext): TurnContext {
 }
 
 /**
+ * What the router reads from a Pi event's context.
+ *
+ * @param ctx - Pi's context for the event.
+ * @returns {RouteHost} The working directory, session file, prompt and warning channel.
+ */
+function routeHost(ctx: ExtensionContext): RouteHost {
+  return {
+    cwd: ctx.cwd,
+    sessionFile: () => ctx.sessionManager.getSessionFile(),
+    systemPrompt: () => ctx.getSystemPrompt(),
+    warn: turnContext(ctx).warn,
+  };
+}
+
+/**
  * Feed the conversation to `memory_ingest` every `every` turns and once more on shutdown.
  *
  * @param pi - Pi's extension API.
@@ -92,17 +114,18 @@ function turnContext(ctx: ExtensionContext): TurnContext {
  */
 function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every: number): void {
   const ingest = createTurnIngest(every);
-  const route = createIngestRouter(options);
+  const router = createIngestRouter(options);
+  let noticed = false;
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (noticed) return undefined;
+    noticed = true;
+    const channel = router.unmappedChannel(routeHost(ctx));
+    if (channel === undefined) return undefined;
+    const content = unmappedChannelNotice(channel, piScopePath());
+    return { message: { customType: "agntn-memory", content, display: true } };
+  });
   pi.on("message_end", (event, ctx) => {
-    const { warn } = turnContext(ctx);
-    ingest.add(
-      route(event.message, {
-        cwd: ctx.cwd,
-        sessionFile: () => ctx.sessionManager.getSessionFile(),
-        systemPrompt: () => ctx.getSystemPrompt(),
-        warn,
-      }),
-    );
+    ingest.add(router.route(event.message, routeHost(ctx)));
   });
   pi.on("turn_end", (_event, ctx) => {
     ingest.turn(turnContext(ctx));
@@ -112,15 +135,20 @@ function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every:
 
 export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
+  const openBotDatabase = openBotDatabasePath();
+  const fields = hostMemoryFields(
+    openBotDatabase === undefined ? "pi" : { harness: "pi", app: "openbot" },
+  );
   const ingestTurns = configuredPiIngestTurns();
   if (ingestTurns !== undefined) {
     const agentNamespace = configuredPiAgentNamespaceTemplate();
-    const openBotDatabase = openBotDatabasePath();
     ingestEveryTurns(
       pi,
       {
         ...(scope === undefined ? {} : { fallback: scope }),
         ...(openBotDatabase === undefined ? {} : { openBotDatabase }),
+        openBotChannels: configuredPiOpenBotChannels(),
+        ...(fields === undefined ? {} : { fields }),
         agentNamespace,
       },
       ingestTurns,
@@ -128,7 +156,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   }
   const tools = createMemoryTools({
     scope,
-    fields: hostMemoryFields("pi"),
+    fields,
     writeSession: (host) => hostSessionId("pi", host),
   });
   registerPiTools(pi, tools, {

@@ -241,4 +241,23 @@ describe("memory fields", () => {
 
     expect(() => configuredMemoryFields()).toThrow("AGNTN_MEMORY_FIELDS must be a JSON object");
   });
+
+  it("puts the app after the harness, and the variable still wins", () => {
+    expect(hostMemoryFields({ harness: "pi", app: "openbot" }, {})).toEqual({
+      harness: "pi",
+      app: "openbot",
+    });
+    expect(
+      Object.keys(
+        hostMemoryFields(
+          { harness: "pi", app: "openbot" },
+          { AGNTN_MEMORY_FIELDS: '{"app":"bot","team":"a"}' },
+        )!,
+      ),
+    ).toEqual(["harness", "app", "team"]);
+    expect(
+      hostMemoryFields({ harness: "pi", app: "openbot" }, { AGNTN_MEMORY_FIELDS: '{"app":"bot"}' })!
+        .app,
+    ).toBe("bot");
+  });
 });

@@ -15,6 +15,7 @@ import {
   writeAgentNamespace,
 } from "./memory-openbot.ts";
 import { memoryName, projectMemoryScope } from "./memory-project-scope.ts";
+import type { MemoryFields } from "./memory-fields.ts";
 import type { ProfileParams } from "./memory-tools.types.ts";
 import { singleLineToolText } from "./terminal-text.ts";
 
@@ -26,6 +27,10 @@ export interface IngestRouterOptions {
   readonly agentNamespace?: string;
   /** OpenBot's database, where a channel session's senders are recorded. */
   readonly openBotDatabase?: string;
+  /** The project each OpenBot channel ingests into, by channel id; `null` leaves one unmapped. */
+  readonly openBotChannels?: ReadonlyMap<string, ProfileParams | null>;
+  /** The host's fields; an OpenBot message also gets its `author`. */
+  readonly fields?: MemoryFields;
 }
 
 /** What the router reads from the host for one message. */
@@ -37,7 +42,11 @@ export interface RouteHost {
 }
 
 /** Sends each host message to the profile it belongs in. */
-export type IngestRouter = (message: unknown, host: RouteHost) => RoutedMessage[];
+export interface IngestRouter {
+  readonly route: (message: unknown, host: RouteHost) => RoutedMessage[];
+  /** The session's OpenBot channel when the configuration doesn't map it, else nothing. */
+  readonly unmappedChannel: (host: RouteHost) => ChannelSenders | undefined;
+}
 
 /** How the conversation is split once per session. */
 type Mode =
@@ -120,7 +129,7 @@ function sessionMode(host: RouteHost, options: IngestRouterOptions): Mode {
  */
 function userSegments(text: string, channel: ChannelSenders | undefined): OpenBotSegment[] {
   const clean = withoutInjectedBlocks(text);
-  const sender = channel?.(clean);
+  const sender = channel?.sender(clean);
   if (sender === undefined) return openBotSegments(text);
   return [
     sender.senderId === undefined ? { text: clean } : { senderId: sender.senderId, text: clean },
@@ -177,26 +186,83 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     if (role !== "user") {
       if (interlocutor === undefined) return [];
       const scope = { namespace: openbot.namespace, profile: interlocutor };
-      return ingestMessages(message).map((ingest) => ({ scope, message: ingest }));
+      const fields = { ...options.fields, author: openbot.namespace };
+      return ingestMessages(message, fields).map((ingest) => ({ scope, message: ingest }));
     }
     for (const segment of userSegments(messageText(content), openbot.channel)) {
       const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
       interlocutor = profile;
       if (profile === undefined) continue;
       const scope = { namespace: openbot.namespace, profile };
-      for (const ingest of ingestMessages({ role, content: segment.text, timestamp })) {
+      const fields = { ...options.fields, author: profile };
+      for (const ingest of ingestMessages({ role, content: segment.text, timestamp }, fields)) {
         routed.push({ scope, message: ingest });
       }
     }
     return routed;
   }
 
-  return (message, host) => {
+  /**
+   * Send a mapped channel's messages to its project, the agent's own split kept as the fallback.
+   *
+   * @param routed - Messages routed by sender.
+   * @param channel - The session's channel, if any.
+   * @returns {RoutedMessage[]} The messages, moved to the channel's project when it has one.
+   */
+  function toChannelProject(
+    routed: readonly RoutedMessage[],
+    channel: ChannelSenders | undefined,
+  ): RoutedMessage[] {
+    const project =
+      channel === undefined ? undefined : options.openBotChannels?.get(channel.channelId);
+    if (!project) return [...routed];
+    return routed.map(({ scope, message }) => ({ scope: project, message, fallback: scope }));
+  }
+
+  /**
+   * The session's mode, decided once.
+   *
+   * @param host - The host at the first event.
+   * @returns {Mode} How the session's messages are routed.
+   */
+  function sessionModeOnce(host: RouteHost): Mode {
     mode ??= sessionMode(host, options);
-    if (mode.kind === "off") return [];
-    if (mode.kind === "openbot") return routeOpenBot(message, mode);
-    const { scope } = mode;
-    const extra = mode.fallback === undefined ? {} : { fallback: mode.fallback };
-    return ingestMessages(message).map((ingest) => ({ scope, message: ingest, ...extra }));
+    return mode;
+  }
+
+  const route = (message: unknown, host: RouteHost): RoutedMessage[] => {
+    const current = sessionModeOnce(host);
+    if (current.kind === "off") return [];
+    if (current.kind === "openbot") {
+      return toChannelProject(routeOpenBot(message, current), current.channel);
+    }
+    const { scope } = current;
+    const extra = current.fallback === undefined ? {} : { fallback: current.fallback };
+    return ingestMessages(message, options.fields).map((ingest) => ({
+      scope,
+      message: ingest,
+      ...extra,
+    }));
   };
+
+  const unmappedChannel = (host: RouteHost): ChannelSenders | undefined => {
+    const current = sessionModeOnce(host);
+    if (current.kind !== "openbot" || current.channel === undefined) return undefined;
+    return options.openBotChannels?.has(current.channel.channelId) ? undefined : current.channel;
+  };
+
+  return { route, unmappedChannel };
+}
+
+/**
+ * What an agent in an unmapped OpenBot channel is told once per session.
+ *
+ * @param channel - The channel the session works in.
+ * @param configPath - Pi's `agntn/memory.json`.
+ * @returns {string} The note.
+ */
+export function unmappedChannelNotice(channel: ChannelSenders, configPath: string): string {
+  const name =
+    channel.channelName === undefined ? "" : ` "${singleLineToolText(channel.channelName)}"`;
+  return `agntn/memory: OpenBot channel${name} (${channel.channelId}) has no entry in openbotChannels in ${configPath}, so this channel's conversation is ingested under each agent and whoever it talks to. If the channel is about one project, tell the user to map the id there to namespace/profile, or to null when it has none.`;
 }
