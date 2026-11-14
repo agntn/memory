@@ -397,7 +397,7 @@ export function configuredPiOpenBotChannels(
   return new Map(
     Object.entries(channels).map(([id, scope]) => [
       id,
-      parseChannelScope(scope, `${source}.${id}`),
+      scope === null ? null : parseChannelScope(scope, `${source}.${id}`),
     ]),
   );
 }

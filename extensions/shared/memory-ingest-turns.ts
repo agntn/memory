@@ -197,8 +197,8 @@ function fallbackNotice(scope: ProfileParams, fallback: ProfileParams | undefine
  */
 export function createTurnIngest(every: number): TurnIngest {
   const queued: RoutedMessage[] = [];
-  /** Scopes whose namespace turned out missing, and where their messages go now. */
-  const redirects = new Map<string, ProfileParams | undefined>();
+  /** Scopes whose namespace turned out missing; their messages go to their own fallbacks. */
+  const missing = new Set<string>();
   let turns = 0;
   let running: Promise<void> | undefined;
 
@@ -209,8 +209,7 @@ export function createTurnIngest(every: number): TurnIngest {
    * @returns {ProfileParams | undefined} The scope, or nothing when it has nowhere to go.
    */
   function target(routed: RoutedMessage): ProfileParams | undefined {
-    const key = scopeKey(routed.scope);
-    return redirects.has(key) ? redirects.get(key) : routed.scope;
+    return missing.has(scopeKey(routed.scope)) ? routed.fallback : routed.scope;
   }
 
   /**
@@ -245,28 +244,28 @@ export function createTurnIngest(every: number): TurnIngest {
   }
 
   /**
-   * Send one run, moving its scope to the fallback once when the namespace is missing.
+   * Send one run; a missing namespace sends its messages to their fallbacks from then on.
    *
    * @param run - Messages sharing one target.
    * @param context - Session and warning channel of the conversation.
-   * @returns {Promise<void>} Settles once the service took them or they had nowhere to go.
+   * @returns {Promise<boolean>} False when the run's scope turned out missing and must be regrouped.
    */
-  async function sendRun(run: readonly RoutedMessage[], context: TurnContext): Promise<void> {
-    const scope = target(run[0]!);
-    if (scope === undefined) return;
+  async function sendRun(run: readonly RoutedMessage[], context: TurnContext): Promise<boolean> {
+    const first = run[0]!;
+    const scope = target(first);
+    if (scope === undefined) return true;
     const { memoryToolExecutors } = await import("./memory-tools.ts");
     const session = context.sessionId === undefined ? {} : { sessionId: context.sessionId };
     const messages = run.map((routed) => ({ ...routed.message }));
     try {
       await memoryToolExecutors.ingest({ ...scope, ...session, messages });
+      return true;
     } catch (error) {
-      if (!isMissingNamespace(error) || redirects.has(scopeKey(run[0]!.scope))) throw error;
-      const { fallback } = run[0]!;
-      redirects.set(scopeKey(scope), fallback);
-      context.warn(fallbackNotice(scope, fallback));
-      if (fallback !== undefined) {
-        await memoryToolExecutors.ingest({ ...fallback, ...session, messages });
-      }
+      const key = scopeKey(first.scope);
+      if (!isMissingNamespace(error) || missing.has(key)) throw error;
+      missing.add(key);
+      context.warn(fallbackNotice(first.scope, first.fallback));
+      return false;
     }
   }
 
@@ -283,7 +282,7 @@ export function createTurnIngest(every: number): TurnIngest {
     while (sent < batch.length) {
       const length = runLength(batch, sent);
       try {
-        await sendRun(batch.slice(sent, sent + length), context);
+        if (!(await sendRun(batch.slice(sent, sent + length), context))) continue;
       } catch (error) {
         const landed = mayHaveLanded(error);
         queued.unshift(...batch.slice(landed ? sent + length : sent));

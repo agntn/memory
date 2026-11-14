@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { MAX_TOOL_PROFILE_CHARACTERS } from "./memory-tool-contract.ts";
 import type { RoutedMessage } from "./memory-ingest-turns.ts";
+import type { IngestParams } from "./memory-tools.types.ts";
 import { ingestMessages, messageText } from "./memory-ingest-turns.ts";
 import {
   agentNamespace,
@@ -48,17 +49,56 @@ export interface IngestRouter {
   readonly unmappedChannel: (host: RouteHost) => ChannelSenders | undefined;
 }
 
+type IngestMessage = IngestParams["messages"][number];
+
+/** An OpenBot session: the agent's namespace, the agents' folder, its channel and remote project. */
+interface OpenBotMode {
+  readonly kind: "openbot";
+  readonly namespace: string;
+  readonly agentsDirectory: string;
+  readonly channel?: ChannelSenders;
+  /** The project the remote of the agent's folder names, if any. */
+  readonly project?: ProfileParams;
+}
+
+/**
+ * The agent's own scope for one speaker, when there is one.
+ *
+ * @param namespace - The agent's namespace.
+ * @param profile - The speaker's profile, if known.
+ * @returns {ProfileParams | undefined} The scope, or nothing without a profile.
+ */
+function personalScope(namespace: string, profile: string | undefined): ProfileParams | undefined {
+  return profile === undefined ? undefined : { namespace, profile };
+}
+
+/**
+ * Give messages their scope: the project with the personal scope as fallback, else the personal one.
+ *
+ * @param messages - Pieces of one message.
+ * @param personal - The speaker's scope in the agent's namespace, if any.
+ * @param project - The session's project, if any.
+ * @returns {RoutedMessage[]} The routed pieces, none when neither scope exists.
+ */
+function placed(
+  messages: readonly Readonly<IngestMessage>[],
+  personal: ProfileParams | undefined,
+  project: ProfileParams | undefined,
+): RoutedMessage[] {
+  if (project !== undefined) {
+    return messages.map((message) =>
+      personal === undefined
+        ? { scope: project, message }
+        : { scope: project, message, fallback: personal },
+    );
+  }
+  return personal === undefined ? [] : messages.map((message) => ({ scope: personal, message }));
+}
+
 /** How the conversation is split once per session. */
 type Mode =
   | { readonly kind: "scope"; readonly scope: ProfileParams; readonly fallback?: ProfileParams }
-  | {
-      readonly kind: "openbot";
-      readonly namespace: string;
-      readonly agentsDirectory: string;
-      readonly channel?: ChannelSenders;
-      /** The project the remote of the agent's folder names, if any. */
-      readonly project?: ProfileParams;
-    }
+  | OpenBotMode
   | { readonly kind: "off" };
 
 /**
@@ -208,58 +248,49 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
   }
 
   /**
-   * Route one message of an OpenBot agent.
+   * The project an OpenBot session ingests into: its mapped channel's, else its remote's.
    *
-   * @param message - The host message.
-   * @param openbot - The agent's namespace and the agents' folder.
-   * @returns {RoutedMessage[]} Its stretches, each to its sender's profile.
+   * @param openbot - The session's channel and remote project.
+   * @returns {ProfileParams | undefined} The project, or nothing for the agent's own split.
    */
-  function routeOpenBot(
-    message: unknown,
-    openbot: Readonly<{ namespace: string; agentsDirectory: string; channel?: ChannelSenders }>,
-  ): RoutedMessage[] {
-    const routed: RoutedMessage[] = [];
-    const { role, content, timestamp } = message as Record<string, unknown>;
-    if (role !== "user") {
-      if (interlocutor === undefined) return [];
-      const scope = { namespace: openbot.namespace, profile: interlocutor };
-      const fields = {
-        ...openBotContextFields(options.fields, openbot),
-        author: openbot.namespace,
-      };
-      return ingestMessages(message, fields).map((ingest) => ({ scope, message: ingest }));
-    }
-    for (const segment of userSegments(messageText(content), openbot.channel)) {
-      const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
-      interlocutor = profile;
-      if (profile === undefined) continue;
-      const scope = { namespace: openbot.namespace, profile };
-      const fields = { ...openBotContextFields(options.fields, openbot), author: profile };
-      for (const ingest of ingestMessages({ role, content: segment.text, timestamp }, fields)) {
-        routed.push({ scope, message: ingest });
-      }
-    }
-    return routed;
-  }
-
-  /**
-   * Send an OpenBot session's messages to its project, the agent's own split kept as the fallback.
-   *
-   * @param routed - Messages routed by sender.
-   * @param openbot - The session's channel and remote project, if any.
-   * @returns {RoutedMessage[]} The messages, moved to the mapped channel's or the remote's project.
-   */
-  function toProject(
-    routed: readonly RoutedMessage[],
+  function sessionProject(
     openbot: Readonly<{ channel?: ChannelSenders; project?: ProfileParams }>,
-  ): RoutedMessage[] {
+  ): ProfileParams | undefined {
     const mapped =
       openbot.channel === undefined
         ? undefined
         : options.openBotChannels?.get(openbot.channel.channelId);
-    const project = mapped ?? openbot.project;
-    if (!project) return [...routed];
-    return routed.map(({ scope, message }) => ({ scope: project, message, fallback: scope }));
+    return mapped ?? openbot.project;
+  }
+
+  /**
+   * Route one message of an OpenBot agent.
+   *
+   * @param message - The host message.
+   * @param openbot - The agent's namespace, the agents' folder, the channel and the remote's project.
+   * @returns {RoutedMessage[]} Its stretches, each to the project or its sender's profile.
+   */
+  function routeOpenBot(message: unknown, openbot: OpenBotMode): RoutedMessage[] {
+    const project = sessionProject(openbot);
+    const context = openBotContextFields(options.fields, openbot);
+    const { role, content, timestamp } = message as Record<string, unknown>;
+    if (role !== "user") {
+      const fields = { ...context, author: openbot.namespace };
+      return placed(
+        ingestMessages(message, fields),
+        personalScope(openbot.namespace, interlocutor),
+        project,
+      );
+    }
+    const routed: RoutedMessage[] = [];
+    for (const segment of userSegments(messageText(content), openbot.channel)) {
+      const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
+      interlocutor = profile;
+      const fields = profile === undefined ? context : { ...context, author: profile };
+      const pieces = ingestMessages({ role, content: segment.text, timestamp }, fields);
+      routed.push(...placed(pieces, personalScope(openbot.namespace, profile), project));
+    }
+    return routed;
   }
 
   /**
@@ -277,7 +308,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     const current = sessionModeOnce(host);
     if (current.kind === "off") return [];
     if (current.kind === "openbot") {
-      return toProject(routeOpenBot(message, current), current);
+      return routeOpenBot(message, current);
     }
     const { scope } = current;
     const extra = current.fallback === undefined ? {} : { fallback: current.fallback };

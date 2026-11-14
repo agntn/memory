@@ -11,7 +11,8 @@ import {
   MemoryServerError,
 } from "../src/errors.ts";
 import { execFileSync } from "node:child_process";
-import { ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
+import { createTurnIngest, ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
+import { configuredPiOpenBotChannels } from "../extensions/shared/memory-scope.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openBotDatabasePath, openBotSegments } from "../extensions/shared/memory-openbot.ts";
 import { remoteMemoryScope } from "../extensions/shared/memory-project-scope.ts";
@@ -512,6 +513,110 @@ describe("Pi turn ingest", () => {
         profile: "memory",
         messages: [
           { role: "user", content: stamped("Ship it", "oritwoen", { agent: "rheatwoen" }) },
+        ],
+      });
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a channel mapped to null and still loads", () => {
+    const piDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    try {
+      mkdirSync(join(piDir, "agntn"), { recursive: true });
+      writeFileSync(
+        join(piDir, "agntn", "memory.json"),
+        JSON.stringify({ openbotChannels: { c0: null, c1: "puzzles/gsmg" } }),
+      );
+      vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "");
+      expect([...configuredPiOpenBotChannels()]).toEqual([
+        ["c0", null],
+        ["c1", { namespace: "puzzles", profile: "gsmg" }],
+      ]);
+      expect(loadPi().size).toBe(4);
+    } finally {
+      rmSync(piDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends each message to its own fallback when the project's namespace is missing", async () => {
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockRejectedValueOnce(new MemoryNotFoundError("namespace 'puzzles' not found", 404))
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const turns = createTurnIngest(50);
+    const project = { namespace: "puzzles", profile: "gsmg" };
+    turns.add([
+      {
+        scope: project,
+        message: { role: "user", content: "from Ori" },
+        fallback: { namespace: "rheatwoen", profile: "oritwoen" },
+      },
+      {
+        scope: project,
+        message: { role: "user", content: "from Mira" },
+        fallback: { namespace: "rheatwoen", profile: "miratwoen" },
+      },
+    ]);
+    await turns.flush({ warn: notify });
+
+    expect(
+      ingest.mock.calls.map(([params]) => [
+        `${params.namespace}/${params.profile}`,
+        params.messages.map(({ content }) => content),
+      ]),
+    ).toEqual([
+      ["puzzles/gsmg", ["from Ori", "from Mira"]],
+      ["rheatwoen/oritwoen", ["from Ori"]],
+      ["rheatwoen/miratwoen", ["from Mira"]],
+    ]);
+  });
+
+  it("sends an OpenBot agent's project conversation there without a personal scope", async () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-rhea");
+      mkdirSync(join(cwd, ".pi", "agntn"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".pi", "agntn", "memory.json"),
+        JSON.stringify({ namespace: "rheatwoen" }),
+      );
+      execFileSync("git", ["init", "-q", cwd]);
+      execFileSync("git", [
+        "-C",
+        cwd,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/agntn/memory.git",
+      ]);
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "50");
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const handlers = loadPi();
+      const rhea = {
+        ...ctx,
+        cwd,
+        getSystemPrompt: () =>
+          '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+      };
+
+      await handlers.get("message_end")!({ message: { role: "user", content: "Ship it" } }, rhea);
+      await handlers.get("message_end")!(
+        { message: { role: "assistant", content: "Shipped" } },
+        rhea,
+      );
+      await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
+
+      expect(ingest.mock.calls[0]![0]).toMatchObject({
+        namespace: "agntn",
+        profile: "memory",
+        messages: [
+          { role: "user", content: stamped("Ship it", undefined, { agent: "rheatwoen" }) },
+          { role: "assistant", content: stamped("Shipped", "rheatwoen", { agent: "rheatwoen" }) },
         ],
       });
     } finally {
