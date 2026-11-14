@@ -1348,15 +1348,11 @@ export const memoryToolExecutors = {
       const first = failed[0];
       /** A single-id total failure keeps memory_delete's flat error shape instead of a one-entry listing. */
       if (first && entries.length === 1) throw explainMissing(params, first[0], first[1].error);
-      throw new Error(
-        [
-          `Every read in ${memoryTarget(params)} failed:`,
-          ...failed.map(
-            ([id, { error }]) =>
-              `${singleLineToolText(id)}: ${describeReadError(params, id, error)}`,
-          ),
-        ].join("\n"),
+      const reasons = failed.map(
+        ([id, { error }]) => `${quoteToolText(id)}: ${describeReadError(params, id, error)}`,
       );
+      /** Every surface flattens a newline to a space, so entries get a separator that survives it. */
+      throw new Error(`Every read in ${memoryTarget(params)} failed: ${reasons.join("; ")}`);
     }
     const memories = entries.map(([id, reading]) =>
       "memory" in reading
