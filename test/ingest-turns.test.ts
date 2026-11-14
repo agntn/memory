@@ -22,8 +22,16 @@ vi.mock("@earendil-works/pi-tui", () => ({ Text: class Text {} }));
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
 /* Message content as the ingest sends it, ending with Pi's fields. */
-const stamped = (text: string, author?: string, app?: string) =>
-  [`${text}\n\nharness: pi`, app && `app: ${app}`, author && `author: ${author}`]
+const stamped = (
+  text: string,
+  author?: string,
+  context: Readonly<{ app?: string; agent?: string; channel?: string; channel_name?: string }> = {},
+) =>
+  [
+    `${text}\n\nharness: pi`,
+    ...Object.entries(context).map(([key, value]) => `${key}: ${value}`),
+    author && `author: ${author}`,
+  ]
     .filter(Boolean)
     .join("\n");
 
@@ -427,20 +435,85 @@ describe("Pi turn ingest", () => {
           params.messages.map(({ content }) => content),
         ]),
       ).toEqual([
-        ["rheatwoen/oritwoen", [stamped("Hi Rhea", "oritwoen"), stamped("Hi Ori", "rheatwoen")]],
+        [
+          "rheatwoen/oritwoen",
+          [
+            stamped("Hi Rhea", "oritwoen", { agent: "rheatwoen" }),
+            stamped("Hi Ori", "rheatwoen", { agent: "rheatwoen" }),
+          ],
+        ],
         [
           "rheatwoen/miratwoen",
           [
-            stamped("Check the retry log", "miratwoen"),
-            stamped("Done, Mira", "rheatwoen"),
-            stamped("One more", "miratwoen"),
+            stamped("Check the retry log", "miratwoen", { agent: "rheatwoen" }),
+            stamped("Done, Mira", "rheatwoen", { agent: "rheatwoen" }),
+            stamped("One more", "miratwoen", { agent: "rheatwoen" }),
           ],
         ],
         [
           "rheatwoen/lira-two-en",
-          [stamped("And me", "lira-two-en"), stamped("Both handled", "rheatwoen")],
+          [
+            stamped("And me", "lira-two-en", { agent: "rheatwoen" }),
+            stamped("Both handled", "rheatwoen", { agent: "rheatwoen" }),
+          ],
         ],
       ]);
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
+  it("sends an OpenBot agent in a project checkout there, still without OpenBot's blocks", async () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-rhea");
+      mkdirSync(join(cwd, ".pi", "agntn"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".pi", "agntn", "memory.json"),
+        JSON.stringify({ namespace: "rheatwoen" }),
+      );
+      execFileSync("git", ["init", "-q", cwd]);
+      execFileSync("git", [
+        "-C",
+        cwd,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/agntn/memory.git",
+      ]);
+      vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "aeitwoen");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "50");
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const handlers = loadPi();
+      const rhea = {
+        ...ctx,
+        cwd,
+        getSystemPrompt: () =>
+          '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+      };
+
+      await handlers.get("message_end")!(
+        {
+          message: {
+            role: "user",
+            content: "<openbot_saved_memories>\nold fact\n</openbot_saved_memories>\nShip it",
+          },
+        },
+        rhea,
+      );
+      await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
+
+      expect(ingest.mock.calls[0]![0]).toMatchObject({
+        namespace: "agntn",
+        profile: "memory",
+        messages: [
+          { role: "user", content: stamped("Ship it", "oritwoen", { agent: "rheatwoen" }) },
+        ],
+      });
     } finally {
       rmSync(agents, { recursive: true, force: true });
     }
@@ -623,15 +696,23 @@ describe("Pi turn ingest", () => {
         [
           "rheatwoen/oritwoen",
           [
-            stamped("Plan the release", "oritwoen", "openbot"),
-            stamped("Planned", "rheatwoen", "openbot"),
+            stamped("Plan the release", "oritwoen", {
+              app: "openbot",
+              agent: "rheatwoen",
+              channel: "c1",
+            }),
+            stamped("Planned", "rheatwoen", { app: "openbot", agent: "rheatwoen", channel: "c1" }),
           ],
         ],
         [
           "rheatwoen/miratwoen",
           [
-            stamped("Check the retry log", "miratwoen", "openbot"),
-            stamped("Checked", "rheatwoen", "openbot"),
+            stamped("Check the retry log", "miratwoen", {
+              app: "openbot",
+              agent: "rheatwoen",
+              channel: "c1",
+            }),
+            stamped("Checked", "rheatwoen", { app: "openbot", agent: "rheatwoen", channel: "c1" }),
           ],
         ],
       ]);

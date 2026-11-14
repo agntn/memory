@@ -108,7 +108,7 @@ A channel about one project can skip the split and go straight there. Map its id
 
 A channel with no project gets `null`. A channel missing from the map still works, it just splits by agent. The agent hears about it once per session, id included, so you can add it.
 
-Every ingested message ends with your fields, like a remembered memory does, plus `author` in OpenBot: you, the teammate, or the agent itself. Shared namespaces stay readable that way.
+Every ingested message ends with your fields, like a remembered memory does, plus `author` in OpenBot: you, the teammate, or the agent itself. `agent`, `channel` and `channel_name` say where the conversation happened, so a fact keeps its context. Shared namespaces stay readable that way.
 
 Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/agntn/memory.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
 

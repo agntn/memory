@@ -56,6 +56,8 @@ type Mode =
       readonly namespace: string;
       readonly agentsDirectory: string;
       readonly channel?: ChannelSenders;
+      /** The project the remote of the agent's folder names, if any. */
+      readonly project?: ProfileParams;
     }
   | { readonly kind: "off" };
 
@@ -89,7 +91,23 @@ function openBotNamespace(
 }
 
 /**
- * Pick the session's mode: the remote's project, an OpenBot agent, or the bound scope.
+ * The mode outside OpenBot: the remote's project, else the bound scope.
+ *
+ * @param project - Scope the remote names, if any.
+ * @param fallback - The bound scope, if any.
+ * @returns {Mode} The project with the bound scope as fallback, the bound scope, or off.
+ */
+function plainMode(project: ProfileParams | undefined, fallback: ProfileParams | undefined): Mode {
+  if (project === undefined) {
+    return fallback === undefined ? { kind: "off" } : { kind: "scope", scope: fallback };
+  }
+  return fallback === undefined
+    ? { kind: "scope", scope: project }
+    : { kind: "scope", scope: project, fallback };
+}
+
+/**
+ * Pick the session's mode: an OpenBot agent, the remote's project, or the bound scope.
  *
  * @param host - The host at the first message.
  * @param options - The bound scope and the agent namespace template.
@@ -98,15 +116,8 @@ function openBotNamespace(
 function sessionMode(host: RouteHost, options: IngestRouterOptions): Mode {
   const { fallback } = options;
   const project = projectMemoryScope(host.cwd);
-  if (project !== undefined) {
-    return fallback === undefined
-      ? { kind: "scope", scope: project }
-      : { kind: "scope", scope: project, fallback };
-  }
   const agent = openBotAgent(host.systemPrompt());
-  if (agent === undefined) {
-    return fallback === undefined ? { kind: "off" } : { kind: "scope", scope: fallback };
-  }
+  if (agent === undefined) return plainMode(project, fallback);
   const namespace = openBotNamespace(host, agent.name, options.agentNamespace);
   if (namespace === undefined) return { kind: "off" };
   const agentsDirectory = dirname(host.cwd);
@@ -115,9 +126,13 @@ function sessionMode(host: RouteHost, options: IngestRouterOptions): Mode {
     options.openBotDatabase === undefined || sessionFile === undefined
       ? undefined
       : openBotChannelSenders(options.openBotDatabase, sessionFile);
-  return channel === undefined
-    ? { kind: "openbot", namespace, agentsDirectory }
-    : { kind: "openbot", namespace, agentsDirectory, channel };
+  return {
+    kind: "openbot",
+    namespace,
+    agentsDirectory,
+    ...(channel === undefined ? {} : { channel }),
+    ...(project === undefined ? {} : { project }),
+  };
 }
 
 /**
@@ -134,6 +149,28 @@ function userSegments(text: string, channel: ChannelSenders | undefined): OpenBo
   return [
     sender.senderId === undefined ? { text: clean } : { senderId: sender.senderId, text: clean },
   ];
+}
+
+/**
+ * The fields every message of an OpenBot session shares: its agent, and its channel when it has one.
+ *
+ * @param hostFields - The host's fields.
+ * @param openbot - The agent's namespace and the session's channel.
+ * @returns {MemoryFields} Fields to which each message adds its `author`.
+ */
+function openBotContextFields(
+  hostFields: MemoryFields | undefined,
+  openbot: Readonly<{ namespace: string; channel?: ChannelSenders }>,
+): MemoryFields {
+  const { channel } = openbot;
+  const name =
+    channel?.channelName === undefined ? "" : singleLineToolText(channel.channelName).trim();
+  return {
+    ...hostFields,
+    agent: openbot.namespace,
+    ...(channel === undefined ? {} : { channel: channel.channelId }),
+    ...(name === "" ? {} : { channel_name: name }),
+  };
 }
 
 /**
@@ -186,7 +223,10 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     if (role !== "user") {
       if (interlocutor === undefined) return [];
       const scope = { namespace: openbot.namespace, profile: interlocutor };
-      const fields = { ...options.fields, author: openbot.namespace };
+      const fields = {
+        ...openBotContextFields(options.fields, openbot),
+        author: openbot.namespace,
+      };
       return ingestMessages(message, fields).map((ingest) => ({ scope, message: ingest }));
     }
     for (const segment of userSegments(messageText(content), openbot.channel)) {
@@ -194,7 +234,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
       interlocutor = profile;
       if (profile === undefined) continue;
       const scope = { namespace: openbot.namespace, profile };
-      const fields = { ...options.fields, author: profile };
+      const fields = { ...openBotContextFields(options.fields, openbot), author: profile };
       for (const ingest of ingestMessages({ role, content: segment.text, timestamp }, fields)) {
         routed.push({ scope, message: ingest });
       }
@@ -203,18 +243,21 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
   }
 
   /**
-   * Send a mapped channel's messages to its project, the agent's own split kept as the fallback.
+   * Send an OpenBot session's messages to its project, the agent's own split kept as the fallback.
    *
    * @param routed - Messages routed by sender.
-   * @param channel - The session's channel, if any.
-   * @returns {RoutedMessage[]} The messages, moved to the channel's project when it has one.
+   * @param openbot - The session's channel and remote project, if any.
+   * @returns {RoutedMessage[]} The messages, moved to the mapped channel's or the remote's project.
    */
-  function toChannelProject(
+  function toProject(
     routed: readonly RoutedMessage[],
-    channel: ChannelSenders | undefined,
+    openbot: Readonly<{ channel?: ChannelSenders; project?: ProfileParams }>,
   ): RoutedMessage[] {
-    const project =
-      channel === undefined ? undefined : options.openBotChannels?.get(channel.channelId);
+    const mapped =
+      openbot.channel === undefined
+        ? undefined
+        : options.openBotChannels?.get(openbot.channel.channelId);
+    const project = mapped ?? openbot.project;
     if (!project) return [...routed];
     return routed.map(({ scope, message }) => ({ scope: project, message, fallback: scope }));
   }
@@ -234,7 +277,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     const current = sessionModeOnce(host);
     if (current.kind === "off") return [];
     if (current.kind === "openbot") {
-      return toChannelProject(routeOpenBot(message, current), current.channel);
+      return toProject(routeOpenBot(message, current), current);
     }
     const { scope } = current;
     const extra = current.fallback === undefined ? {} : { fallback: current.fallback };
