@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import piMemoryExtension from "../extensions/pi/memory.ts";
+import { MemoryHttpError, MemoryNetworkError, MemoryServerError } from "../src/errors.ts";
 import { ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
 import { memoryToolExecutors } from "../extensions/shared/memory-tools.ts";
 
@@ -12,6 +13,7 @@ vi.mock("@earendil-works/pi-tui", () => ({ Text: class Text {} }));
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
 afterEach(() => {
+  notify.mockClear();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -106,14 +108,14 @@ describe("Pi turn ingest", () => {
     ]);
   });
 
-  it("warns about a failed ingest and sends the same messages on the next try", async () => {
+  it("sends a refused batch again on the next try", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
     const ingest = vi
       .spyOn(memoryToolExecutors, "ingest")
-      .mockRejectedValueOnce(new Error("Cloudflare answered 503"))
+      .mockRejectedValueOnce(new MemoryServerError("Cloudflare answered\u001B[2J 503", 503))
       .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
     const handlers = loadPi();
 
@@ -121,7 +123,7 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     expect(notify).toHaveBeenCalledWith(
-      "Memory ingest failed, 2 messages wait for the next try: Cloudflare answered 503",
+      "Memory ingest failed, 2 messages wait for the next try: Cloudflare answered [2J 503",
       "warning",
     );
     expect(ingest).toHaveBeenCalledTimes(2);
@@ -129,6 +131,47 @@ describe("Pi turn ingest", () => {
       "one",
       "re: one",
     ]);
+  });
+
+  it("never sends a batch twice when it may have landed", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockRejectedValueOnce(new MemoryNetworkError("socket hang up"))
+      .mockRejectedValueOnce(new MemoryHttpError("unreadable 200", 200))
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const handlers = loadPi();
+
+    await exchange(handlers, "one", 0);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await exchange(handlers, "two", 1_000);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(ingest).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledWith(
+      "Memory ingest may have landed, so 2 messages won't be sent again: socket hang up",
+      "warning",
+    );
+  });
+
+  it("says a batch refused on shutdown is gone", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "5");
+    vi.spyOn(memoryToolExecutors, "ingest").mockRejectedValue(new MemoryServerError("down", 503));
+    const handlers = loadPi();
+
+    await exchange(handlers, "one", 0);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "Memory ingest failed, 2 messages were not ingested: down",
+      "warning",
+    );
   });
 
   it("reads ingestTurns from Pi's scope file", () => {

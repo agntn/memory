@@ -90,7 +90,9 @@ Run the command from the checkout so `pnpm` can find the package. Pi doesn't loa
 
 Pi can also ingest the conversation itself, no tool call needed. Set `AGNTN_MEMORY_INGEST_TURNS=5`, or put `"ingestTurns": 5` in `memory-scope.json`. Every fifth turn, what you and the model wrote since the last batch goes to `memory_ingest` under the session ID. Pi counts a turn as one model response with its tool calls.
 
-Thinking, tool calls and tool results stay out. Whatever's left when the session ends goes in one last batch. It's off by default, because the whole conversation goes to Cloudflare. It needs a scope too: there's no profile to guess. A failed batch shows a warning and waits for the next try.
+Thinking, tool calls and tool results stay out. Whatever's left when the session ends goes in one last batch. It's off by default, because the whole conversation goes to Cloudflare. It needs a scope too: there's no profile to guess.
+
+A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 
 The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
 

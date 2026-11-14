@@ -1,5 +1,6 @@
 import { MAX_TOOL_INGEST_MESSAGES, MAX_TOOL_MESSAGE_CHARACTERS } from "./memory-tool-contract.ts";
 import type { IngestParams, ProfileParams } from "./memory-tools.types.ts";
+import { toolErrorMessage } from "./tool-errors.ts";
 
 type IngestMessage = IngestParams["messages"][number];
 
@@ -104,13 +105,37 @@ export function ingestMessages(message: unknown): IngestMessage[] {
 }
 
 /**
- * Error text without a stack.
+ * Whether the batch may have landed: a dropped connection or an unreadable 2xx answer.
  *
  * @param error - What the ingest threw.
- * @returns {string} The message.
+ * @returns {boolean} True when sending it again could extract it twice.
  */
-function failureText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function mayHaveLanded(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "MemoryNetworkError") return true;
+  const { statusCode } = error as { statusCode?: unknown };
+  return typeof statusCode === "number" && statusCode < 400;
+}
+
+/**
+ * The warning for a failed batch.
+ *
+ * @param error - What the ingest threw.
+ * @param reason - The failure as one line.
+ * @param counts - Messages left unsent, and whether no next try comes.
+ * @returns {string} One line for the terminal.
+ */
+function failureWarning(
+  error: unknown,
+  reason: string,
+  counts: Readonly<{ unsent: number; last: boolean }>,
+): string {
+  const { unsent, last } = counts;
+  if (mayHaveLanded(error)) {
+    return `Memory ingest may have landed, so ${unsent} messages won't be sent again: ${reason}`;
+  }
+  const fate = last ? "were not ingested" : "wait for the next try";
+  return `Memory ingest failed, ${unsent} messages ${fate}: ${reason}`;
 }
 
 /**
@@ -126,14 +151,15 @@ export function createTurnIngest(scope: ProfileParams, every: number): TurnInges
   let running: Promise<void> | undefined;
 
   /**
-   * Send what is queued now; whatever fails goes back to the front for the next try.
+   * Send what is queued now; a refused batch goes back to the front for the next try.
    *
    * @param context - Session and warning channel of the conversation.
+   * @param last - Whether this is the session's final send.
    * @returns {Promise<void>} Settles once the queue is empty or a batch failed.
    */
-  async function send(context: TurnContext): Promise<void> {
+  async function send(context: TurnContext, last: boolean): Promise<void> {
     const batch = queued.splice(0);
-    const { memoryToolExecutors } = await import("./memory-tools.ts");
+    const { memoryToolExecutors, withCredentialStep } = await import("./memory-tools.ts");
     const session = context.sessionId === undefined ? {} : { sessionId: context.sessionId };
     for (let sent = 0; sent < batch.length; sent += MAX_TOOL_INGEST_MESSAGES) {
       const messages = batch.slice(sent, sent + MAX_TOOL_INGEST_MESSAGES);
@@ -141,10 +167,9 @@ export function createTurnIngest(scope: ProfileParams, every: number): TurnInges
         await memoryToolExecutors.ingest({ ...scope, ...session, messages });
       } catch (error) {
         const unsent = batch.slice(sent);
-        queued.unshift(...unsent);
-        context.warn(
-          `Memory ingest failed, ${unsent.length} messages wait for the next try: ${failureText(error)}`,
-        );
+        if (!mayHaveLanded(error)) queued.unshift(...unsent);
+        const reason = withCredentialStep(toolErrorMessage(error), error);
+        context.warn(failureWarning(error, reason, { unsent: unsent.length, last }));
         return;
       }
     }
@@ -154,10 +179,11 @@ export function createTurnIngest(scope: ProfileParams, every: number): TurnInges
    * Start sending unless a send is already on its way.
    *
    * @param context - Session and warning channel of the conversation.
+   * @param last - Whether this is the session's final send.
    * @returns {Promise<void>} The send in flight.
    */
-  function start(context: TurnContext): Promise<void> {
-    running ??= send(context).finally(() => {
+  function start(context: TurnContext, last = false): Promise<void> {
+    running ??= send(context, last).finally(() => {
       running = undefined;
     });
     return running;
@@ -175,7 +201,7 @@ export function createTurnIngest(scope: ProfileParams, every: number): TurnInges
     },
     async flush(context) {
       await running;
-      if (queued.length > 0) await start(context);
+      if (queued.length > 0) await start(context, true);
     },
   };
 }
