@@ -85,6 +85,7 @@ export interface SummaryResult {
   summary: string;
 }
 
+/** What the backend's API really does. A flag is true only when the call works there. */
 export interface MemoryCapabilities {
   ingest: boolean;
   remember: boolean;

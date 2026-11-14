@@ -16,6 +16,7 @@ import type {
 // oxlint-disable-next-line typescript/no-unsafe-declaration-merging -- Interface merging preserves optional method absence at runtime.
 export abstract class MemoryProfile {}
 
+/** Memory operations inside one isolated profile. A method is missing when the backend has no such call. */
 export interface MemoryProfile {
   ingest?(messages: Iterable<Readonly<MemoryMessage>>, options?: IngestOptions): Promise<void>;
   remember?(memory: RememberInput, options?: AbortOptions): Promise<Memory>;
@@ -34,6 +35,7 @@ export abstract class MemoryProvider {
   abstract getProfile(profileName: string): Promise<MemoryProfile>;
 }
 
+/** One backend and its profile lifecycle. Optional methods exist only where its API has them. */
 export interface MemoryProvider {
   deleteProfile?(profileName: string, options?: AbortOptions): Promise<void>;
   /** Enumerates profile names when the provider supports discovery. */
