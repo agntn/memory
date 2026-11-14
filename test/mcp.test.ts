@@ -516,7 +516,7 @@ describe("memory MCP server", () => {
       {
         url: expect.stringContaining("/namespaces/default/profiles/oritwoen/remember"),
         body: {
-          content: "one canonical memory\n\nharness: claude-code",
+          content: "one canonical memory\n\nharness: claude",
           sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
         },
       },
@@ -567,11 +567,11 @@ describe("memory MCP server", () => {
     expect(requests).toEqual([
       {
         url: expect.stringContaining("/namespaces/research/profiles/project/remember"),
-        body: { content: "shared fact\n\nharness: claude-code", sessionId: session },
+        body: { content: "shared fact\n\nharness: claude", sessionId: session },
       },
       {
         url: expect.stringContaining("/namespaces/research/profiles/shared/remember"),
-        body: { content: "shared fact\n\nharness: claude-code", sessionId: session },
+        body: { content: "shared fact\n\nharness: claude", sessionId: session },
       },
     ]);
   });
@@ -617,7 +617,7 @@ describe("memory MCP server", () => {
       {
         url: expect.stringContaining("/namespaces/research/profiles/project/remember"),
         body: {
-          content: "a project fact\n\nharness: claude-code",
+          content: "a project fact\n\nharness: claude",
           sessionId: memorySessionId("claude", "/workspace/movie-enigma", "conversation-123"),
         },
       },

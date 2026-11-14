@@ -194,7 +194,7 @@ describe("memory fields", () => {
   it.each([
     [
       { CLAUDE_PROJECT_DIR: "/work", CLAUDE_CODE_SESSION_ID: "c-1", GROK_SESSION_ID: "g-1" },
-      "claude-code",
+      "claude",
     ],
     [{ CLAUDE_CODE_SESSION_ID: "c-1", GROK_SESSION_ID: "g-1" }, "grok"],
     [{ GROK_SESSION_ID: " " }, undefined],
