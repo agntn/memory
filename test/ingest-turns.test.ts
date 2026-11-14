@@ -12,9 +12,13 @@ import {
 } from "../src/errors.ts";
 import { execFileSync } from "node:child_process";
 import { createTurnIngest, ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
-import { configuredPiOpenBotChannels } from "../extensions/shared/memory-scope.ts";
+import {
+  configuredPiMemoryScope,
+  configuredPiOpenBotChannels,
+} from "../extensions/shared/memory-scope.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openBotDatabasePath, openBotSegments } from "../extensions/shared/memory-openbot.ts";
+import { createIngestRouter } from "../extensions/shared/memory-ingest-routes.ts";
 import { remoteMemoryScope } from "../extensions/shared/memory-project-scope.ts";
 import { memoryToolExecutors } from "../extensions/shared/memory-tools.ts";
 
@@ -520,6 +524,26 @@ describe("Pi turn ingest", () => {
     }
   });
 
+  it("still reads the older memory-scope.json when agntn/memory.json is missing", () => {
+    const piDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    try {
+      writeFileSync(
+        join(piDir, "memory-scope.json"),
+        JSON.stringify({ namespace: "default", profile: "oritwoen" }),
+      );
+      vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
+      expect(configuredPiMemoryScope()).toEqual({ namespace: "default", profile: "oritwoen" });
+      mkdirSync(join(piDir, "agntn"));
+      writeFileSync(
+        join(piDir, "agntn", "memory.json"),
+        JSON.stringify({ namespace: "aeitwoen", profile: "oritwoen" }),
+      );
+      expect(configuredPiMemoryScope()).toEqual({ namespace: "aeitwoen", profile: "oritwoen" });
+    } finally {
+      rmSync(piDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a channel mapped to null and still loads", () => {
     const piDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
     try {
@@ -571,6 +595,60 @@ describe("Pi turn ingest", () => {
       ["rheatwoen/oritwoen", ["from Ori"]],
       ["rheatwoen/miratwoen", ["from Mira"]],
     ]);
+  });
+
+  it("keeps a channel mapped to null out of the remote's project", () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-rhea");
+      mkdirSync(join(cwd, ".pi", "agntn"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".pi", "agntn", "memory.json"),
+        JSON.stringify({ namespace: "rheatwoen" }),
+      );
+      execFileSync("git", ["init", "-q", cwd]);
+      execFileSync("git", [
+        "-C",
+        cwd,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/shared.git",
+      ]);
+      const sessionFile = join(agents, "session.jsonl");
+      const databasePath = join(agents, "openbot.db");
+      const db = new DatabaseSync(databasePath);
+      db.exec(`
+        CREATE TABLE projection_channel_contexts (channel_id TEXT, agent_id TEXT, thread_id TEXT, session_id TEXT);
+        CREATE TABLE projection_channel_tasks (task_id TEXT PRIMARY KEY, channel_id TEXT, task_json TEXT);
+        CREATE TABLE projection_channel_assignments (assignment_id TEXT PRIMARY KEY, channel_id TEXT, task_id TEXT, delivery_id TEXT, assignment_json TEXT);
+        CREATE TABLE projection_channel_messages (channel_id TEXT, message_id TEXT, sequence INTEGER, message_json TEXT);
+      `);
+      db.prepare(
+        "INSERT INTO projection_channel_contexts VALUES ('channel1', 'agent-rhea', 't1', ?)",
+      ).run(sessionFile);
+      db.close();
+      const router = createIngestRouter({
+        fallback: { namespace: "aeitwoen", profile: "oritwoen" },
+        openBotDatabase: databasePath,
+        openBotChannels: new Map([["channel1", null]]),
+      });
+      const routed = router.route(
+        { role: "user", content: "hi" },
+        {
+          cwd,
+          sessionFile: () => sessionFile,
+          systemPrompt: () =>
+            '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+          warn: () => {},
+        },
+      );
+      expect(routed.map(({ scope }) => `${scope.namespace}/${scope.profile}`)).toEqual([
+        "rheatwoen/oritwoen",
+      ]);
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
   });
 
   it("sends an OpenBot agent's project conversation there without a personal scope", async () => {
