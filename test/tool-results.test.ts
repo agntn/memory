@@ -2121,7 +2121,9 @@ describe("remember copies", () => {
       'Stored memory in research/project "mem-research-project", research/shared "mem-research-shared", but 1 of 2 copies failed.',
     );
     expect(message).toMatch(/team\/agent: .*profile refused/);
-    expect(message).toContain("retry only the profiles that lack the memory");
+    expect(message).toContain(
+      "retry only the profiles that lack the memory, each as its own memory_remember without copies",
+    );
   });
 
   it("ends each copy with the main record's namespace, profile and id under copySource", async () => {
@@ -2167,7 +2169,7 @@ describe("remember copies", () => {
       .catch((caught: unknown) => caught);
 
     expect((error as Error).message).toContain(
-      'A retried copy ends with "\\n\\nCopied from memory \\"mem-research-project\\" in research/project.", as the stored ones do.',
+      'Give a retried copy content that ends with "\\n\\nCopied from memory \\"mem-research-project\\" in research/project.", as the stored ones do.',
     );
   });
 

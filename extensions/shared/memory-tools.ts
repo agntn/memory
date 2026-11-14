@@ -1064,7 +1064,7 @@ function failedCopiesError(
     )
     .join("; ");
   return new Error(
-    `Stored memory in ${storedText}, but ${failed.length} of ${stored.length + failed.length - 1} copies failed. ${failedText}. Check memory_list in each failed profile before retrying, since a failed write may have landed anyway, and retry only the profiles that lack the memory.${sourceLine === undefined ? "" : ` A retried copy ends with ${JSON.stringify(sourceLine)}, as the stored ones do.`}`,
+    `Stored memory in ${storedText}, but ${failed.length} of ${stored.length + failed.length - 1} copies failed. ${failedText}. Check memory_list in each failed profile before retrying, since a failed write may have landed anyway, and retry only the profiles that lack the memory, each as its own memory_remember without copies. Repeating this call would store the main record again.${sourceLine === undefined ? "" : ` Give a retried copy content that ends with ${JSON.stringify(sourceLine)}, as the stored ones do.`}`,
   );
 }
 
