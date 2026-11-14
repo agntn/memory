@@ -13,6 +13,7 @@ import {
 export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
 export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
+export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
 
 const memoryNamePattern = new RegExp(MEMORY_NAME_PATTERN);
 
@@ -132,10 +133,58 @@ export function configuredPiMemoryScope(
   const environmentScope = configuredMemoryScope(env);
   if (environmentScope) return environmentScope;
 
-  const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
-  const configPath = join(agentDir, PI_MEMORY_SCOPE_FILENAME);
+  const configPath = piScopePath(env, homeDirectory);
   const value = readPiScope(configPath);
   return value === undefined ? undefined : parsePiScope(value, configPath);
+}
+
+/**
+ * Where Pi keeps its memory scope file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {string} Path of `memory-scope.json`.
+ */
+function piScopePath(env: Readonly<NodeJS.ProcessEnv>, homeDirectory: string): string {
+  const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
+  return join(agentDir, PI_MEMORY_SCOPE_FILENAME);
+}
+
+/**
+ * Parse how many turns go by between automatic ingests.
+ *
+ * @param value - A whole number, or its decimal string.
+ * @param source - Where the value came from, named in the error.
+ * @returns {number | undefined} The turn count, or nothing for 0.
+ * @throws {Error} When the value isn't a whole number from 0 up.
+ */
+export function parseIngestTurns(value: unknown, source: string): number | undefined {
+  const turns = typeof value === "string" && /^\s*\d+\s*$/u.test(value) ? Number(value) : value;
+  if (typeof turns !== "number" || !Number.isSafeInteger(turns) || turns < 0) {
+    throw new Error(`${source} must be a whole number of turns, or 0 to switch ingest off`);
+  }
+  return turns === 0 ? undefined : turns;
+}
+
+/**
+ * Pi's automatic ingest interval, from the environment first, then `ingestTurns` in its scope file.
+ *
+ * @param env - Pi process environment.
+ * @param homeDirectory - Home directory used to expand the Pi agent path.
+ * @returns {number | undefined} Turns between ingests, or nothing when it's off.
+ * @throws {Error} When the configured value isn't a whole number.
+ */
+export function configuredPiIngestTurns(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  homeDirectory: string = homedir(),
+): number | undefined {
+  const configured = env[MEMORY_INGEST_TURNS_ENV]?.trim();
+  if (configured) return parseIngestTurns(configured, MEMORY_INGEST_TURNS_ENV);
+
+  const configPath = piScopePath(env, homeDirectory);
+  const value = readPiScope(configPath);
+  if (typeof value !== "object" || value === null || !("ingestTurns" in value)) return undefined;
+  return parseIngestTurns(value.ingestTurns, `ingestTurns in ${configPath}`);
 }
 
 /**

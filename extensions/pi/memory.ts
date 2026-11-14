@@ -1,5 +1,5 @@
 import { registerPiTools, type PiRenderers } from "@agntn/tools/pi";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
   createMemoryTools,
@@ -8,7 +8,12 @@ import {
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
-import { configuredPiMemoryScope } from "../shared/memory-scope.ts";
+import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
+import {
+  configuredPiIngestTurns,
+  configuredPiMemoryScope,
+  MEMORY_INGEST_TURNS_ENV,
+} from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
 import {
@@ -61,8 +66,48 @@ function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRe
   };
 }
 
+/**
+ * Session and warning channel of the conversation behind a Pi event.
+ *
+ * @param ctx - Pi's context for the event.
+ * @returns {TurnContext} What the turn ingest needs from it.
+ */
+function turnContext(ctx: ExtensionContext): TurnContext {
+  return {
+    sessionId: hostSessionId("pi", ctx),
+    warn: (message) => {
+      ctx.ui.notify(message, "warning");
+    },
+  };
+}
+
+/**
+ * Feed the conversation to `memory_ingest` every `every` turns and once more on shutdown.
+ *
+ * @param pi - Pi's extension API.
+ * @param scope - Profile the conversation goes into.
+ * @param every - Turns between ingests.
+ */
+function ingestEveryTurns(pi: ExtensionAPI, scope: ProfileParams, every: number): void {
+  const ingest = createTurnIngest(scope, every);
+  pi.on("message_end", (event) => {
+    ingest.add(event.message);
+  });
+  pi.on("turn_end", (_event, ctx) => {
+    ingest.turn(turnContext(ctx));
+  });
+  pi.on("session_shutdown", (_event, ctx) => ingest.flush(turnContext(ctx)));
+}
+
 export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
+  const ingestTurns = configuredPiIngestTurns();
+  if (ingestTurns !== undefined) {
+    if (scope === undefined) {
+      throw new Error(`${MEMORY_INGEST_TURNS_ENV} needs a memory scope to ingest into`);
+    }
+    ingestEveryTurns(pi, scope, ingestTurns);
+  }
   const tools = createMemoryTools({
     scope,
     fields: hostMemoryFields("pi"),
