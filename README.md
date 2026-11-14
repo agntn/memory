@@ -88,11 +88,15 @@ From the checkout, configure an MCP client with:
 
 Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/memory-scope.json`.
 
-Pi can also ingest the conversation itself, no tool call needed. Set `AGNTN_MEMORY_INGEST_TURNS=5`, or put `"ingestTurns": 5` in `memory-scope.json`. Every fifth turn, what you and the model wrote since the last batch goes to `memory_ingest` under the session ID. Pi counts a turn as one model response with its tool calls.
+Pi also ingests the conversation on its own, no tool call needed. Every tenth turn, what you and the model wrote since the last batch goes to `memory_ingest` under the session ID. Pi counts a turn as one model response with its tool calls.
 
-Thinking, tool calls and tool results stay out. Whatever's left when the session ends goes in one last batch. It's off by default, because the whole conversation goes to Cloudflare. It needs a scope too: there's no profile to guess.
+Thinking, tool calls and tool results stay out, and whatever's left when the session ends goes in one last batch.
 
-A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
+The batch lands in the project, not on you. A checkout whose `upstream` or `origin` remote is `github.com/agntn/memory` ingests into `agntn/memory`, and `upstream` wins on a fork. No remote? Then it's the scope above. The working directory alone doesn't count, since folders get renamed and moved. Neither one? Nothing gets sent.
+
+Cloudflare creates profiles on the first write, but not namespaces. When the project's namespace is missing, Pi says so once and uses your scope for the rest of the session. `memory_namespace_create` keeps the project apart next time.
+
+Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `memory-scope.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 
 The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
 

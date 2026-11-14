@@ -15,6 +15,7 @@ const hostEnvironment = [
   "AGNTN_MEMORY_NAMESPACE",
   "AGNTN_MEMORY_PROFILE",
   "AGNTN_MEMORY_FIELDS",
+  "AGNTN_MEMORY_INGEST_TURNS",
   "PI_CODING_AGENT_DIR",
   "CLAUDE_PROJECT_DIR",
   "CLAUDE_CODE_SESSION_ID",
@@ -28,6 +29,9 @@ for (const name of hostEnvironment) delete process.env[name];
 // The Pi scope falls back to a file under the home directory, which delete
 // cannot neutralize, so point the agent directory somewhere that cannot exist.
 process.env.PI_CODING_AGENT_DIR = "/nonexistent/agntn-memory-tests";
+
+/** Pi ingests by default; a test that needs it sets its own count. */
+process.env.AGNTN_MEMORY_INGEST_TURNS = "0";
 
 // Without an env token the memory tools ask the cf CLI for its OAuth session,
 // and a contributor logged in to cf would otherwise lend the suite a live

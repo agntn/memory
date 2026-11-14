@@ -14,6 +14,8 @@ export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
 export const PI_MEMORY_SCOPE_FILENAME = "memory-scope.json";
 export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
+/** Turns between Pi's background ingests when nothing sets a count. */
+export const DEFAULT_INGEST_TURNS = 10;
 
 const memoryNamePattern = new RegExp(MEMORY_NAME_PATTERN);
 
@@ -167,7 +169,7 @@ export function parseIngestTurns(value: unknown, source: string): number | undef
 }
 
 /**
- * Pi's automatic ingest interval, from the environment first, then `ingestTurns` in its scope file.
+ * Pi's ingest interval: the environment, then `ingestTurns` in its scope file, then the default.
  *
  * @param env - Pi process environment.
  * @param homeDirectory - Home directory used to expand the Pi agent path.
@@ -183,7 +185,9 @@ export function configuredPiIngestTurns(
 
   const configPath = piScopePath(env, homeDirectory);
   const value = readPiScope(configPath);
-  if (typeof value !== "object" || value === null || !("ingestTurns" in value)) return undefined;
+  if (typeof value !== "object" || value === null || !("ingestTurns" in value)) {
+    return DEFAULT_INGEST_TURNS;
+  }
   return parseIngestTurns(value.ingestTurns, `ingestTurns in ${configPath}`);
 }
 

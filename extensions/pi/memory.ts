@@ -9,11 +9,8 @@ import {
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
-import {
-  configuredPiIngestTurns,
-  configuredPiMemoryScope,
-  MEMORY_INGEST_TURNS_ENV,
-} from "../shared/memory-scope.ts";
+import { projectMemoryScope } from "../shared/memory-project-scope.ts";
+import { configuredPiIngestTurns, configuredPiMemoryScope } from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
 import {
@@ -74,6 +71,7 @@ function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRe
  */
 function turnContext(ctx: ExtensionContext): TurnContext {
   return {
+    cwd: ctx.cwd,
     sessionId: hostSessionId("pi", ctx),
     warn: (message) => {
       ctx.ui.notify(message, "warning");
@@ -85,11 +83,15 @@ function turnContext(ctx: ExtensionContext): TurnContext {
  * Feed the conversation to `memory_ingest` every `every` turns and once more on shutdown.
  *
  * @param pi - Pi's extension API.
- * @param scope - Profile the conversation goes into.
+ * @param fallback - Scope outside a project with a remote, if any.
  * @param every - Turns between ingests.
  */
-function ingestEveryTurns(pi: ExtensionAPI, scope: ProfileParams, every: number): void {
-  const ingest = createTurnIngest(scope, every);
+function ingestEveryTurns(
+  pi: ExtensionAPI,
+  fallback: ProfileParams | undefined,
+  every: number,
+): void {
+  const ingest = createTurnIngest({ every, fallback, project: projectMemoryScope });
   pi.on("message_end", (event) => {
     ingest.add(event.message);
   });
@@ -102,12 +104,7 @@ function ingestEveryTurns(pi: ExtensionAPI, scope: ProfileParams, every: number)
 export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
   const ingestTurns = configuredPiIngestTurns();
-  if (ingestTurns !== undefined) {
-    if (scope === undefined) {
-      throw new Error(`${MEMORY_INGEST_TURNS_ENV} needs a memory scope to ingest into`);
-    }
-    ingestEveryTurns(pi, scope, ingestTurns);
-  }
+  if (ingestTurns !== undefined) ingestEveryTurns(pi, scope, ingestTurns);
   const tools = createMemoryTools({
     scope,
     fields: hostMemoryFields("pi"),
