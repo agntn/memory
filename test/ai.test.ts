@@ -2,6 +2,7 @@ import { generateText, isStepCount, type Tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import { createMemoryAiTools } from "../src/ai.ts";
+import type { AgentMemoryNamespaceBinding } from "../src/index.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 
 interface SentRequest {
@@ -77,6 +78,79 @@ function stubService(): SentRequest[] {
     }),
   );
   return requests;
+}
+
+interface BindingCall {
+  readonly profile: string;
+  readonly call: string;
+  readonly args: readonly unknown[];
+}
+
+/* A Memory binding that keeps every call. No fetch and no token anywhere near it. */
+function fakeBinding(): { binding: AgentMemoryNamespaceBinding; calls: BindingCall[] } {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw new Error("a binding call went over HTTP");
+    }),
+  );
+  const calls: BindingCall[] = [];
+  const stored = {
+    id: "mem-1",
+    type: "fact" as const,
+    summary: "stored",
+    content: "stored",
+    sessionId: null,
+    createdAt: new Date("2026-11-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-11-01T00:00:00.000Z"),
+  };
+  const binding = {
+    getProfile: async (profile: string) => {
+      const record = (call: string, ...args: unknown[]): void => {
+        calls.push({ profile, call, args });
+      };
+      return {
+        remember: async (input: { content: string; sessionId?: string }) => {
+          record("remember", input);
+          return { ...stored, content: input.content, sessionId: input.sessionId ?? null };
+        },
+        recall: async (query: string) => {
+          record("recall", query);
+          return {
+            count: 1,
+            answer: "Prefers short answers.",
+            candidates: [{ id: "mem-1", summary: "stored", sessionId: null, score: 0.9 }],
+          };
+        },
+        list: async () => {
+          record("list");
+          return { memories: [] };
+        },
+        get: async (id: string) => {
+          record("get", id);
+          return stored;
+        },
+        delete: async (id: string) => {
+          record("delete", id);
+          return stored;
+        },
+        deleteSession: async (id: string) => {
+          record("deleteSession", id);
+        },
+        getSummary: async () => {
+          record("getSummary");
+          return { summary: "", memoryCount: 0 };
+        },
+        ingest: async () => {
+          record("ingest");
+        },
+      };
+    },
+    deleteProfile: async (profile: string) => {
+      calls.push({ profile, call: "deleteProfile", args: [] });
+    },
+  };
+  return { binding: binding as unknown as AgentMemoryNamespaceBinding, calls };
 }
 
 async function run(tool: Tool, input: Record<string, unknown>): Promise<unknown> {
@@ -348,6 +422,143 @@ describe("@agntn/memory/ai locked to one profile", () => {
   it("refuses a locked definition set with nothing to lock to", () => {
     expect(() => createMemoryTools({ locked: true })).toThrow(
       "Locked memory tools need a namespace and profile to lock to",
+    );
+  });
+});
+
+describe("@agntn/memory/ai over a Workers binding", () => {
+  const accountTools = [
+    "memory_namespace_list",
+    "memory_namespace_get",
+    "memory_namespace_create",
+    "memory_namespace_delete",
+    "memory_profile_list",
+  ];
+
+  it("keeps every tool the binding can serve and drops the account's listings", () => {
+    const { binding } = fakeBinding();
+    const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });
+
+    expect(Object.keys(tools)).toEqual(
+      createMemoryTools()
+        .map((tool) => tool.name)
+        .filter((name) => !accountTools.includes(name)),
+    );
+    expect(Object.keys(tools)).toContain("memory_profile_delete");
+    expectTypeOf(tools).not.toHaveProperty("memory_namespace_list");
+    expectTypeOf(tools).toHaveProperty("memory_profile_delete");
+  });
+
+  it("writes and recalls through the binding without a token or a single fetch", async () => {
+    const { binding, calls } = fakeBinding();
+    const tools = createMemoryAiTools({
+      binding,
+      namespace: "support",
+      profile: "user-42",
+      sessionId: "chat-7",
+    });
+
+    await run(tools.memory_remember, { content: "Prefers short answers." });
+    const recalled = await run(tools.memory_recall, { query: "What does this user prefer?" });
+
+    expect(recalled).toMatchObject({ text: expect.stringContaining("mem-1") as unknown });
+    expect(calls).toEqual([
+      {
+        profile: "user-42",
+        call: "remember",
+        args: [{ content: "Prefers short answers.", sessionId: "chat-7" }],
+      },
+      { profile: "user-42", call: "recall", args: ["What does this user prefer?"] },
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses another namespace, copies included, before the binding sees a call", async () => {
+    const { binding, calls } = fakeBinding();
+    const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });
+
+    await expect(
+      run(tools.memory_recall, { namespace: "billing", profile: "user-42", query: "who?" }),
+    ).rejects.toThrow(
+      "the Workers binding serves only namespace support, so leave namespace out or pass support",
+    );
+    await expect(
+      run(tools.memory_remember, {
+        content: "Prefers short answers.",
+        copies: [{ namespace: "billing", profile: "user-42" }],
+      }),
+    ).rejects.toThrow("serves only namespace support");
+    await expect(
+      run(tools.memory_profile_delete, { namespace: "billing", profile: "user-42" }),
+    ).rejects.toThrow("serves only namespace support");
+    expect(calls).toEqual([]);
+  });
+
+  it("copies into another profile and deletes a profile, all through the binding", async () => {
+    const { binding, calls } = fakeBinding();
+    const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });
+
+    await run(tools.memory_remember, {
+      content: "Prefers short answers.",
+      copies: [{ namespace: "support", profile: "team" }],
+    });
+    await run(tools.memory_profile_delete, { namespace: "support", profile: "user-43" });
+
+    expect(calls.map(({ profile, call }) => `${profile} ${call}`)).toEqual([
+      "user-42 remember",
+      "team remember",
+      "user-43 list",
+      "user-43 deleteProfile",
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves a locked set over the binding through generateText", async () => {
+    const { binding, calls } = fakeBinding();
+    const tools = createMemoryAiTools({
+      binding,
+      namespace: "support",
+      profile: "user-42",
+      locked: true,
+    });
+    const model = scriptedModel("memory_recall", [{ query: "What does this user prefer?" }]);
+
+    await generateText({
+      model,
+      prompt: "What does this user prefer?",
+      tools,
+      stopWhen: isStepCount(2),
+    });
+
+    expect(Object.keys(tools)).toHaveLength(11);
+    expect(calls).toEqual([
+      { profile: "user-42", call: "recall", args: ["What does this user prefer?"] },
+    ]);
+    expect(model.doGenerateCalls[1]?.prompt.at(-1)).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool-result", output: { type: "text" } }],
+    });
+  });
+
+  it.each([
+    [{ binding: "binding" }, "must define both namespace and profile"],
+    [{ binding: "binding", namespace: "support" }, "must define both namespace and profile"],
+    [{ binding: {}, namespace: "support", profile: "user-42" }, "must be a Workers Memory binding"],
+    [
+      { binding: null, namespace: "support", profile: "user-42" },
+      "must be a Workers Memory binding",
+    ],
+  ])("refuses %j before any tool exists", (options, message) => {
+    const binding = options.binding === "binding" ? fakeBinding().binding : options.binding;
+
+    expect(() => {
+      Reflect.apply(createMemoryAiTools, undefined, [{ ...options, binding }]);
+    }).toThrow(message);
+  });
+
+  it("refuses a bound definition set with no namespace to keep it in", () => {
+    expect(() => createMemoryTools({ binding: fakeBinding().binding })).toThrow(
+      "Memory tools over a Workers binding need the namespace it serves",
     );
   });
 });

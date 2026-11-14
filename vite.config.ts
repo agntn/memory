@@ -8,6 +8,7 @@ const readonlyParameterOptions = {
       from: "file" as const,
       name: [
         "AbortOptions",
+        "AgentMemoryNamespaceBinding",
         "AgentMemoryProfileBinding",
         "CloudflareAccount",
         "CloudflareAccountOptions",

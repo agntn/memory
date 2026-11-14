@@ -6,7 +6,7 @@ import {
   type ToolEffect,
   ToolInputError,
 } from "@agntn/tools";
-import type { AbortOptions } from "@agntn/memory";
+import type { AbortOptions, AgentMemoryNamespaceBinding } from "@agntn/memory";
 import {
   createLockedMemoryToolSchemas,
   createOperationalMemoryToolSchemas,
@@ -37,11 +37,23 @@ const administrationToolNames = [
   "memory_profile_delete",
 ] as const satisfies readonly MemoryToolName[];
 
+/** Tools only the HTTP API can serve. */
+const accountToolNames = [
+  "memory_namespace_list",
+  "memory_namespace_get",
+  "memory_namespace_create",
+  "memory_namespace_delete",
+  "memory_profile_list",
+] as const satisfies readonly MemoryToolName[];
+
 /** The tools that work inside one profile, all a locked surface keeps. */
 export type ProfileMemoryToolName = Exclude<
   MemoryToolName,
   (typeof administrationToolNames)[number]
 >;
+
+/** The tools a Workers binding can serve. */
+export type BindingMemoryToolName = Exclude<MemoryToolName, (typeof accountToolNames)[number]>;
 
 /** How each surface binds the calls it serves. */
 export interface MemoryToolOptions {
@@ -51,6 +63,8 @@ export interface MemoryToolOptions {
   readonly writeSession?: (host: unknown) => string | undefined;
   /** Keep every call in `scope`: no scope fields for the model, and no administration tools. */
   readonly locked?: boolean;
+  /** Workers binding for `scope`'s namespace, used instead of HTTP. */
+  readonly binding?: AgentMemoryNamespaceBinding;
 }
 
 /** How far the configured scope reaches into a call: administration, a profile read, or a write. */
@@ -83,6 +97,7 @@ function loadExecutors(): Promise<typeof MemoryTools> {
 const PROGRESS_INTERVAL_MS = 30_000;
 
 const administrationTools: ReadonlySet<MemoryToolName> = new Set(administrationToolNames);
+const accountTools: ReadonlySet<MemoryToolName> = new Set(accountToolNames);
 
 /**
  * Arguments as a call line shows them, with the default scope filled in where the call left it out.
@@ -163,35 +178,77 @@ function assertWholeScope(input: object, scope: ProfileParams | undefined): void
 }
 
 /**
+ * Keep a binding's calls, copies included, in its own namespace.
+ *
+ * @param params - Arguments with the default scope filled in.
+ * @param namespace - The namespace the binding serves.
+ * @throws {ToolInputError} When the call or one of its copies names another namespace.
+ */
+function assertBindingNamespace(params: object, namespace: string): void {
+  const { namespace: called, copies } = params as { namespace?: unknown; copies?: unknown };
+  const copied = Array.isArray(copies)
+    ? copies.map((copy: unknown) => (copy as { namespace?: unknown }).namespace)
+    : [];
+  if ([called, ...copied].every((name) => name === namespace)) return;
+  throw new ToolInputError([
+    `Invalid arguments: the Workers binding serves only namespace ${namespace}, so leave namespace out or pass ${namespace}, in copies too`,
+  ]);
+}
+
+/**
+ * The executor's arguments, with the scope filled in and checked.
+ *
+ * @param spec - The tool being called.
+ * @param input - Arguments the core validated.
+ * @param host - Host context, read for the write session.
+ * @param surface - Scope, session and Workers binding of the surface.
+ * @returns {object} The arguments as the executor takes them.
+ * @throws {ToolInputError} When the call names a scope it can't have.
+ */
+function scopedParams(
+  spec: MemoryToolSpec,
+  input: object,
+  host: unknown,
+  surface: MemoryToolOptions,
+): object {
+  if (spec.reach !== "none") assertWholeScope(input, surface.scope);
+  const params =
+    spec.reach === "none"
+      ? input
+      : spec.reach === "profile"
+        ? applyMemoryScope(input, surface.scope)
+        : applyMemoryWriteScope(input, surface.scope, surface.writeSession?.(host));
+  if (surface.binding !== undefined && surface.scope !== undefined) {
+    assertBindingNamespace(params, surface.scope.namespace);
+  }
+  return params;
+}
+
+/**
  * Bind the scope and stream progress. The causes go into the message, the only part hosts show.
  *
  * @param spec - The tool being called.
  * @param input - Arguments the core validated.
  * @param context - Per-call context from the adapter.
- * @param binding - Scope and session binding of the surface.
+ * @param surface - Scope, session and Workers binding of the surface.
  * @returns {Promise<MemoryToolResult>} The executor's result.
- * @throws {ToolInputError} When the call names only half of its scope.
+ * @throws {ToolInputError} When the call names a scope it can't have.
  * @throws {Error} The executor's failure with its causes in the message.
  */
 async function runMemoryTool(
   spec: MemoryToolSpec,
   input: object,
   context: ToolCallContext,
-  binding: MemoryToolOptions,
+  surface: MemoryToolOptions,
 ): Promise<MemoryToolResult> {
-  if (spec.reach !== "none") assertWholeScope(input, binding.scope);
-  const params =
-    spec.reach === "none"
-      ? input
-      : spec.reach === "profile"
-        ? applyMemoryScope(input, binding.scope)
-        : applyMemoryWriteScope(input, binding.scope, binding.writeSession?.(context.host));
+  const params = scopedParams(spec, input, context.host, surface);
   const stopProgress = startProgress(spec.name, params, context);
   let tools: typeof MemoryTools | undefined;
   try {
     tools = await loadExecutors();
     const options: AbortOptions = { signal: context.signal };
-    return await tools.memoryToolExecutors[spec.operation](params as never, options);
+    const bound = surface.binding === undefined ? [] : [surface.binding];
+    return await tools.memoryToolExecutors[spec.operation](params as never, options, ...bound);
   } catch (error) {
     const message = toolErrorMessage(error);
     throw new Error(tools ? tools.withCredentialStep(message, error) : message, { cause: error });
@@ -392,16 +449,22 @@ function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] 
  * Every memory tool as one `@agntn/tools` definition, for every surface from MCP to the AI SDK.
  *
  * @param options - Scope and session binding of the surface serving them.
- * @returns {readonly ToolDefinition[]} The definitions in listing order, locked ones without admin.
- * @throws {Error} When the surface is locked without a scope to lock it to.
+ * @returns {readonly ToolDefinition[]} The definitions the surface can serve, in listing order.
+ * @throws {Error} When locked or bound without a scope.
  */
 export function createMemoryTools(options: MemoryToolOptions = {}): readonly ToolDefinition[] {
   const locked = options.locked === true;
   if (locked && options.scope === undefined) {
     throw new Error("Locked memory tools need a namespace and profile to lock to");
   }
-  const specs = memoryToolSpecs(options);
-  return (locked ? specs.filter((spec) => spec.reach !== "none") : specs).map((spec) =>
+  const bound = options.binding !== undefined;
+  if (bound && options.scope === undefined) {
+    throw new Error("Memory tools over a Workers binding need the namespace it serves");
+  }
+  const specs = memoryToolSpecs(options).filter(
+    (spec) => !(locked && spec.reach === "none") && !(bound && accountTools.has(spec.name)),
+  );
+  return specs.map((spec) =>
     defineTool({
       name: spec.name,
       title: memoryToolMeta[spec.name].label,
