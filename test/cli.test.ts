@@ -131,6 +131,13 @@ describe("memory usage paths", () => {
     );
   });
 
+  it("names a malformed AGNTN_MEMORY_FIELDS in one line instead of a stack trace", () => {
+    const result = runCli(["--help"], { env: { AGNTN_MEMORY_FIELDS: "author=Aei" } });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("AGNTN_MEMORY_FIELDS must be a JSON object\n");
+  });
+
   it("memory mcp serves the server over stdio", () => {
     const result = runCli(["mcp"], { input: initialize });
 

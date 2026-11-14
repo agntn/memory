@@ -34,6 +34,7 @@ const root = path.resolve(import.meta.dirname, "..");
 for (const key of [
   "AGNTN_MEMORY_NAMESPACE",
   "AGNTN_MEMORY_PROFILE",
+  "AGNTN_MEMORY_FIELDS",
   "CLAUDE_PROJECT_DIR",
   "CLAUDE_CODE_SESSION_ID",
 ]) {
@@ -205,7 +206,7 @@ try {
   assert.match(remembered.content[0].text, /packed-memory-1/);
   const rememberRequest = requests.at(-1);
   assert.match(rememberRequest.url, /\/namespaces\/packed\/profiles\/agent\/remember$/);
-  assert.equal(rememberRequest.body.content, "one packed memory");
+  assert.equal(rememberRequest.body.content, "one packed memory\n\nharness: omp");
   // A write without a caller session still carries the harness-derived one.
   assert.match(rememberRequest.body.sessionId, /^omp-[a-z0-9-]+-[0-9a-f]{16}$/);
 

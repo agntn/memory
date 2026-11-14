@@ -21,6 +21,7 @@ import {
   callerMemoryScope,
   memorySessionId,
 } from "./memory-scope.ts";
+import { type MemoryFields, stampMemoryContent } from "./memory-fields.ts";
 import { memoryToolMeta, memoryToolProgress } from "./memory-tool-contract.ts";
 import type * as MemoryTools from "./memory-tools.ts";
 import type { MemoryToolResult, ProfileParams } from "./memory-tools.types.ts";
@@ -65,6 +66,8 @@ export interface MemoryToolOptions {
   readonly locked?: boolean;
   /** Workers binding for `scope`'s namespace, used instead of HTTP. */
   readonly binding?: AgentMemoryNamespaceBinding;
+  /** Lines every written memory ends with, so provenance doesn't depend on the model remembering it. */
+  readonly fields?: MemoryFields;
 }
 
 /** How far the configured scope reaches into a call: administration, a profile read, or a write. */
@@ -76,6 +79,8 @@ interface MemoryToolSpec {
   readonly effect: ToolEffect;
   readonly idempotent?: boolean;
   readonly reach: ScopeReach;
+  /** The tool writes `content` verbatim, so the host's fields go at its end. */
+  readonly stamped?: true;
   readonly snippet: string;
   readonly guidelines: readonly string[];
   readonly operation: keyof typeof MemoryTools.memoryToolExecutors;
@@ -221,7 +226,22 @@ function scopedParams(
   if (surface.binding !== undefined && surface.scope !== undefined) {
     assertBindingNamespace(params, surface.scope.namespace);
   }
-  return params;
+  return spec.stamped === true && surface.fields !== undefined
+    ? withFields(params, surface.fields)
+    : params;
+}
+
+/**
+ * Stamp the host's fields on a write's content, before any copy line or exact read sees it.
+ *
+ * @param params - Scoped arguments of a tool that writes `content`.
+ * @param fields - The host's fields.
+ * @returns {object} The arguments with the stamped content.
+ * @throws {ToolInputError} When the stamped content would pass the byte cap.
+ */
+function withFields(params: object, fields: MemoryFields): object {
+  const { content } = params as { content: string };
+  return { ...params, content: stampMemoryContent(content, fields) };
 }
 
 /**
@@ -320,6 +340,7 @@ function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] 
       input: schemas.rememberParameters,
       effect: "write",
       reach: "write",
+      stamped: true,
       snippet: "Store a durable fact or instruction in agent memory.",
       guidelines: ["Use only for information worth retaining across sessions."],
       operation: "remember",
@@ -330,6 +351,7 @@ function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] 
       effect: "destructive",
       idempotent: false,
       reach: "write",
+      stamped: true,
       snippet: "Replace a durable memory without deleting the old record first.",
       guidelines: [
         "Use the old id and the exact recall query that must find the replacement before deletion.",

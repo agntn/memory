@@ -10,6 +10,7 @@ import {
   type ProfileMemoryToolName,
 } from "../extensions/shared/memory-tool-definitions.ts";
 import type { ProfileParams } from "../extensions/shared/memory-tools.types.ts";
+import { parseMemoryFields } from "../extensions/shared/memory-fields.ts";
 import { validateMemoryScope } from "../extensions/shared/memory-scope.ts";
 import { MAX_TOOL_SESSION_ID_CHARACTERS } from "../extensions/shared/memory-tool-contract.ts";
 import type { AgentMemoryNamespaceBinding } from "./providers/cloudflare.ts";
@@ -28,6 +29,8 @@ export interface MemoryAiToolOptions {
   readonly profile?: string;
   /** Session for a write that names none. Bound to a profile, the model can't name one. */
   readonly sessionId?: string;
+  /** `key: value` lines every written memory ends with. Keys are lowercase, values one line. */
+  readonly fields?: Readonly<Record<string, string>>;
   /** Leave it out, or use {@link LockedMemoryAiToolOptions} to lock the tools to the profile. */
   readonly locked?: false;
   /** Leave it out, or use {@link BoundMemoryAiToolOptions} for a Workers binding. */
@@ -129,8 +132,8 @@ function memoryToolScope(
 /**
  * Turn the app's options into the binding the shared definitions take, checked up front.
  *
- * @param options - Namespace, profile, write session, lock and binding from the app.
- * @returns {MemoryToolOptions} The scope, write session, lock and binding for every tool.
+ * @param options - Namespace, profile, write session, fields, lock and binding from the app.
+ * @returns {MemoryToolOptions} The scope, write session, fields, lock and binding for every tool.
  * @throws {Error} When an option can't bind the tools.
  */
 function memoryToolOptions(
@@ -141,9 +144,11 @@ function memoryToolOptions(
   const scope = memoryToolScope(options, locked, binding !== undefined);
   const { sessionId } = options;
   const session = sessionId === undefined ? undefined : validateSessionId(sessionId);
+  const fields = parseMemoryFields(options.fields, "Memory AI tool option fields");
   return {
     ...(scope === undefined ? {} : { scope }),
     ...(session === undefined ? {} : { writeSession: () => session }),
+    ...(fields === undefined ? {} : { fields }),
     ...(locked ? { locked } : {}),
     ...(binding === undefined ? {} : { binding }),
   };

@@ -98,6 +98,20 @@ Opt in with `copySource: true` and copies get a parent. Each one ends with `Copi
 
 That's handy once the tool result is gone. Cloudflare's remember API takes only content and a session ID, so the reference has to live in the content. It marks origin, not independent confirmation, and won't follow later edits. If the line would push a copy past 32768 bytes, nothing is written. Without the flag, copies stay verbatim.
 
+Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
+
+```json
+{ "author": "support-bot", "platform": "web" }
+```
+
+You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
+
+One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
+
+Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
+
+Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value stops the server, CLI or extension from starting, so it can't forge a second field.
+
 Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account.
 
 `CLOUDFLARE_ACCOUNT_ID` counts too, so the one your shell already exports for wrangler just works. And when Cloudflare refuses a cf token mid-session, the next call goes back to cf for a fresh one instead of sulking until it expires.
@@ -151,6 +165,17 @@ const tools = createMemoryAiTools({
 ```
 
 Namespace and profile are required. The binding serves one namespace. Calls that name another, copies included, are refused before anything is written. It can't list namespaces or profiles either. The four `memory_namespace_*` tools and `memory_profile_list` stay home. Without `locked` that leaves 12 tools. With it, the same 11 as over HTTP.
+
+With the AI SDK, you can pass the same fields as an option:
+
+```ts
+const tools = createMemoryAiTools({
+  namespace: "support",
+  profile: "user-42",
+  locked: true,
+  fields: { platform: "web" },
+});
+```
 
 ## Behavior worth knowing
 

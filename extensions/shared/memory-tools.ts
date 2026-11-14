@@ -10,6 +10,7 @@ import type {
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
+import { isStampedContent } from "./memory-fields.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
@@ -862,12 +863,13 @@ async function verifyReplacement(
   replacementMemoryId: string,
   params: Readonly<SupersedeParams | ResumeSupersessionParams>,
   options: AbortOptions,
+  contentMatches: (stored: string, content: string) => boolean,
 ): Promise<{ memory: Memory; visibility: RecallVisibility }> {
   if (replacementMemoryId === params.oldMemoryId) {
     throw new Error("Replacement reused the old memory id");
   }
   const memory = await requireCapability(profile, "get")(replacementMemoryId, options);
-  if (memory.id !== replacementMemoryId || memory.content !== params.content) {
+  if (memory.id !== replacementMemoryId || !contentMatches(memory.content, params.content)) {
     throw new Error("Exact replacement read did not match the stored id and content");
   }
   const visibility = await waitForRecallCandidate(
@@ -892,6 +894,8 @@ interface SupersessionStep {
   readonly replacementMemoryId: string;
   readonly verifyFailure: string;
   readonly done: string;
+  /** Resume accepts field lines another host stamped; supersede checks the bytes it just wrote. */
+  readonly contentMatches?: (stored: string, content: string) => boolean;
 }
 
 async function completeSupersession(
@@ -901,7 +905,13 @@ async function completeSupersession(
   const { profile, params, replacementMemoryId } = step;
   let verified: { memory: Memory; visibility: RecallVisibility };
   try {
-    verified = await verifyReplacement(profile, replacementMemoryId, params, options);
+    verified = await verifyReplacement(
+      profile,
+      replacementMemoryId,
+      params,
+      options,
+      step.contentMatches ?? ((stored, content) => stored === content),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -1163,6 +1173,7 @@ export const memoryToolExecutors = {
         replacementMemoryId: params.replacementMemoryId,
         verifyFailure: `Replacement memory ${quoteToolText(params.replacementMemoryId)} for old memory ${quoteToolText(params.oldMemoryId)} failed verification`,
         done: `Resumed supersession of memory ${quoteToolText(params.oldMemoryId)} with replacement ${quoteToolText(params.replacementMemoryId)}`,
+        contentMatches: isStampedContent,
       },
       options,
     );
