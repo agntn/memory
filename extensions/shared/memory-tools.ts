@@ -9,8 +9,6 @@ import type {
   RecallCandidate,
   RecallResult,
 } from "@agntn/memory";
-import type { CredentialSource } from "@agntn/credentials";
-import { type CloudflareCredentials, getCloudflareCredentials } from "./cloudflare-credentials.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
@@ -77,21 +75,6 @@ let namespaceClientPromise:
   | Promise<InstanceType<MemoryModule["CloudflareNamespaceClient"]>>
   | undefined;
 const providerPromises = new Map<string, Promise<MemoryProvider>>();
-let credentialsKey: string | undefined;
-let credentialsRefused = false;
-let credentialsSource: CredentialSource | undefined;
-
-/**
- * Sees each 401 before an executor can fold it into text, so the next call asks cf again.
- * @param input - The request target, as for fetch.
- * @param init - The request options, as for fetch.
- * @returns {Promise<Response>} The response, untouched.
- */
-const watchedFetch: typeof globalThis.fetch = async (input, init) => {
-  const response = await globalThis.fetch(input, init);
-  if (response.status === 401) credentialsRefused = true;
-  return response;
-};
 
 const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
 const isoInstantPattern = new RegExp(ISO_INSTANT_PATTERN);
@@ -122,52 +105,32 @@ function loadMemory(): Promise<MemoryModule> {
 }
 
 /**
- * Resolve credentials and drop clients built for a token that is gone.
- *
- * A cf OAuth token rotates while the process lives, and every cached client
- * carries the token it was built with.
- * @returns {Promise<CloudflareCredentials>} Credentials for the next request.
- */
-async function getCredentials(): Promise<CloudflareCredentials> {
-  const { source, ...credentials } = await getCloudflareCredentials({
-    refresh: credentialsRefused,
-  });
-  credentialsRefused = false;
-  credentialsSource = source;
-  const key = `${credentials.accountId}\n${credentials.apiToken}`;
-  if (key !== credentialsKey) {
-    credentialsKey = key;
-    namespaceClientPromise = undefined;
-    providerPromises.clear();
-  }
-  return credentials;
-}
-
-/**
- * Find a 401 anywhere in the cause chain. It checks `statusCode`, not the class: a checkout loads `src/` and a package loads `dist/`.
+ * Find a 401 anywhere in the cause chain. It reads fields, not the class: a checkout loads `src/` and a package loads `dist/`.
  * @param error - An executor's failure.
- * @returns {boolean} True when some error in the chain is a 401.
+ * @returns {{ credentialSource?: unknown } | undefined} The 401, or nothing when the chain holds none.
  */
-function refusedCredentials(error: unknown): boolean {
+function refusal(error: unknown): { credentialSource?: unknown } | undefined {
   let current = error;
   for (let depth = 0; depth < MAX_TOOL_ERROR_CHAIN_DEPTH && current instanceof Error; depth += 1) {
-    if ((current as { statusCode?: unknown }).statusCode === 401) return true;
+    const refused = current as { statusCode?: unknown; credentialSource?: unknown };
+    if (refused.statusCode === 401) return refused;
     current = current.cause;
   }
-  return false;
+  return undefined;
 }
 
 /**
- * What the caller can do after a 401. Only a cf login hands the next call a fresh token; every other source sends the same one again.
+ * What the caller can do after a 401. The provider already gave a cf token its second try; no other source has a fresh one.
  * @param error - An executor's failure, causes included.
  * @returns {string} One sentence, or "" when the chain holds no 401.
  */
 function credentialStep(error: unknown): string {
-  if (!refusedCredentials(error)) return "";
-  if (credentialsSource === "cli") {
-    return "The next call asks cf for its token again, so try once more; another 401 means someone has to run cf auth login or set an account id this login can reach";
+  const refused = refusal(error);
+  if (refused === undefined) return "";
+  if (refused.credentialSource === "cli") {
+    return "cf was already asked for its token again and the one it handed over was refused too, so someone has to run cf auth login or set an account id this login can reach";
   }
-  const token = credentialsSource === "env" ? "CLOUDFLARE_API_TOKEN" : "The same token";
+  const token = refused.credentialSource === "env" ? "CLOUDFLARE_API_TOKEN" : "The same token";
   return `${token} goes out unchanged next time, so retrying will not help until someone replaces the token or fixes the account id`;
 }
 
@@ -226,24 +189,16 @@ function messageTimestamp(value: string): Date {
 async function getNamespaceClient(): Promise<
   InstanceType<MemoryModule["CloudflareNamespaceClient"]>
 > {
-  const credentials = await getCredentials();
-  namespaceClientPromise ??= loadMemory().then(
-    (memory) => new memory.CloudflareNamespaceClient({ ...credentials, fetch: watchedFetch }),
-  );
+  namespaceClientPromise ??= loadMemory().then((memory) => new memory.CloudflareNamespaceClient());
   return namespaceClientPromise;
 }
 
 async function getProvider(namespace: string): Promise<MemoryProvider> {
-  const credentials = await getCredentials();
   let providerPromise = providerPromises.get(namespace);
   if (!providerPromise) {
     providerPromise = loadMemory().then((memory) => {
       memory.registerAll();
-      return memory.create<CloudflareMemoryOptions>("cloudflare", {
-        ...credentials,
-        fetch: watchedFetch,
-        namespace,
-      });
+      return memory.create<CloudflareMemoryOptions>("cloudflare", { namespace });
     });
     providerPromises.set(namespace, providerPromise);
   }

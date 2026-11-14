@@ -22,7 +22,7 @@ export interface ProfileResult {
 export interface MemoryModule {
   registerAll(): void;
   create<TOptions>(name: string, options: TOptions): MemoryProvider;
-  CloudflareNamespaceClient: new (options: CloudflareAccountOptions) => {
+  CloudflareNamespaceClient: new (options?: CloudflareAccountOptions) => {
     list(options?: NamespaceListParams & AbortOptions): Promise<{
       namespaces: NamespaceResult[];
       cursor?: string;
