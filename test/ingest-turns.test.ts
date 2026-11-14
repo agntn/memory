@@ -12,10 +12,7 @@ import {
 } from "../src/errors.ts";
 import { execFileSync } from "node:child_process";
 import { createTurnIngest, ingestMessages } from "../extensions/shared/memory-ingest-turns.ts";
-import {
-  configuredPiMemoryScope,
-  configuredPiOpenBotChannels,
-} from "../extensions/shared/memory-scope.ts";
+import { configuredPiOpenBotChannels } from "../extensions/shared/memory-scope.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openBotDatabasePath, openBotSegments } from "../extensions/shared/memory-openbot.ts";
 import { createIngestRouter } from "../extensions/shared/memory-ingest-routes.ts";
@@ -521,26 +518,6 @@ describe("Pi turn ingest", () => {
       });
     } finally {
       rmSync(agents, { recursive: true, force: true });
-    }
-  });
-
-  it("still reads the older memory-scope.json when agntn/memory.json is missing", () => {
-    const piDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
-    try {
-      writeFileSync(
-        join(piDir, "memory-scope.json"),
-        JSON.stringify({ namespace: "default", profile: "oritwoen" }),
-      );
-      vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
-      expect(configuredPiMemoryScope()).toEqual({ namespace: "default", profile: "oritwoen" });
-      mkdirSync(join(piDir, "agntn"));
-      writeFileSync(
-        join(piDir, "agntn", "memory.json"),
-        JSON.stringify({ namespace: "aeitwoen", profile: "oritwoen" }),
-      );
-      expect(configuredPiMemoryScope()).toEqual({ namespace: "aeitwoen", profile: "oritwoen" });
-    } finally {
-      rmSync(piDir, { recursive: true, force: true });
     }
   });
 

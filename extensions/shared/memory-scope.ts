@@ -14,8 +14,6 @@ export const MEMORY_NAMESPACE_ENV = "AGNTN_MEMORY_NAMESPACE";
 export const MEMORY_PROFILE_ENV = "AGNTN_MEMORY_PROFILE";
 /** Pi's memory settings, under the agent folder next to the other agntn packages' files. */
 export const PI_MEMORY_CONFIG_PATH = join("agntn", "memory.json");
-/** Where they lived before; read when the new file doesn't exist yet. */
-export const PI_LEGACY_MEMORY_CONFIG_PATH = "memory-scope.json";
 export const MEMORY_INGEST_TURNS_ENV = "AGNTN_MEMORY_INGEST_TURNS";
 export const MEMORY_AGENT_NAMESPACE_ENV = "AGNTN_MEMORY_AGENT_NAMESPACE";
 /** An OpenBot agent's namespace is its name unless a template says otherwise. */
@@ -162,24 +160,19 @@ export function piScopePath(
 }
 
 /**
- * Read Pi's memory settings from `agntn/memory.json`, or from the older `memory-scope.json`.
+ * Read Pi's memory settings from `agntn/memory.json`.
  *
  * @param env - Pi process environment.
  * @param homeDirectory - Home directory used to expand the Pi agent path.
- * @returns {{ configPath: string; value: unknown }} The file read and its JSON, `undefined` without either.
- * @throws {Error} When the file that exists can't be read or parsed.
+ * @returns {{ configPath: string; value: unknown }} The file and its JSON, `undefined` when it's missing.
+ * @throws {Error} When the file exists but can't be read or parsed.
  */
 function readPiConfig(
   env: Readonly<NodeJS.ProcessEnv>,
   homeDirectory: string,
 ): { configPath: string; value: unknown } {
   const configPath = piScopePath(env, homeDirectory);
-  const value = readPiScope(configPath);
-  if (value !== undefined) return { configPath, value };
-  const agentDir = piAgentDirectory(env.PI_CODING_AGENT_DIR?.trim(), homeDirectory);
-  const legacyPath = join(agentDir, PI_LEGACY_MEMORY_CONFIG_PATH);
-  const legacy = readPiScope(legacyPath);
-  return legacy === undefined ? { configPath, value } : { configPath: legacyPath, value: legacy };
+  return { configPath, value: readPiScope(configPath) };
 }
 
 /**

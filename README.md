@@ -86,7 +86,7 @@ From the checkout, configure an MCP client with:
 }
 ```
 
-Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/agntn/memory.json`, then the older `~/.pi/agent/memory-scope.json`.
+Run the command from the checkout so `pnpm` can find the package. Pi doesn't load `.env`, so without these variables it checks `~/.pi/agent/agntn/memory.json`.
 
 Pi also ingests the conversation on its own, no tool call needed. Every tenth turn, what you and the model wrote since the last batch goes to `memory_ingest` under the session ID. Pi counts a turn as one model response with its tool calls.
 
