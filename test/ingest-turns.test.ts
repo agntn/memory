@@ -574,7 +574,7 @@ describe("Pi turn ingest", () => {
     ]);
   });
 
-  it("keeps a channel mapped to null out of the remote's project", () => {
+  it("keeps channel sessions out of the remote's project unless the map names one", () => {
     const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
     try {
       const cwd = join(agents, "agent-rhea");

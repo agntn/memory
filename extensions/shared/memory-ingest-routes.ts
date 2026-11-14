@@ -248,7 +248,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
   }
 
   /**
-   * The project an OpenBot session ingests into: its mapped channel's, else its remote's; `null` means none.
+   * The project an OpenBot session ingests into: a channel's from the map, else the remote's.
    *
    * @param openbot - The session's channel and remote project.
    * @returns {ProfileParams | undefined} The project, or nothing for the agent's own split.
@@ -256,11 +256,8 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
   function sessionProject(
     openbot: Readonly<{ channel?: ChannelSenders; project?: ProfileParams }>,
   ): ProfileParams | undefined {
-    const mapped =
-      openbot.channel === undefined
-        ? undefined
-        : options.openBotChannels?.get(openbot.channel.channelId);
-    return mapped === null ? undefined : (mapped ?? openbot.project);
+    if (openbot.channel === undefined) return openbot.project;
+    return options.openBotChannels?.get(openbot.channel.channelId) ?? undefined;
   }
 
   /**
