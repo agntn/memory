@@ -164,6 +164,12 @@ try {
       /(?:from|import)\s*\(?\s*["']typebox(?:\/[^"']*)?["']/,
       `dist/${file} imports typebox, which OMP would rewrite`,
     );
+    if (file === "cli.mjs") continue;
+    assert.doesNotMatch(
+      code,
+      /import\.meta\.url/,
+      `dist/${file} reads import.meta.url, which a deployed Worker leaves undefined`,
+    );
   }
   assert.ok(
     !existsSync(path.join(packageRoot, "src/index.ts")),

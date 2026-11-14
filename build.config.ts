@@ -8,6 +8,8 @@ export default defineBuildConfig({
       type: "bundle",
       input: ["./src/index.ts", "./src/cli.ts", "./src/mcp.ts", "./src/ai.ts"],
       rolldown: {
+        /** A deployed Worker has no `import.meta.url` to probe a checkout with. */
+        transform: { define: { "import.meta.bundled": "true" } },
         resolve: {
           /** The executors load the package by name, and in here that name is the root entry. */
           alias: { "@agntn/memory": fileURLToPath(new URL("src/index.ts", import.meta.url)) },

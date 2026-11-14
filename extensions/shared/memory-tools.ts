@@ -97,13 +97,26 @@ const memoryIdPattern = new RegExp(MEMORY_ID_PATTERN);
 const isoInstantPattern = new RegExp(ISO_INSTANT_PATTERN);
 const MAX_RECALL_VISIBILITY_POLL_INTERVAL_MS = 10_000;
 
+declare global {
+  interface ImportMeta {
+    /** Set by the build: a bundle has no checkout to go hunting for. */
+    readonly bundled?: true;
+  }
+}
+
+/**
+ * Live `src/` for a checkout's `.ts` copy, the package core anywhere else.
+ * @returns {Promise<MemoryModule>} The memory module, loaded once.
+ */
 function loadMemory(): Promise<MemoryModule> {
   if (!memoryModulePromise) {
-    const sourceUrl = new URL("../../src/index.ts", import.meta.url);
-    // Runtime-selected so a checkout uses current source while a published package uses dist.
-    memoryModulePromise = existsSync(fileURLToPath(sourceUrl))
-      ? import(sourceUrl.href).then((memory) => memory as MemoryModule)
-      : import("@agntn/memory").then((memory) => memory as unknown as MemoryModule);
+    const sourceUrl = import.meta.bundled
+      ? undefined
+      : new URL("../../src/index.ts", import.meta.url);
+    memoryModulePromise =
+      sourceUrl && existsSync(fileURLToPath(sourceUrl))
+        ? import(sourceUrl.href).then((memory) => memory as MemoryModule)
+        : import("@agntn/memory").then((memory) => memory as unknown as MemoryModule);
   }
   return memoryModulePromise;
 }
