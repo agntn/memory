@@ -89,6 +89,16 @@ describe("call lines", () => {
     expect(line.meta).toEqual(["research/project", "copies 1"]);
   });
 
+  it("marks copies that name their source", () => {
+    const line = describeToolCall("Remember", {
+      content: "shared fact",
+      copies: [{ namespace: "research", profile: "shared" }],
+      copySource: true,
+    });
+
+    expect(line.meta).toEqual(["copies 1 with source"]);
+  });
+
   it("carries no icon when the harness reports no state", () => {
     expect(describeToolCall("Recall", { query: "q" }).icon).toBeUndefined();
   });

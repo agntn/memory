@@ -63,6 +63,8 @@ export interface RememberParams extends ProfileParams {
   sessionId?: string;
   /** More profiles that get the same content and session, written after the main one. */
   copies?: readonly ProfileParams[];
+  /** Ends each copy with a line naming the main record. */
+  copySource?: boolean;
 }
 
 export interface SupersedeParams extends ProfileParams {

@@ -459,7 +459,7 @@ describe("memory MCP server", () => {
     expect(refused.content).toEqual([
       {
         type: "text",
-        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content, copies',
+        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content, copies, copySource',
       },
     ]);
     expect(requests).toEqual([]);

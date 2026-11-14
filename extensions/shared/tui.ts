@@ -286,7 +286,9 @@ function callMeta(
   const meta: string[] = [];
   if (subject !== undefined && target !== undefined) meta.push(field(target, META_WIDTH));
   if (Array.isArray(record.messages)) meta.push(`messages ${record.messages.length}`);
-  if (Array.isArray(record.copies)) meta.push(`copies ${record.copies.length}`);
+  if (Array.isArray(record.copies)) {
+    meta.push(`copies ${record.copies.length}${record.copySource === true ? " with source" : ""}`);
+  }
   for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
     const value = scalarText(record[key]);
     if (value !== undefined) meta.push(`${metaLabel} ${field(value, META_WIDTH)}`);
