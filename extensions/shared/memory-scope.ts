@@ -107,11 +107,12 @@ function trimmedString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
 }
 
-function parsePiScope(value: unknown, configPath: string): ProfileParams {
+function parsePiScope(value: unknown, configPath: string): ProfileParams | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Pi memory scope at ${configPath} must be a JSON object`);
   }
   const record = value as Record<string, unknown>;
+  if (record.namespace === undefined && record.profile === undefined) return undefined;
   return validateMemoryScope(
     trimmedString(record.namespace),
     trimmedString(record.profile),

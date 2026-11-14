@@ -334,6 +334,27 @@ describe("Pi turn ingest", () => {
     }
   });
 
+  it("takes a scope file that sets only the interval", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
+    try {
+      writeFileSync(join(agentDir, "memory-scope.json"), JSON.stringify({ ingestTurns: 5 }));
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "");
+      const tools: string[] = [];
+      piMemoryExtension({
+        registerTool(tool: { name: string }) {
+          tools.push(tool.name);
+        },
+        on() {},
+      } as unknown as ExtensionAPI);
+      expect(tools).toContain("memory_namespace_list");
+      writeFileSync(join(agentDir, "memory-scope.json"), JSON.stringify({ namespace: "default" }));
+      expect(loadPi).toThrow("must define both namespace and profile");
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a turn count that isn't a whole number", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "2.5");
