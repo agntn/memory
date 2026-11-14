@@ -61,7 +61,7 @@ Check provider `capabilities` before relying on backend-specific features. For e
 
 ## Use with an agent
 
-The MCP, Pi, OMP, and AI SDK tools use Cloudflare over HTTP. They don't expose Mnemopi. The CLI now gives every agent tool a command, built from the same definitions.
+The MCP, Pi, and OMP tools use Cloudflare over HTTP. The AI SDK tools can also go through a Workers binding. They don't expose Mnemopi. The CLI now gives every agent tool a command, built from the same definitions.
 
 Drop the `memory_` prefix and use hyphens: `memory_remember` becomes `memory remember`. Arguments are flags, like `--content "Prefers short answers."`. Pass arrays and objects as JSON. Run `memory <command> --help` for the flags. You get exactly the text the agent sees, which makes the terminal a handy place to try things. Use `--json` for structured details.
 
@@ -136,6 +136,21 @@ No tool schema has a `namespace` or `profile` field. Calls that name either are 
 Without `locked`, you get the same 17 tools as MCP, Pi, and OMP. That's for an agent managing its own memory. Namespace and profile must still go together, or creation throws. Calls can name both to reach another profile, never just one.
 
 With a profile set, writes carry your `sessionId`, and the model can't pass its own. Scope and session come from your code, never environment variables. No Claude Code session hides in your chat app.
+
+Running inside a Worker? The Memory binding is already in `env`. Hand it over and the API token gets the day off. That's one less secret to rotate.
+
+```ts
+import { createMemoryAiTools } from "@agntn/memory/ai";
+
+const tools = createMemoryAiTools({
+  binding: env.MEMORY,
+  namespace: "support",
+  profile: "user-42",
+  locked: true,
+});
+```
+
+Namespace and profile are required. The binding serves one namespace. Calls that name another, copies included, are refused before anything is written. It can't list namespaces or profiles either. The four `memory_namespace_*` tools and `memory_profile_list` stay home. Without `locked` that leaves 12 tools. With it, the same 11 as over HTTP.
 
 ## Behavior worth knowing
 

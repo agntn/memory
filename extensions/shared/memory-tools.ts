@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
   AbortOptions,
+  AgentMemoryNamespaceBinding,
   CloudflareMemoryOptions,
   Memory,
   MemoryProfile,
@@ -193,7 +194,21 @@ async function getNamespaceClient(): Promise<
   return namespaceClientPromise;
 }
 
-async function getProvider(namespace: string): Promise<MemoryProvider> {
+/**
+ * The app's Workers binding when it brought one, HTTP otherwise.
+ * @param namespace - Namespace the call reaches.
+ * @param binding - Workers binding, if any.
+ * @returns {Promise<MemoryProvider>} The provider.
+ */
+async function getProvider(
+  namespace: string,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<MemoryProvider> {
+  if (binding !== undefined) {
+    const memory = await loadMemory();
+    memory.registerAll();
+    return memory.create<CloudflareMemoryOptions>("cloudflare", { binding });
+  }
   let providerPromise = providerPromises.get(namespace);
   if (!providerPromise) {
     providerPromise = loadMemory().then((memory) => {
@@ -205,10 +220,13 @@ async function getProvider(namespace: string): Promise<MemoryProvider> {
   return providerPromise;
 }
 
-async function getProfile(params: ProfileParams): Promise<MemoryProfile> {
+async function getProfile(
+  params: ProfileParams,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<MemoryProfile> {
   const profile = params.profile.trim();
   if (!profile) throw new Error("Profile cannot be empty");
-  return (await getProvider(params.namespace)).getProfile(profile);
+  return (await getProvider(params.namespace, binding)).getProfile(profile);
 }
 
 function requireCapability<K extends keyof MemoryProfile>(
@@ -1043,6 +1061,7 @@ function failedCopiesError(
  * @param copies - Profiles that get the same content.
  * @param write - Content and session of the main record, and the source line for copySource.
  * @param options - Abort signal shared by every write.
+ * @param binding - Workers binding the copies go through, if any.
  * @returns {Promise<MemoryToolResult>} One line per record, or an error naming the gaps.
  */
 async function rememberCopies(
@@ -1050,6 +1069,7 @@ async function rememberCopies(
   copies: readonly ProfileParams[],
   write: CopyWrite,
   options: AbortOptions,
+  binding?: AgentMemoryNamespaceBinding,
 ): Promise<MemoryToolResult> {
   const copy = {
     content: `${write.content}${write.sourceLine ?? ""}`,
@@ -1057,7 +1077,7 @@ async function rememberCopies(
   };
   const settled = await Promise.allSettled(
     copies.map(async (scope) =>
-      requireCapability(await getProfile(scope), "remember")(copy, options),
+      requireCapability(await getProfile(scope, binding), "remember")(copy, options),
     ),
   );
   const stored: StoredCopy[] = [main];
@@ -1075,11 +1095,15 @@ async function rememberCopies(
 }
 
 export const memoryToolExecutors = {
-  async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+  async remember(
+    params: RememberParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
     if (params.copies !== undefined) assertCopies(params, params.copies);
     if (params.copySource === true) assertCopySource(params);
     const write = { content: params.content, sessionId: optionalString(params.sessionId) };
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const memory = await requireCapability(profile, "remember")(write, options);
     if (params.copies !== undefined) {
       const target = memoryTarget(params);
@@ -1090,6 +1114,7 @@ export const memoryToolExecutors = {
           ? { ...write, sourceLine: copySourceLine(target, memory.id) }
           : write,
         options,
+        binding,
       );
     }
     return {
@@ -1098,12 +1123,16 @@ export const memoryToolExecutors = {
     };
   },
 
-  async supersede(params: SupersedeParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+  async supersede(
+    params: SupersedeParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
     assertRecallVisibility({
       ...params,
       memoryId: params.oldMemoryId,
     });
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const replacement = await requireCapability(profile, "remember")(
       { content: params.content, sessionId: optionalString(params.sessionId) },
       options,
@@ -1123,12 +1152,13 @@ export const memoryToolExecutors = {
   async resumeSupersession(
     params: Readonly<ResumeSupersessionParams>,
     options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
     assertRecallVisibility({ ...params, memoryId: params.oldMemoryId });
     assertRecallVisibility({ ...params, memoryId: params.replacementMemoryId });
     return completeSupersession(
       {
-        profile: await getProfile(params),
+        profile: await getProfile(params, binding),
         params,
         replacementMemoryId: params.replacementMemoryId,
         verifyFailure: `Replacement memory ${quoteToolText(params.replacementMemoryId)} for old memory ${quoteToolText(params.oldMemoryId)} failed verification`,
@@ -1141,8 +1171,9 @@ export const memoryToolExecutors = {
   async waitForRecall(
     params: RecallVisibilityParams,
     options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     let visibility: RecallVisibility;
     try {
       visibility = await waitForRecallCandidate(profile, params, options);
@@ -1170,8 +1201,12 @@ export const memoryToolExecutors = {
     };
   },
 
-  async ingest(params: IngestParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
+  async ingest(
+    params: IngestParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
+    const profile = await getProfile(params, binding);
     // Copy the modelled fields only: anything else the caller attached would be
     // posted upstream under the account token without appearing in the schema.
     const messages = params.messages.map((message) => {
@@ -1213,16 +1248,21 @@ export const memoryToolExecutors = {
    *
    * @param params - Validated recall arguments.
    * @param options - Request cancellation.
+   * @param binding - Workers binding the call goes through, if any.
    * @returns {Promise<MemoryToolResult>} The serialized answer and normalized result details.
    */
-  async recall(params: RecallParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+  async recall(
+    params: RecallParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
     assertCount(params.candidates, "Candidates");
     assertCount(params.expand, "Expand");
     const referenceDate = optionalString(params.referenceDate);
     if (referenceDate !== undefined && !hasValidCalendarDate(referenceDate)) {
       throw new Error("Recall reference date must contain a valid calendar date");
     }
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const result = await requireCapability(profile, "recall")(params.query, {
       thinkingLevel: params.thinkingLevel,
       responseLength: params.responseLength,
@@ -1251,11 +1291,16 @@ export const memoryToolExecutors = {
    *
    * @param params - Validated listing and expansion arguments.
    * @param options - Request cancellation.
+   * @param binding - Workers binding the call goes through, if any.
    * @returns {Promise<MemoryToolResult>} The serialized page and normalized pagination details.
    */
-  async list(params: ListParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+  async list(
+    params: ListParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
     assertCount(params.expand, "Expand");
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const result = await requireCapability(
       profile,
       "list",
@@ -1289,11 +1334,16 @@ export const memoryToolExecutors = {
    *
    * @param params - Validated memory identifiers and profile scope.
    * @param options - Request cancellation.
+   * @param binding - Workers binding the call goes through, if any.
    * @returns {Promise<MemoryToolResult>} The serialized records with per-id failures where applicable.
    */
-  async get(params: GetParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
+  async get(
+    params: GetParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
     assertMemoryIds(params.memoryIds);
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const readings = await readMemories(profile, params.memoryIds, options);
     const entries = [...readings.entries()];
     const failed = entries.filter(
@@ -1324,8 +1374,12 @@ export const memoryToolExecutors = {
     };
   },
 
-  async deleteMemory(params: MemoryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
+  async deleteMemory(
+    params: MemoryParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
+    const profile = await getProfile(params, binding);
     const result = await requireCapability(profile, "delete")(params.memoryId, options).catch(
       (error: unknown) => {
         throw explainMissing(params, params.memoryId, error);
@@ -1337,8 +1391,12 @@ export const memoryToolExecutors = {
     };
   },
 
-  async summary(params: SummaryParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
+  async summary(
+    params: SummaryParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
+    const profile = await getProfile(params, binding);
     const result = await requireCapability(
       profile,
       "getSummary",
@@ -1362,8 +1420,9 @@ export const memoryToolExecutors = {
   async deleteSession(
     params: SessionParams,
     options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
-    const profile = await getProfile(params);
+    const profile = await getProfile(params, binding);
     const removed = await countMemories(profile, options, params.sessionId);
     await requireCapability(profile, "deleteSession")(params.sessionId, options);
     const sessionId = singleLineToolText(params.sessionId);
@@ -1385,12 +1444,13 @@ export const memoryToolExecutors = {
   async deleteProfile(
     params: ProfileParams,
     options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
-    const provider = await getProvider(params.namespace);
+    const provider = await getProvider(params.namespace, binding);
     if (!provider.deleteProfile) {
       throw new Error("Memory provider does not support deleteProfile");
     }
-    const removed = await countMemories(await getProfile(params), options);
+    const removed = await countMemories(await getProfile(params, binding), options);
     await provider.deleteProfile(params.profile, options);
     const text = emptyCascade(removed)
       ? `Deleted profile ${memoryTarget(params)}, which held no listed memories; superseded ones, if there were any, went with it. A profile name that was never written to reports the same result.`
