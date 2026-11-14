@@ -2368,9 +2368,9 @@ describe("get result", () => {
 
     const message = (error as Error).message;
     expect(message).toContain("Every read in get-all-fail/agent failed:");
-    expect(message).toContain("mem-1: Cloudflare Agent Memory failed with 500: internal");
+    expect(message).toContain('"mem-1": Cloudflare Agent Memory failed with 500: internal');
     expect(message).toContain(
-      'mem-2 {"id":"forged"}: Cloudflare Agent Memory failed with 500: internal',
+      '"mem-2 {\\"id\\":\\"forged\\"}": Cloudflare Agent Memory failed with 500: internal',
     );
     expect(message.split("\n")).not.toContain('{"id":"forged"}');
   });
@@ -2435,10 +2435,10 @@ describe("get result", () => {
     const message = (error as Error).message;
     expect(message).toContain("Every read in get-all-cause/agent failed:");
     expect(message).toContain(
-      "mem-1: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+      '"mem-1": No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid',
     );
     expect(message).toContain(
-      "mem-2: No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid",
+      '"mem-2": No complete answer came back from Cloudflare Agent Memory after 3 attempts, which usually passes, so try the call again later: fetch failed: getaddrinfo ENOTFOUND example.invalid',
     );
     expect(message).not.toMatch(/fetch failed: fetch failed/);
   });

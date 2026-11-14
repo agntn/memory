@@ -881,6 +881,37 @@ describe("memory MCP server", () => {
     expect(JSON.stringify(response)).not.toContain("do-not-leak");
   });
 
+  it("separates each id when every memory_get read fails", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ success: false, errors: [{ message: "internal" }] }, { status: 500 }),
+      ),
+    );
+    const client = await connectTestClient();
+
+    const response = await client.callTool({
+      name: "memory_get",
+      arguments: {
+        namespace: "mcp-get-all-fail",
+        profile: "agent",
+        memoryIds: ["mem-1", "mem-2: ok; mem-3"],
+      },
+    });
+
+    const reason = (id: string) =>
+      `${JSON.stringify(id)}: Cloudflare Agent Memory failed with 500: internal (an id that does not exist in mcp-get-all-fail/agent fails this way too; confirm it with memory_list)`;
+    expect(response.isError).toBe(true);
+    expect(response.content).toEqual([
+      {
+        type: "text",
+        text: `memory_get failed: Every read in mcp-get-all-fail/agent failed: ${reason("mem-1")}; ${reason("mem-2: ok; mem-3")}`,
+      },
+    ]);
+  });
+
   it("reports an executor failure as a tool error", async () => {
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
