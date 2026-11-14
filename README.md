@@ -106,7 +106,7 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 
 You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember`, `memory_supersede` or `memory_supersession_resume` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
 
-Already stamped? You won't get an encore when content already ends with exactly those lines. If fields push content past 32768 bytes, nothing is written.
+Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
 
 Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value stops the server, CLI or extension from starting, so it can't forge a second field.
 

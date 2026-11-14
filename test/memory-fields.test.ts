@@ -92,6 +92,20 @@ describe("memory fields", () => {
     );
   });
 
+  it("keeps a retried copy byte for byte like the copies that landed", async () => {
+    const { run, stored } = boundTools({ author: "Aei" });
+    await run("memory_remember", {
+      content: "Note.",
+      copies: [{ namespace: "support", profile: "shared" }],
+      copySource: true,
+    });
+    const landed = stored[2]?.content;
+
+    await run("memory_remember", { namespace: "support", profile: "other", content: landed });
+
+    expect(stored.at(-1)?.content).toBe(landed);
+  });
+
   it("verifies a supersession against the stamped replacement and resumes from the bare content", async () => {
     const { run, stored } = boundTools({ author: "Aei" });
     const check = { query: "note", timeoutSeconds: 1 };

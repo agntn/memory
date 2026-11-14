@@ -12,6 +12,8 @@ export type MemoryFields = Readonly<Record<string, string>>;
 const fieldKeyPattern = new RegExp(MEMORY_FIELD_KEY_PATTERN, "u");
 /* Control characters and line breaks, so a value can't forge a second field. */
 const unprintablePattern = /[\p{Cc}\u2028\u2029]/u;
+/* The line copySource ends a copy with, which a retried copy carries after the fields. */
+const copySourceSuffix = /\n\nCopied from memory "[^"\n]*" in [a-z0-9-]+\/[a-z0-9-]+\.$/u;
 
 /**
  * Check one field, so a stamped line always reads back as the same key and value.
@@ -77,7 +79,7 @@ export function configuredMemoryFields(
 }
 
 /**
- * Append the fields after a blank line, unless the content already ends with them.
+ * Append the fields after a blank line, unless they already end the content or precede its copy line.
  *
  * @param content - Memory content the model sent.
  * @param fields - The host's fields.
@@ -88,7 +90,7 @@ export function stampMemoryContent(content: string, fields: MemoryFields): strin
   const block = `\n\n${Object.entries(fields)
     .map(([key, value]) => `${key}: ${value}`)
     .join("\n")}`;
-  if (content.endsWith(block)) return content;
+  if (content.replace(copySourceSuffix, "").endsWith(block)) return content;
   const encoder = new TextEncoder();
   const bytes = encoder.encode(content + block).length;
   if (bytes > MAX_TOOL_MEMORY_CONTENT_CHARACTERS) {
