@@ -2044,11 +2044,9 @@ describe("remember copies", () => {
       bodies.push(init ?? {});
       const target = writeTarget(url);
       if (failing.includes(target)) return { failure: { status: 400, message: "profile refused" } };
+      const sent = JSON.parse(String(init?.body)) as { content: string };
       return {
-        result: {
-          ...memoryEntry(`mem-${target.replace("/", "-")}`, "s-1"),
-          content: "shared fact",
-        },
+        result: { ...memoryEntry(`mem-${target.replace("/", "-")}`, "s-1"), content: sent.content },
       };
     });
     return { urls, bodies };
@@ -2123,7 +2121,93 @@ describe("remember copies", () => {
       'Stored memory in research/project "mem-research-project", research/shared "mem-research-shared", but 1 of 2 copies failed.',
     );
     expect(message).toMatch(/team\/agent: .*profile refused/);
-    expect(message).toContain("retry only the profiles that lack the memory");
+    expect(message).toContain(
+      "retry only the profiles that lack the memory, each as its own memory_remember without copies",
+    );
+  });
+
+  it("ends each copy with the main record's namespace, profile and id under copySource", async () => {
+    const { bodies } = stubWrites();
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "shared fact",
+      sessionId: "s-1",
+      copies: [
+        { namespace: "research", profile: "shared" },
+        { namespace: "team", profile: "agent" },
+      ],
+      copySource: true,
+    });
+
+    const copied = 'shared fact\n\nCopied from memory "mem-research-project" in research/project.';
+    expect(bodies.map((body) => JSON.parse(String(body.body)) as unknown)).toEqual([
+      { content: "shared fact", sessionId: "s-1" },
+      { content: copied, sessionId: "s-1" },
+      { content: copied, sessionId: "s-1" },
+    ]);
+    expect(textOf(result).split("\n")[0]).toBe(
+      'Stored the same memory in 3 profiles. Each copy ends with a blank line and Copied from memory "mem-research-project" in research/project. A copy whose content matches the first record plus that line leaves it out.',
+    );
+    expect(contentUnder(result, "mem-research-project")).toEqual(["shared fact"]);
+    expect(contentUnder(result, "mem-research-shared")).toEqual([]);
+    expect(contentUnder(result, "mem-team-agent")).toEqual([]);
+  });
+
+  it("hands a failed copy the source line to retry with", async () => {
+    stubWrites(["team/agent"]);
+
+    const error = await memoryToolExecutors
+      .remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copies: [{ namespace: "team", profile: "agent" }],
+        copySource: true,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toContain(
+      'Give a retried copy content that ends with "\\n\\nCopied from memory \\"mem-research-project\\" in research/project.", as the stored ones do.',
+    );
+  });
+
+  it.each([
+    ["x".repeat(32_768 - 70), 3],
+    ["x".repeat(32_768 - 69), 0],
+    ["ż".repeat(16_350), 0],
+  ])("sizes the source line before any write (%#)", async (content, writes) => {
+    const { urls } = stubWrites();
+
+    const call = memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content,
+      copies: [
+        { namespace: "research", profile: "shared" },
+        { namespace: "team", profile: "agent" },
+      ],
+      copySource: true,
+    });
+
+    if (writes === 0) await expect(call).rejects.toThrow("copySource adds 70 bytes to each copy");
+    else await call;
+    expect(urls).toHaveLength(writes);
+  });
+
+  it("refuses copySource without copies before any write", async () => {
+    const { urls } = stubWrites();
+
+    await expect(
+      memoryToolExecutors.remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copySource: true,
+      }),
+    ).rejects.toThrow("copySource needs copies");
+    expect(urls).toEqual([]);
   });
 
   it("writes no copy when the main profile refuses the memory", async () => {

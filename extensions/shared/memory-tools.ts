@@ -24,6 +24,8 @@ import {
   SERVICE_GENERATED_UNTRUSTED,
   MAX_TOOL_EXPAND,
   MAX_TOOL_MEMORY_COPIES,
+  MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
+  MEMORY_ID_CHARACTERS,
   DEFAULT_TOOL_RECALL_CANDIDATES,
   RECALL_RELEVANCE_FLOOR,
   RECALL_RELEVANCE_FLOOR_TEXT,
@@ -976,25 +978,68 @@ function assertCopies(params: Readonly<ProfileParams>, copies: readonly ProfileP
   }
 }
 
+/**
+ * The line copySource appends to every copy.
+ *
+ * @param source - Profile the first record landed in.
+ * @param id - Id of the first record.
+ * @returns {string} Text that follows the copied content.
+ */
+function copySourceLine(source: string, id: string): string {
+  return `\n\nCopied from memory ${JSON.stringify(id)} in ${source}.`;
+}
+
+/**
+ * Refuse copySource before the first write when it has nothing to annotate or no room left.
+ *
+ * @param params - The remember call that asked for copySource.
+ * @throws {Error} Without copies, or past the size cap.
+ */
+function assertCopySource(params: Readonly<RememberParams>): void {
+  if (params.copies === undefined) {
+    throw new Error("copySource needs copies; it annotates copies, not the main record");
+  }
+  const encoder = new TextEncoder();
+  const line = copySourceLine(memoryTarget(params), "0".repeat(MEMORY_ID_CHARACTERS));
+  const bytes = encoder.encode(params.content + line).length;
+  if (bytes > MAX_TOOL_MEMORY_CONTENT_CHARACTERS) {
+    throw new Error(
+      `copySource adds ${encoder.encode(line).length} bytes to each copy, taking it to ${bytes} of ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes; shorten the content or leave copySource out`,
+    );
+  }
+}
+
 interface StoredCopy {
   readonly target: string;
   readonly memory: Memory;
+}
+
+interface CopyWrite {
+  readonly content: string;
+  readonly sessionId?: string;
+  /** The line each copy ends with, under copySource. */
+  readonly sourceLine?: string;
 }
 
 /**
  * One line per stored record, the shared content only under the first.
  *
  * @param stored - Every record the call wrote, main profile first.
+ * @param sourceLine - The line copies end with, if any.
  * @returns {string} The result text.
  */
-function storedCopiesText(stored: readonly StoredCopy[]): string {
-  const shared = stored[0]?.memory.content;
+function storedCopiesText(stored: readonly StoredCopy[], sourceLine?: string): string {
+  const copied = `${stored[0]?.memory.content}${sourceLine ?? ""}`;
   const records = stored.map(({ target, memory }, index) => {
-    if (index === 0 || memory.content !== shared) return { target, ...memory };
+    if (index === 0 || memory.content !== copied) return { target, ...memory };
     const { content: _content, ...rest } = memory;
     return { target, ...rest };
   });
-  return `Stored the same memory in ${stored.length} profiles. A copy whose content matches the first record leaves it out.\n${recordLines(records)}`;
+  const header =
+    sourceLine === undefined
+      ? "A copy whose content matches the first record leaves it out."
+      : `Each copy ends with a blank line and ${sourceLine.trim()} A copy whose content matches the first record plus that line leaves it out.`;
+  return `Stored the same memory in ${stored.length} profiles. ${header}\n${recordLines(records)}`;
 }
 
 /**
@@ -1002,11 +1047,13 @@ function storedCopiesText(stored: readonly StoredCopy[]): string {
  *
  * @param stored - Records written before or beside the failed copies.
  * @param failed - Each failed copy with its reason.
+ * @param sourceLine - The line copies end with, if any.
  * @returns {Error} One error for the whole call.
  */
 function failedCopiesError(
   stored: readonly StoredCopy[],
   failed: readonly { readonly target: string; readonly reason: unknown }[],
+  sourceLine?: string,
 ): Error {
   const storedText = stored
     .map(({ target, memory }) => `${target} ${quoteToolText(memory.id)}`)
@@ -1017,7 +1064,7 @@ function failedCopiesError(
     )
     .join("; ");
   return new Error(
-    `Stored memory in ${storedText}, but ${failed.length} of ${stored.length + failed.length - 1} copies failed. ${failedText}. Check memory_list in each failed profile before retrying, since a failed write may have landed anyway, and retry only the profiles that lack the memory.`,
+    `Stored memory in ${storedText}, but ${failed.length} of ${stored.length + failed.length - 1} copies failed. ${failedText}. Check memory_list in each failed profile before retrying, since a failed write may have landed anyway, and retry only the profiles that lack the memory, each as its own memory_remember without copies. Repeating this call would store the main record again.${sourceLine === undefined ? "" : ` Give a retried copy content that ends with ${JSON.stringify(sourceLine)}, as the stored ones do.`}`,
   );
 }
 
@@ -1026,19 +1073,23 @@ function failedCopiesError(
  *
  * @param main - The record already in the main profile.
  * @param copies - Profiles that get the same content.
- * @param write - Content and session of the main record.
+ * @param write - Content and session of the main record, and the source line for copySource.
  * @param options - Abort signal shared by every write.
  * @returns {Promise<MemoryToolResult>} One line per record, or an error naming the gaps.
  */
 async function rememberCopies(
   main: StoredCopy,
   copies: readonly ProfileParams[],
-  write: Readonly<{ content: string; sessionId?: string }>,
+  write: CopyWrite,
   options: AbortOptions,
 ): Promise<MemoryToolResult> {
+  const copy = {
+    content: `${write.content}${write.sourceLine ?? ""}`,
+    sessionId: write.sessionId,
+  };
   const settled = await Promise.allSettled(
-    copies.map(async (copy) =>
-      requireCapability(await getProfile(copy), "remember")(write, options),
+    copies.map(async (scope) =>
+      requireCapability(await getProfile(scope), "remember")(copy, options),
     ),
   );
   const stored: StoredCopy[] = [main];
@@ -1048,9 +1099,9 @@ async function rememberCopies(
     if (outcome.status === "fulfilled") stored.push({ target, memory: outcome.value });
     else failed.push({ target, reason: outcome.reason });
   });
-  if (failed.length > 0) throw failedCopiesError(stored, failed);
+  if (failed.length > 0) throw failedCopiesError(stored, failed, write.sourceLine);
   return {
-    content: [{ type: "text", text: storedCopiesText(stored) }],
+    content: [{ type: "text", text: storedCopiesText(stored, write.sourceLine) }],
     details: { records: stored.map(({ target, memory }) => ({ target, ...memory })) },
   };
 }
@@ -1058,14 +1109,18 @@ async function rememberCopies(
 export const memoryToolExecutors = {
   async remember(params: RememberParams, options: AbortOptions = {}): Promise<MemoryToolResult> {
     if (params.copies !== undefined) assertCopies(params, params.copies);
+    if (params.copySource === true) assertCopySource(params);
     const write = { content: params.content, sessionId: optionalString(params.sessionId) };
     const profile = await getProfile(params);
     const memory = await requireCapability(profile, "remember")(write, options);
     if (params.copies !== undefined) {
+      const target = memoryTarget(params);
       return rememberCopies(
-        { target: memoryTarget(params), memory },
+        { target, memory },
         params.copies,
-        write,
+        params.copySource === true
+          ? { ...write, sourceLine: copySourceLine(target, memory.id) }
+          : write,
         options,
       );
     }

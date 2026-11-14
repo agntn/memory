@@ -142,6 +142,9 @@ export const rememberParameters = Type.Object(
         },
       ),
     ),
+    copySource: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.rememberCopySource }),
+    ),
   },
   closed,
 );
@@ -423,14 +426,14 @@ function rebuildOperationalSchemas(
 
 /**
  * The schemas of a surface locked to one profile: no scope fields, no `sessionId` on a write,
- * and no `copies`, which would carry a write out of that profile.
+ * and no `copies` or `copySource`, which would carry a write out of that profile.
  *
  * @returns {Record<OperationalSchemaName, TObject>} The schemas the model sees.
  */
 export function createLockedMemoryToolSchemas(): Record<OperationalSchemaName, TObject> {
   return rebuildOperationalSchemas((name) =>
     name === "rememberParameters"
-      ? Type.Omit(scopelessSchema(name), ["copies"], closed)
+      ? Type.Omit(scopelessSchema(name), ["copies", "copySource"], closed)
       : scopelessSchema(name),
   );
 }

@@ -41,6 +41,8 @@ export const MAX_TOOL_MEMORY_CONTENT_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
 /** Extra profiles one memory_remember call may copy into; each copy is one more write. */
 export const MAX_TOOL_MEMORY_COPIES = 4;
+/** A memory id is a ULID, so copySource can size its line before the first record has one. */
+export const MEMORY_ID_CHARACTERS = 26;
 /**
  * Cap on how many memories one call may read with full content.
  *
@@ -106,7 +108,7 @@ export const memoryToolMeta = {
   },
   memory_remember: {
     label: "Remember",
-    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. With copySource, each copy also ends with a line naming the first record's namespace, profile and id. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersede: {
     label: "Supersede Memory",
@@ -183,6 +185,8 @@ export const memoryFieldDescriptions = {
     "Cursor copied from the previous response. A response without a cursor was the last page.",
   rememberContent: `Memory content to store. The service writes it verbatim, assigns the memory type itself, and rejects content over ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes, the same cap as one ingested message.`,
   rememberCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} more namespace and profile pairs that get the same content and session, in this namespace or any other, for example a project profile next to a shared one. Writes are not atomic: a failed copy names the records already stored and each profile still missing, so retry only those. Each pair must differ from the others and from the main profile.`,
+  rememberCopySource:
+    "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
   copyNamespace: "Namespace of the copy.",
   copyProfile: "Profile inside the copy's namespace. The first write creates it.",
   messageRole: "Who produced the message.",

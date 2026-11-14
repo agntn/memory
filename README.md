@@ -94,6 +94,10 @@ Writes keep the host's session ID wherever they go, and the model can't pass `se
 
 Give `memory_remember` up to four `copies` and one call stores the same content and session in each profile. Pasting the same finding twice can finally retire. The main record lands first, but the writes aren't atomic. If a copy fails, the error shows what landed and which profiles still need a retry.
 
+Opt in with `copySource: true` and copies get a parent. Each one ends with `Copied from memory "<id>" in <namespace>/<profile>.` after a blank line. The main record stays untouched.
+
+That's handy once the tool result is gone. Cloudflare's remember API takes only content and a session ID, so the reference has to live in the content. It marks origin, not independent confirmation, and won't follow later edits. If the line would push a copy past 32768 bytes, nothing is written. Without the flag, copies stay verbatim.
+
 Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account.
 
 `CLOUDFLARE_ACCOUNT_ID` counts too, so the one your shell already exports for wrangler just works. And when Cloudflare refuses a cf token mid-session, the next call goes back to cf for a fresh one instead of sulking until it expires.
