@@ -7,6 +7,7 @@ import {
   type MemoryToolName,
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
+import { configuredMemoryFields } from "../shared/memory-fields.ts";
 import { configuredPiMemoryScope } from "../shared/memory-scope.ts";
 import type { ProfileParams } from "../shared/memory-tools.types.ts";
 import type { RenderedToolResult, RenderOptions, StatusTheme } from "../shared/tui.ts";
@@ -62,7 +63,11 @@ function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRe
 
 export default function memoryExtension(pi: ExtensionAPI) {
   const scope = configuredPiMemoryScope();
-  const tools = createMemoryTools({ scope, writeSession: (host) => hostSessionId("pi", host) });
+  const tools = createMemoryTools({
+    scope,
+    fields: configuredMemoryFields(),
+    writeSession: (host) => hostSessionId("pi", host),
+  });
   registerPiTools(pi, tools, {
     renderers: Object.fromEntries(
       tools.map((tool) => [tool.name, renderers(tool.name as MemoryToolName, scope)]),

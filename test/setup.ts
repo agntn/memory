@@ -14,6 +14,7 @@ import { vi } from "vite-plus/test";
 const hostEnvironment = [
   "AGNTN_MEMORY_NAMESPACE",
   "AGNTN_MEMORY_PROFILE",
+  "AGNTN_MEMORY_FIELDS",
   "PI_CODING_AGENT_DIR",
   "CLAUDE_PROJECT_DIR",
   "CLAUDE_CODE_SESSION_ID",

@@ -14,6 +14,8 @@ export const MAX_TOOL_NAMESPACE_CHARACTERS = 32;
 export const MAX_TOOL_SESSION_ID_CHARACTERS = 64;
 /** Namespaces and profiles share this charset rule; the service answers anything else with 400. */
 export const MEMORY_NAME_PATTERN = "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$";
+/** Keys of the host's memory fields, plain enough to read back from a `key: value` line. */
+export const MEMORY_FIELD_KEY_PATTERN = "^[a-z][a-z0-9_]{0,63}$";
 /**
  * Identifiers that stay inside their own URL path segment.
  *

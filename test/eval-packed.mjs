@@ -34,6 +34,7 @@ const root = path.resolve(import.meta.dirname, "..");
 for (const key of [
   "AGNTN_MEMORY_NAMESPACE",
   "AGNTN_MEMORY_PROFILE",
+  "AGNTN_MEMORY_FIELDS",
   "CLAUDE_PROJECT_DIR",
   "CLAUDE_CODE_SESSION_ID",
 ]) {

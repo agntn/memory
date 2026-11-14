@@ -400,6 +400,48 @@ describe("memory MCP server", () => {
     expect(signals[0]).toBeInstanceOf(AbortSignal);
   });
 
+  it("ends each write with the fields from AGNTN_MEMORY_FIELDS and refuses an overflow unsent", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"author":"Aei Two En","platform":"web"}');
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ success: true, result: storedMemory("memory-stamped") });
+      }),
+    );
+    const client = await connectTestClient();
+    const scope = { namespace: "default", profile: "agent" };
+
+    const stored = await client.callTool({
+      name: "memory_remember",
+      arguments: { ...scope, content: "Reset lives under Settings." },
+    });
+    const refused = await client.callTool({
+      name: "memory_remember",
+      arguments: { ...scope, content: "x".repeat(32_760) },
+    });
+
+    expect(stored.isError).toBeFalsy();
+    expect(bodies).toEqual([
+      { content: "Reset lives under Settings.\n\nauthor: Aei Two En\nplatform: web" },
+    ]);
+    expect(refused).toMatchObject({
+      isError: true,
+      content: [
+        { type: "text", text: expect.stringContaining("Fields from the host add 34 bytes") },
+      ],
+    });
+  });
+
+  it("refuses to start with AGNTN_MEMORY_FIELDS that would forge a line", () => {
+    vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"author":"Aei\\nplatform: forged"}');
+
+    expect(() => createMcpServer()).toThrow('Memory field "author" must be one line');
+  });
+
   it("defaults operational tools to the configured scope and harness session", async () => {
     vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");

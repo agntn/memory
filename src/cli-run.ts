@@ -1,5 +1,6 @@
 import { runCli } from "@agntn/tools/cli";
 import { sanitizeLine } from "@agntn/tools";
+import { configuredMemoryFields, type MemoryFields } from "../extensions/shared/memory-fields.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 import {
   claudeCodeMemorySessionId,
@@ -17,8 +18,10 @@ import { version } from "./version.ts";
  */
 export async function runMemoryCli(argv: readonly string[]): Promise<void> {
   let scope: ProfileParams | undefined;
+  let fields: MemoryFields | undefined;
   try {
     scope = configuredMemoryScope();
+    fields = configuredMemoryFields();
   } catch (error) {
     process.stderr.write(`${sanitizeLine(error instanceof Error ? error.message : error)}\n`);
     process.exitCode = 1;
@@ -31,6 +34,7 @@ export async function runMemoryCli(argv: readonly string[]): Promise<void> {
       description: "Agent memory CLI",
       tools: createMemoryTools({
         scope,
+        fields,
         writeSession: () => claudeCodeMemorySessionId() ?? grokMemorySessionId(),
       }),
       mcp: { name: "memory", version },

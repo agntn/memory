@@ -226,6 +226,32 @@ describe("memory extensions", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  it("stamps Pi and OMP writes with the fields from AGNTN_MEMORY_FIELDS", async () => {
+    vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"author":"Aei Two En"}');
+    const execute = vi
+      .spyOn(memoryToolExecutors, "remember")
+      .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+    const { signal } = new AbortController();
+
+    for (const tools of [piTools(), ompTools()]) {
+      const remember = tool(tools, "memory_remember") as RegisteredTool & {
+        execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+      };
+      await remember.execute(
+        "call-0",
+        { namespace: "research", profile: "project", content: "project fact" },
+        signal,
+        undefined,
+        {},
+      );
+      expect(execute).toHaveBeenLastCalledWith(
+        expect.objectContaining({ content: "project fact\n\nauthor: Aei Two En" }),
+        { signal },
+      );
+    }
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it("binds Pi operational tools from its agent-local scope file", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
     try {
