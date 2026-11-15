@@ -5,6 +5,7 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
 } from "../extensions/shared/memory-tools.ts";
+import { toolErrorMessage } from "../extensions/shared/tool-errors.ts";
 
 interface StubResponse {
   result?: unknown;
@@ -524,6 +525,7 @@ describe("recall visibility", () => {
     );
     expect(urls).toHaveLength(1);
     expect(urls[0]).toMatch(/\/memories\/mem-missing$/);
+    expect(toolErrorMessage(error)).toBe((error as Error).message);
   });
 
   it("does not blame recall when the exact read outlives the deadline", async () => {
