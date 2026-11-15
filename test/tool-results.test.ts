@@ -679,6 +679,8 @@ describe("memory supersession", () => {
     expect(textOf(result)).toContain(
       'Resumed supersession of memory "mem-old" with replacement "mem-new"',
     );
+    expect(textOf(result)).not.toContain('"content"');
+    expect(result.details).toMatchObject({ newMemory: { content: replacement.content } });
     expect(urls.some((url) => url.endsWith("/remember"))).toBe(false);
     expect(requests.map(({ url, method }) => ({ path: new URL(url).pathname, method }))).toEqual([
       {
@@ -2087,16 +2089,51 @@ describe("remember copies", () => {
       expect(JSON.parse(String(body.body))).toEqual({ content: "shared fact", sessionId: "s-1" });
     }
     expect(textOf(result).split("\n")[0]).toBe(
-      "Stored the same memory in 3 profiles. A copy whose content matches the first record leaves it out.",
+      "Stored the same memory in 3 profiles. Content that matches what this call passed is left out; memory_get reads it whole.",
     );
     expect(records<{ target: string; id: string; content?: string }>(result)).toEqual([
       expect.objectContaining({ target: "research/project", id: "mem-research-project" }),
       expect.objectContaining({ target: "research/shared", id: "mem-research-shared" }),
       expect.objectContaining({ target: "team/agent", id: "mem-team-agent" }),
     ]);
-    expect(contentUnder(result, "mem-research-project")).toEqual(["shared fact"]);
+    expect(contentUnder(result, "mem-research-project")).toEqual([]);
     expect(contentUnder(result, "mem-research-shared")).toEqual([]);
+    expect(textOf(result)).not.toContain("shared fact");
     expect(textOf(result).match(/summaryTrust/g)).toHaveLength(3);
+  });
+
+  it("leaves out content the call passed and keeps what the service changed", async () => {
+    stubCloudflare((url, init) => {
+      const sent = JSON.parse(String(init?.body)) as { content: string };
+      const stored = url.includes("/team/") ? `${sent.content} (trimmed)` : sent.content;
+      return {
+        result: {
+          ...memoryEntry(`mem-${url.includes("/team/") ? "team" : "main"}`, null),
+          content: stored,
+        },
+      };
+    });
+
+    const single = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "line one\nline two",
+    });
+    const copied = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "shared fact",
+      copies: [{ namespace: "team", profile: "agent" }],
+    });
+
+    expect(textOf(single).split("\n")[0]).toBe(
+      "Stored memory in research/project. Content that matches what this call passed is left out; memory_get reads it whole.",
+    );
+    expect(contentUnder(single, "mem-main")).toEqual([]);
+    expect(textOf(single)).not.toContain("line one");
+    expect(single.details).toMatchObject({ id: "mem-main", content: "line one\nline two" });
+    expect(contentUnder(copied, "mem-main")).toEqual([]);
+    expect(contentUnder(copied, "mem-team")).toEqual(["shared fact (trimmed)"]);
   });
 
   it("copies across namespaces, each write in its own namespace", async () => {
@@ -2160,9 +2197,9 @@ describe("remember copies", () => {
       { content: copied, sessionId: "s-1" },
     ]);
     expect(textOf(result).split("\n")[0]).toBe(
-      'Stored the same memory in 3 profiles. Each copy ends with a blank line and Copied from memory "mem-research-project" in research/project. A copy whose content matches the first record plus that line leaves it out.',
+      'Stored the same memory in 3 profiles. Each copy ends with a blank line and Copied from memory "mem-research-project" in research/project. Content that matches what this call passed is left out; memory_get reads it whole.',
     );
-    expect(contentUnder(result, "mem-research-project")).toEqual(["shared fact"]);
+    expect(contentUnder(result, "mem-research-project")).toEqual([]);
     expect(contentUnder(result, "mem-research-shared")).toEqual([]);
     expect(contentUnder(result, "mem-team-agent")).toEqual([]);
   });
