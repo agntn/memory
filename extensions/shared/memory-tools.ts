@@ -272,6 +272,22 @@ function withSummaryTrust(value: unknown): unknown {
   return { ...value, summaryTrust: SERVICE_GENERATED_UNTRUSTED };
 }
 
+const WRITTEN_CONTENT_NOTE =
+  "Content that matches what this call wrote is left out; memory_get reads it whole.";
+
+/**
+ * A stored record minus the content the caller just sent; content the service changed stays.
+ *
+ * @param memory - The record the service answered with.
+ * @param written - The content this call sent for it.
+ * @returns {Record<string, unknown>} The record as the result text shows it.
+ */
+function writtenRecord(memory: Memory, written: string): Record<string, unknown> {
+  if (memory.content !== written) return { ...memory };
+  const { content: _content, ...rest } = memory;
+  return rest;
+}
+
 /*
  * One compact JSON object per line, full content indented below its record:
  * inlined, a JSON string folds a long memory into one physical line MCP hosts
@@ -937,7 +953,7 @@ async function completeSupersession(
     content: [
       {
         type: "text",
-        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.\n${json({ ...details, newMemory: withSummaryTrust(verified.memory) })}`,
+        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE}\n${json({ ...details, newMemory: withSummaryTrust(writtenRecord(verified.memory, params.content)) })}`,
       },
     ],
     details,
@@ -1018,24 +1034,23 @@ interface CopyWrite {
 }
 
 /**
- * One line per stored record, the shared content only under the first.
+ * One line per stored record, content only where the service changed it.
  *
  * @param stored - Every record the call wrote, main profile first.
- * @param sourceLine - The line copies end with, if any.
+ * @param write - Content sent to the main profile and the line copies end with, if any.
  * @returns {string} The result text.
  */
-function storedCopiesText(stored: readonly StoredCopy[], sourceLine?: string): string {
-  const copied = `${stored[0]?.memory.content}${sourceLine ?? ""}`;
-  const records = stored.map(({ target, memory }, index) => {
-    if (index === 0 || memory.content !== copied) return { target, ...memory };
-    const { content: _content, ...rest } = memory;
-    return { target, ...rest };
-  });
-  const header =
-    sourceLine === undefined
-      ? "A copy whose content matches the first record leaves it out."
-      : `Each copy ends with a blank line and ${sourceLine.trim()} A copy whose content matches the first record plus that line leaves it out.`;
-  return `Stored the same memory in ${stored.length} profiles. ${header}\n${recordLines(records)}`;
+function storedCopiesText(stored: readonly StoredCopy[], write: Readonly<CopyWrite>): string {
+  const copied = `${write.content}${write.sourceLine ?? ""}`;
+  const records = stored.map(({ target, memory }, index) => ({
+    target,
+    ...writtenRecord(memory, index === 0 ? write.content : copied),
+  }));
+  const sourceNote =
+    write.sourceLine === undefined
+      ? ""
+      : ` Each copy ends with a blank line and ${write.sourceLine.trim()}`;
+  return `Stored the same memory in ${stored.length} profiles.${sourceNote} ${WRITTEN_CONTENT_NOTE}\n${recordLines(records)}`;
 }
 
 /**
@@ -1099,7 +1114,7 @@ async function rememberCopies(
   });
   if (failed.length > 0) throw failedCopiesError(stored, failed, write.sourceLine);
   return {
-    content: [{ type: "text", text: storedCopiesText(stored, write.sourceLine) }],
+    content: [{ type: "text", text: storedCopiesText(stored, write) }],
     details: { records: stored.map(({ target, memory }) => ({ target, ...memory })) },
   };
 }
@@ -1127,8 +1142,14 @@ export const memoryToolExecutors = {
         binding,
       );
     }
+    const record = recordLines([writtenRecord(memory, write.content)]);
     return {
-      content: [{ type: "text", text: json(withSummaryTrust(memory)) }],
+      content: [
+        {
+          type: "text",
+          text: `Stored memory in ${memoryTarget(params)}. ${WRITTEN_CONTENT_NOTE}\n${record}`,
+        },
+      ],
       details: memory as unknown as Record<string, unknown>,
     };
   },
