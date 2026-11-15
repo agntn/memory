@@ -273,13 +273,13 @@ function withSummaryTrust(value: unknown): unknown {
 }
 
 const WRITTEN_CONTENT_NOTE =
-  "Content that matches what this call wrote is left out; memory_get reads it whole.";
+  "Content that matches what this call passed is left out; memory_get reads it whole.";
 
 /**
- * A stored record minus the content the caller just sent; content the service changed stays.
+ * A stored record minus the content the caller passed; content the service changed stays.
  *
  * @param memory - The record the service answered with.
- * @param written - The content this call sent for it.
+ * @param written - The content this call passed for it.
  * @returns {Record<string, unknown>} The record as the result text shows it.
  */
 function writtenRecord(memory: Memory, written: string): Record<string, unknown> {

@@ -2089,7 +2089,7 @@ describe("remember copies", () => {
       expect(JSON.parse(String(body.body))).toEqual({ content: "shared fact", sessionId: "s-1" });
     }
     expect(textOf(result).split("\n")[0]).toBe(
-      "Stored the same memory in 3 profiles. Content that matches what this call wrote is left out; memory_get reads it whole.",
+      "Stored the same memory in 3 profiles. Content that matches what this call passed is left out; memory_get reads it whole.",
     );
     expect(records<{ target: string; id: string; content?: string }>(result)).toEqual([
       expect.objectContaining({ target: "research/project", id: "mem-research-project" }),
@@ -2102,7 +2102,7 @@ describe("remember copies", () => {
     expect(textOf(result).match(/summaryTrust/g)).toHaveLength(3);
   });
 
-  it("leaves out content the call just sent and keeps what the service changed", async () => {
+  it("leaves out content the call passed and keeps what the service changed", async () => {
     stubCloudflare((url, init) => {
       const sent = JSON.parse(String(init?.body)) as { content: string };
       const stored = url.includes("/team/") ? `${sent.content} (trimmed)` : sent.content;
@@ -2127,11 +2127,9 @@ describe("remember copies", () => {
     });
 
     expect(textOf(single).split("\n")[0]).toBe(
-      "Stored memory in research/project. Content that matches what this call wrote is left out; memory_get reads it whole.",
+      "Stored memory in research/project. Content that matches what this call passed is left out; memory_get reads it whole.",
     );
-    expect(records<{ id: string; content?: string }>(single)).toEqual([
-      expect.not.objectContaining({ content: expect.anything() }),
-    ]);
+    expect(contentUnder(single, "mem-main")).toEqual([]);
     expect(textOf(single)).not.toContain("line one");
     expect(single.details).toMatchObject({ id: "mem-main", content: "line one\nline two" });
     expect(contentUnder(copied, "mem-main")).toEqual([]);
@@ -2199,7 +2197,7 @@ describe("remember copies", () => {
       { content: copied, sessionId: "s-1" },
     ]);
     expect(textOf(result).split("\n")[0]).toBe(
-      'Stored the same memory in 3 profiles. Each copy ends with a blank line and Copied from memory "mem-research-project" in research/project. Content that matches what this call wrote is left out; memory_get reads it whole.',
+      'Stored the same memory in 3 profiles. Each copy ends with a blank line and Copied from memory "mem-research-project" in research/project. Content that matches what this call passed is left out; memory_get reads it whole.',
     );
     expect(contentUnder(result, "mem-research-project")).toEqual([]);
     expect(contentUnder(result, "mem-research-shared")).toEqual([]);
