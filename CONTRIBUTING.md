@@ -37,7 +37,7 @@ Executors in `memory-tools.ts` load on the first call. Limits and tool prose liv
 Tell callers what they can't control:
 
 - The service assigns memory types.
-- Generated record summaries, synthesized recall answers and generated profile summaries are untrusted. Mark them with `summaryTrust` or `answerTrust` set to `"service-generated-untrusted"`. Use full memory content for decisions about state.
+- Generated record summaries, synthesized recall answers and generated profile summaries are untrusted. Mark them with `summaryTrust` or `answerTrust` set to `"service-generated-untrusted"`, once per result above the records rather than on every line. On every line it reads like distrust of the memory itself. Use full memory content for decisions about state.
 - Extraction is asynchronous. Recall can lag behind a durable write.
 - Cascade deletes report nothing on their own.
 
