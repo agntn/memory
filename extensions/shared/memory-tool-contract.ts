@@ -192,6 +192,8 @@ export const memoryFieldDescriptions = {
   rememberCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} more namespace and profile pairs that get the same content and session, in this namespace or any other, for example a project profile next to a shared one. Writes are not atomic: a failed copy names the records already stored and each profile still missing, so retry only those. Each pair must differ from the others and from the main profile.`,
   rememberCopySource:
     "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
+  rememberFields:
+    "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first, and a key the host already writes with another value is refused. Copies carry them too.",
   copyNamespace: "Namespace of the copy.",
   copyProfile: "Profile inside the copy's namespace. The first write creates it.",
   messageRole: "Who produced the message.",
@@ -207,7 +209,7 @@ export const memoryFieldDescriptions = {
   supersedeReplacementMemoryId:
     "Exact id of the replacement already stored by a failed memory_supersede call.",
   replacementContent:
-    "Exact content the existing replacement must carry before the old memory can be deleted. Field lines a host stamped after it may follow.",
+    "Exact content the existing replacement must carry before the old memory can be deleted. Field lines stamped after it may follow.",
   recallVisibilityQuery:
     "The exact natural-language query the caller will use to retrieve this memory, in English like any recall query.",
   recallVisibilityTimeout:

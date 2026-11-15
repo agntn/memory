@@ -118,6 +118,56 @@ export function hostMemoryFields(
 }
 
 /**
+ * The host's fields plus the repository it found, unless the host already names one.
+ *
+ * @param fields - Fields the host stamps, if any.
+ * @param repository - `owner/repo` the session's git remote names, if any.
+ * @returns {MemoryFields | undefined} The host's block.
+ */
+export function withRepositoryField(
+  fields: MemoryFields | undefined,
+  repository: string | undefined,
+): MemoryFields | undefined {
+  if (repository === undefined || (fields !== undefined && Object.hasOwn(fields, "repository"))) {
+    return fields;
+  }
+  return Object.freeze({ ...fields, repository });
+}
+
+/**
+ * The host's fields, then the caller's, refusing a caller key that would change a host value.
+ *
+ * @param host - Fields the host stamps, if any.
+ * @param caller - The `fields` argument of the call.
+ * @returns {MemoryFields | undefined} One block, host fields first.
+ * @throws {ToolInputError} When a caller field is malformed or contradicts the host.
+ */
+export function callMemoryFields(
+  host: MemoryFields | undefined,
+  caller: unknown,
+): MemoryFields | undefined {
+  let own: MemoryFields | undefined;
+  try {
+    own = parseMemoryFields(caller, "fields");
+  } catch (error) {
+    throw new ToolInputError([`Invalid arguments: ${(error as Error).message}`]);
+  }
+  if (own === undefined) return host;
+  const clashes = Object.keys(own).filter(
+    (key) => host !== undefined && Object.hasOwn(host, key) && host[key] !== own[key],
+  );
+  if (clashes.length > 0) {
+    throw new ToolInputError(
+      clashes.map(
+        (key) =>
+          `Invalid arguments: the host writes ${key}: ${host?.[key]} itself, so leave ${key} out of fields`,
+      ),
+    );
+  }
+  return Object.freeze({ ...host, ...own });
+}
+
+/**
  * The lines fields add to content: a blank line, then one `key: value` line each.
  *
  * @param fields - Fields in the order they're written.
@@ -132,8 +182,8 @@ export function memoryFieldBlock(fields: MemoryFields): string {
 /**
  * Append the fields after a blank line, unless they already end the content or precede its copy line.
  *
- * @param content - Memory content the model sent.
- * @param fields - The host's fields.
+ * @param content - Memory content the caller sent.
+ * @param fields - The host's fields, then the caller's.
  * @returns {string} The content the service gets.
  * @throws {ToolInputError} When the fields would push the content past the service's byte cap.
  */
@@ -144,7 +194,7 @@ export function stampMemoryContent(content: string, fields: MemoryFields): strin
   const bytes = encoder.encode(content + block).length;
   if (bytes > MAX_TOOL_MEMORY_CONTENT_CHARACTERS) {
     throw new ToolInputError([
-      `Fields from the host add ${encoder.encode(block).length} bytes, taking the content to ${bytes} of ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes; shorten the content`,
+      `Memory fields add ${encoder.encode(block).length} bytes, taking the content to ${bytes} of ${MAX_TOOL_MEMORY_CONTENT_CHARACTERS} UTF-8 bytes; shorten the content`,
     ]);
   }
   return content + block;

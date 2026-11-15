@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createMemoryAiTools } from "../src/ai.ts";
 import type { AgentMemoryNamespaceBinding } from "../src/index.ts";
 import {
+  callMemoryFields,
   configuredMemoryFields,
   hostMemoryFields,
   parseMemoryFields,
+  withRepositoryField,
 } from "../extensions/shared/memory-fields.ts";
 import { detectedMemoryHarness } from "../extensions/shared/memory-scope.ts";
 
@@ -174,11 +176,78 @@ describe("memory fields", () => {
     expect(stored.at(-1)?.content).toBe("Note.\n\nauthor: Aei");
   });
 
+  it("stamps the caller's fields after the host's, on the main record and every copy", async () => {
+    const { run, stored } = boundTools({ harness: "claude" });
+
+    await run("memory_remember", {
+      content: "Note.",
+      fields: { author: "Aei", source: "agntn/memory#149" },
+      copies: [{ namespace: "support", profile: "shared" }],
+      copySource: true,
+    });
+
+    const block = "\n\nharness: claude\nauthor: Aei\nsource: agntn/memory#149";
+    expect(stored[1]?.content).toBe(`Note.${block}`);
+    expect(stored[2]?.content).toBe(
+      `Note.${block}\n\nCopied from memory "${stored[1]?.id}" in support/user-42.`,
+    );
+  });
+
+  it("stamps the caller's fields without any host fields, and supersedes with them", async () => {
+    const { binding, stored } = storingBinding();
+    const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });
+
+    await tools.memory_supersede.execute?.(
+      {
+        oldMemoryId: oldId,
+        content: "New note.",
+        fields: { author: "Aei" },
+        query: "note",
+        timeoutSeconds: 1,
+      },
+      callOptions,
+    );
+
+    expect(stored.at(-1)?.content).toBe("New note.\n\nauthor: Aei");
+    expect(stored).toHaveLength(2);
+  });
+
+  it.each([
+    [{ harness: "grok" }, "the host writes harness: claude itself, so leave harness out of fields"],
+    [{ author: "Aei\nharness: forged" }, 'Memory field "author" must be one line'],
+    [{ author: " " }, 'Memory field "author" must not be blank'],
+  ])("refuses caller fields %j before anything is written", async (fields, message) => {
+    const { run, stored } = boundTools({ harness: "claude" });
+
+    await expect(run("memory_remember", { content: "Note.", fields })).rejects.toThrow(message);
+    expect(stored).toHaveLength(1);
+  });
+
+  it("takes a caller field the host already writes with the same value", () => {
+    expect(callMemoryFields({ harness: "claude" }, { harness: "claude", author: "Aei" })).toEqual({
+      harness: "claude",
+      author: "Aei",
+    });
+    expect(callMemoryFields(undefined, {})).toBeUndefined();
+  });
+
+  it("adds the repository after the host's fields unless the host names one", () => {
+    expect(Object.entries(withRepositoryField({ harness: "pi" }, "agntn/memory")!)).toEqual([
+      ["harness", "pi"],
+      ["repository", "agntn/memory"],
+    ]);
+    expect(withRepositoryField(undefined, "agntn/memory")).toEqual({ repository: "agntn/memory" });
+    expect(withRepositoryField({ repository: "acme/fork" }, "agntn/memory")).toEqual({
+      repository: "acme/fork",
+    });
+    expect(withRepositoryField({ harness: "pi" }, undefined)).toEqual({ harness: "pi" });
+  });
+
   it("refuses content the fields would push past the byte cap before anything is written", async () => {
     const { run, stored } = boundTools({ author: "Aei" });
 
     await expect(run("memory_remember", { content: "x".repeat(32_760) })).rejects.toThrow(
-      "Fields from the host add 13 bytes, taking the content to 32773 of 32768 UTF-8 bytes",
+      "Memory fields add 13 bytes, taking the content to 32773 of 32768 UTF-8 bytes",
     );
     expect(stored).toHaveLength(1);
   });

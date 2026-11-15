@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { settle, useRetryTimers } from "./fake-timers.ts";
@@ -430,10 +434,49 @@ describe("memory MCP server", () => {
     ]);
     expect(refused).toMatchObject({
       isError: true,
-      content: [
-        { type: "text", text: expect.stringContaining("Fields from the host add 34 bytes") },
-      ],
+      content: [{ type: "text", text: expect.stringContaining("Memory fields add 34 bytes") }],
     });
+  });
+
+  it("stamps the repository of the directory it serves, and none without one", async () => {
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ success: true, result: storedMemory("memory-repository") });
+      }),
+    );
+    const repo = mkdtempSync(join(tmpdir(), "agntn-memory-mcp-repository-"));
+    try {
+      execFileSync("git", ["init", "-q", repo]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/widgets",
+      ]);
+      const write = { namespace: "default", profile: "agent", content: "Widgets ship on Fridays." };
+
+      for (const server of [createMcpServer({ cwd: repo }), createMcpServer()]) {
+        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+        const client = new Client({ name: "memory-test", version: "1.0.0" });
+        openConnections.push(client, server);
+        await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+        await client.callTool({ name: "memory_remember", arguments: write });
+      }
+
+      expect(bodies).toEqual([
+        { content: "Widgets ship on Fridays.\n\nrepository: acme/widgets" },
+        { content: "Widgets ship on Fridays." },
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("refuses to start with AGNTN_MEMORY_FIELDS that would forge a line", () => {
@@ -501,7 +544,7 @@ describe("memory MCP server", () => {
     expect(refused.content).toEqual([
       {
         type: "text",
-        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content, copies, copySource',
+        text: 'Invalid arguments: unknown property "sessionId"; takes namespace, profile, content, copies, copySource, fields',
       },
     ]);
     expect(requests).toEqual([]);

@@ -16,7 +16,7 @@ import { configuredPiOpenBotChannels } from "../extensions/shared/memory-scope.t
 import { DatabaseSync } from "node:sqlite";
 import { openBotDatabasePath, openBotSegments } from "../extensions/shared/memory-openbot.ts";
 import { createIngestRouter } from "../extensions/shared/memory-ingest-routes.ts";
-import { remoteMemoryScope } from "../extensions/shared/memory-project-scope.ts";
+import { remoteMemoryScope, remoteRepository } from "../extensions/shared/memory-project-scope.ts";
 import { memoryToolExecutors } from "../extensions/shared/memory-tools.ts";
 
 vi.mock("@earendil-works/pi-tui", () => ({ Text: class Text {} }));
@@ -729,6 +729,19 @@ describe("Pi turn ingest", () => {
       undefined,
       undefined,
     ]);
+  });
+
+  it("names the repository as the remote spells it, for the repository field", () => {
+    expect(
+      [
+        "https://github.com/agntn/memory.git/",
+        "git@github.com-aei:agntn/memory.git",
+        "https://gitlab.com/Group/Sub/My_Repo.git",
+        "/home/ori/Projekty/memory",
+        "https://github.com/agntn",
+        "https://github.com/agntn/memory\u202Etxt.git",
+      ].map((url) => remoteRepository(url)),
+    ).toEqual(["agntn/memory", "agntn/memory", "Sub/My_Repo", undefined, undefined, undefined]);
   });
 
   it("files channel tasks under who gave them, from OpenBot's records", async () => {

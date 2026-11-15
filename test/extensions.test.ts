@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -255,6 +256,61 @@ describe("memory extensions", () => {
       );
     }
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps Pi and OMP writes with the remote's repository before the caller's fields", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repository-"));
+    try {
+      execFileSync("git", ["init", "-q", repo]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:acme/Widgets.git",
+      ]);
+      const execute = vi
+        .spyOn(memoryToolExecutors, "remember")
+        .mockResolvedValue({ content: [{ type: "text", text: "remembered" }], details: {} });
+      const { signal } = new AbortController();
+
+      for (const [harness, tools] of [
+        ["pi", piTools()],
+        ["omp", ompTools()],
+      ] as const) {
+        const remember = tool(tools, "memory_remember") as RegisteredTool & {
+          execute(...args: unknown[]): Promise<AgentToolResult<Record<string, unknown>>>;
+        };
+        const call = { namespace: "research", profile: "project", content: "project fact" };
+        await remember.execute(
+          "call-0",
+          { ...call, fields: { author: "Aei" } },
+          signal,
+          undefined,
+          { cwd: repo },
+        );
+        expect(execute).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            content: `project fact\n\nharness: ${harness}\nrepository: acme/Widgets\nauthor: Aei`,
+          }),
+          { signal },
+        );
+        expect(execute.mock.lastCall?.[0]).not.toHaveProperty("fields");
+        await expect(
+          remember.execute(
+            "call-1",
+            { ...call, fields: { repository: "acme/other" } },
+            signal,
+            undefined,
+            { cwd: repo },
+          ),
+        ).rejects.toThrow("the host writes repository: acme/Widgets itself");
+      }
+      expect(execute).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("binds Pi operational tools from its agent-local scope file", async () => {

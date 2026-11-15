@@ -132,15 +132,21 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 { "author": "support-bot", "platform": "web" }
 ```
 
-You can stop trusting the model to sign its work. It never sees a fields argument and can't change or drop your fields. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines, in object order. Copies get them too, before any `Copied from memory` line.
+The host signs every write, and the agent can't forge that signature. `memory_remember` and `memory_supersede` also accept optional `fields` for what the agent knows, like author and source. No more typing provenance into shared entries by hand.
 
-One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`, and Pi running under OpenBot adds `app: openbot` after it. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
+Every write ends with a blank line and one block of `key: value` lines. Host fields come first, then caller fields, each in object order. A caller key the host already writes passes only with the same value. Anything else is refused before a write. Copies get the fields too, before any `Copied from memory` line.
+
+Two fields fill themselves in: `harness` and `repository`. Pi and OMP write `pi` and `omp`. Pi under OpenBot also adds `app: openbot`. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins.
+
+The repository is `owner/repo` from the session's git remote, preferring `upstream` over `origin`. Pi and OMP use the session's working directory. The CLI and `memory mcp` use their starting directory. No usable remote means no repository field. Put your own `repository` in the variable and it wins.
+
+A shared MCP host built with `createMcpServer()` without a cwd leaves `repository` off. The AI SDK gets only what you pass.
 
 Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
 
 Automatic ingest is the exception: it doesn't use your fields. Those stamps belong on remembered memories, not inside the conversation.
 
-Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value stops the server, CLI or extension from starting, so it can't forge a second field.
+Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value in the variable stops the server, CLI or extension from starting. A bad one in `fields` fails that call. Either way, nobody forges a second field.
 
 Don't have an API token? The tools can also use `cf` CLI authentication. Run `cf auth login` and omit `CLOUDFLARE_API_TOKEN`. Keep the account ID when the login reaches more than one account.
 
