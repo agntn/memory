@@ -105,6 +105,16 @@ describe("memory extensions", () => {
     expect(requiresNamespace(tools[0]!)).toBe(false);
   });
 
+  it("gives every Pi tool one sentence in the prompt, not its description", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+
+    for (const { name, promptSnippet, description } of piTools()) {
+      expect(promptSnippet, name).toMatch(/^[^\n]+\.$/u);
+      expect(promptSnippet, name).not.toMatch(/\.\s/u);
+      expect(promptSnippet, name).not.toBe(description);
+    }
+  });
+
   it("registers the complete OMP tool surface with native approvals", () => {
     const tools = ompTools();
 

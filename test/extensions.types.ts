@@ -11,6 +11,8 @@ export interface RenderedText {
 
 export interface RegisteredTool {
   name: string;
+  description?: string;
+  promptSnippet?: string;
   approval?: string;
   /** Pi orders these `(args, theme, context)`, OMP `(args, options, theme)`. */
   renderCall?: (args: Record<string, unknown>, second?: unknown, third?: unknown) => RenderedText;
