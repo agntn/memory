@@ -148,7 +148,6 @@ export default function memoryExtension(pi: ExtensionAPI) {
         ...(scope === undefined ? {} : { fallback: scope }),
         ...(openBotDatabase === undefined ? {} : { openBotDatabase }),
         openBotChannels: configuredPiOpenBotChannels(),
-        ...(fields === undefined ? {} : { fields }),
         agentNamespace,
       },
       ingestTurns,
