@@ -1,6 +1,7 @@
 import { runCli } from "@agntn/tools/cli";
 import { sanitizeLine } from "@agntn/tools";
 import { hostMemoryFields, type MemoryFields } from "../extensions/shared/memory-fields.ts";
+import { projectRepository } from "../extensions/shared/memory-project-scope.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 import {
   claudeCodeMemorySessionId,
@@ -36,6 +37,7 @@ export async function runMemoryCli(argv: readonly string[]): Promise<void> {
       tools: createMemoryTools({
         scope,
         fields,
+        repository: () => projectRepository(process.cwd()),
         writeSession: () => claudeCodeMemorySessionId() ?? grokMemorySessionId(),
       }),
       mcp: { name: "memory", version },

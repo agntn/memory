@@ -21,7 +21,12 @@ import {
   callerMemoryScope,
   memorySessionId,
 } from "./memory-scope.ts";
-import { type MemoryFields, stampMemoryContent } from "./memory-fields.ts";
+import {
+  callMemoryFields,
+  type MemoryFields,
+  stampMemoryContent,
+  withRepositoryField,
+} from "./memory-fields.ts";
 import { memoryToolMeta, memoryToolProgress } from "./memory-tool-contract.ts";
 import type * as MemoryTools from "./memory-tools.ts";
 import type { MemoryToolResult, ProfileParams } from "./memory-tools.types.ts";
@@ -68,6 +73,8 @@ export interface MemoryToolOptions {
   readonly binding?: AgentMemoryNamespaceBinding;
   /** Lines every written memory ends with, so provenance doesn't depend on the model remembering it. */
   readonly fields?: MemoryFields;
+  /** The `owner/repo` a write's `repository` field names, read from the call's `host`. */
+  readonly repository?: (host: unknown) => string | undefined;
 }
 
 /** How far the configured scope reaches into a call: administration, a profile read, or a write. */
@@ -79,7 +86,7 @@ interface MemoryToolSpec {
   readonly effect: ToolEffect;
   readonly idempotent?: boolean;
   readonly reach: ScopeReach;
-  /** The tool writes `content` verbatim, so the host's fields go at its end. */
+  /** The tool writes `content` verbatim, so the host's and the caller's fields go at its end. */
   readonly stamped?: true;
   readonly snippet: string;
   readonly guidelines: readonly string[];
@@ -226,22 +233,25 @@ function scopedParams(
   if (surface.binding !== undefined && surface.scope !== undefined) {
     assertBindingNamespace(params, surface.scope.namespace);
   }
-  return spec.stamped === true && surface.fields !== undefined
-    ? withFields(params, surface.fields)
-    : params;
+  return spec.stamped === true ? withFields(params, host, surface) : params;
 }
 
 /**
- * Stamp the host's fields on a write's content, before any copy line or exact read sees it.
+ * Stamp the host's fields, then the caller's, before any copy line or exact read.
  *
  * @param params - Scoped arguments of a tool that writes `content`.
- * @param fields - The host's fields.
- * @returns {object} The arguments with the stamped content.
- * @throws {ToolInputError} When the stamped content would pass the byte cap.
+ * @param host - Host context, read for the repository.
+ * @param surface - The host's fields and repository lookup.
+ * @returns {object} The arguments without `fields`, with the stamped content.
+ * @throws {ToolInputError} On a bad caller field or content past the byte cap.
  */
-function withFields(params: object, fields: MemoryFields): object {
-  const { content } = params as { content: string };
-  return { ...params, content: stampMemoryContent(content, fields) };
+function withFields(params: object, host: unknown, surface: MemoryToolOptions): object {
+  const { fields: caller, ...rest } = params as { content: string; fields?: unknown };
+  const hostFields = withRepositoryField(surface.fields, surface.repository?.(host));
+  const fields = callMemoryFields(hostFields, caller);
+  return fields === undefined
+    ? rest
+    : { ...rest, content: stampMemoryContent(rest.content, fields) };
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
+import { hostRepository } from "../shared/memory-project-scope.ts";
 import {
   createIngestRouter,
   type IngestRouterOptions,
@@ -156,6 +157,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
   const tools = createMemoryTools({
     scope,
     fields,
+    repository: hostRepository,
     writeSession: (host) => hostSessionId("pi", host),
   });
   registerPiTools(pi, tools, {

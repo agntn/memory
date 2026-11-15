@@ -194,7 +194,18 @@ try {
     typebox: { Type: { Unsafe: (schema) => schema } },
     setLabel() {},
   });
-  const ctx = { cwd: root, sessionManager: { getSessionId: () => "packed-conversation" } };
+  /* A repository of its own, so the stamped `repository` never depends on this checkout's remote. */
+  const project = path.join(packageRoot, "packed-project");
+  execFileSync("git", ["init", "-q", project]);
+  execFileSync("git", [
+    "-C",
+    project,
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/acme/widgets",
+  ]);
+  const ctx = { cwd: project, sessionManager: { getSessionId: () => "packed-conversation" } };
   const remembered = await ompTools
     .get("memory_remember")
     .execute(
@@ -207,7 +218,10 @@ try {
   assert.match(remembered.content[0].text, /packed-memory-1/);
   const rememberRequest = requests.at(-1);
   assert.match(rememberRequest.url, /\/namespaces\/packed\/profiles\/agent\/remember$/);
-  assert.equal(rememberRequest.body.content, "one packed memory\n\nharness: omp");
+  assert.equal(
+    rememberRequest.body.content,
+    "one packed memory\n\nharness: omp\nrepository: acme/widgets",
+  );
   // A write without a caller session still carries the harness-derived one.
   assert.match(rememberRequest.body.sessionId, /^omp-[a-z0-9-]+-[0-9a-f]{16}$/);
 

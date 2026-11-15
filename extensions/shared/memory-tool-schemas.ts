@@ -12,6 +12,7 @@ import {
   MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
   MAX_TOOL_EXPAND,
   MAX_TOOL_SESSION_ID_CHARACTERS,
+  MEMORY_FIELD_KEY_PATTERN,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
   memoryFieldDescriptions,
@@ -64,6 +65,13 @@ const oldMemoryId = Type.String({
   minLength: 1,
   pattern: MEMORY_ID_PATTERN,
 });
+/** Fields the caller adds to a write; the host checks values and collisions before stamping. */
+const callerFields = Type.Optional(
+  Type.Record(Type.String({ pattern: MEMORY_FIELD_KEY_PATTERN }), Type.String({ minLength: 1 }), {
+    description: memoryFieldDescriptions.rememberFields,
+    additionalProperties: false,
+  }),
+);
 /** One recall poll, three callers: `memory_recall_wait` and both supersession tools. */
 const recallCheckParameters = {
   query: Type.String({
@@ -145,6 +153,7 @@ export const rememberParameters = Type.Object(
     copySource: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.rememberCopySource }),
     ),
+    fields: callerFields,
   },
   closed,
 );
@@ -164,6 +173,7 @@ export const supersedeParameters = Type.Object(
         maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
       }),
     ),
+    fields: callerFields,
   },
   closed,
 );
