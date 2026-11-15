@@ -34,8 +34,37 @@ function asObject(value: unknown): object | undefined {
   return typeof value === "object" && value !== null ? value : undefined;
 }
 
-function isDistinctMessage(message: string, previous: string | undefined): boolean {
-  return message !== "" && previous !== message;
+const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
+
+function isWordCharacter(character: string | undefined): boolean {
+  return character !== undefined && WORD_CHARACTER.test(character);
+}
+
+/**
+ * Whether `text` already holds `message` as whole words, not inside a longer one.
+ * @param text - An earlier message of the chain.
+ * @param message - A cause's message.
+ * @returns {boolean} True when printing the cause would repeat it.
+ */
+function restates(text: string, message: string): boolean {
+  for (let at = text.indexOf(message); at !== -1; at = text.indexOf(message, at + 1)) {
+    const before = text[at - 1];
+    const after = text[at + message.length];
+    const startsInWord = isWordCharacter(before) && isWordCharacter(message[0]);
+    const endsInWord = isWordCharacter(after) && isWordCharacter(message.at(-1));
+    if (!startsInWord && !endsInWord) return true;
+  }
+  return false;
+}
+
+/**
+ * Skip a cause its wrapper already quotes, or the agent reads it twice.
+ * @param message - A cause's message.
+ * @param previous - The messages kept so far.
+ * @returns {boolean} True when the cause adds something new.
+ */
+function isDistinctMessage(message: string, previous: readonly string[]): boolean {
+  return message !== "" && !previous.some((earlier) => restates(earlier, message));
 }
 
 function errorCause(value: unknown): unknown {
@@ -57,7 +86,7 @@ export function toolErrorMessage(error: unknown): string {
     if (currentObject !== undefined && seen.has(currentObject)) break;
     if (currentObject !== undefined) seen.add(currentObject);
     const message = singleLineToolText(errorText(current)).trim();
-    if (isDistinctMessage(message, messages.at(-1))) messages.push(message);
+    if (isDistinctMessage(message, messages)) messages.push(message);
     const cause = errorCause(current);
     if (cause === undefined) break;
     current = cause;

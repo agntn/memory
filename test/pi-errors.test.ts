@@ -123,6 +123,34 @@ describe("Pi execution errors", () => {
     expect(toolErrorMessage(new TypeError("fetch failed", { cause }))).toBe(expected);
   });
 
+  it.each([
+    [
+      "a wrapper that quotes its cause",
+      new Error('Verification failed: "read refused". Keep both ids.', {
+        cause: new Error("read refused"),
+      }),
+      'Verification failed: "read refused". Keep both ids.',
+    ],
+    [
+      "a wrapper that adds a note after its cause",
+      new Error("Memory could not be read: 500. No memory was changed.", {
+        cause: new Error("Memory could not be read: 500.", { cause: new Error("500") }),
+      }),
+      "Memory could not be read: 500. No memory was changed.",
+    ],
+  ])("names a cause once for %s", (_shape, error, expected) => {
+    expect(toolErrorMessage(error)).toBe(expected);
+  });
+
+  it.each([
+    ["only partly matches", "Lookup failed: timeout", "timeout after 3 s"],
+    ["finds inside a longer number", "Retry after 1500 ms", "500"],
+    ["finds inside a longer word", "Unauthorized client", "authorized"],
+  ])("keeps a cause the message %s", (_shape, message, cause) => {
+    const error = new Error(message, { cause: new Error(cause) });
+    expect(toolErrorMessage(error)).toBe(`${message}: ${cause}`);
+  });
+
   it("does not serialize arbitrary cause fields", () => {
     expect(toolErrorMessage(new Error("failed", { cause: { apiToken: "do-not-leak" } }))).toBe(
       "failed",
