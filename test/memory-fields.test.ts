@@ -208,6 +208,16 @@ describe("memory fields", () => {
     expect(stored.at(-1)?.content).toBe(landed);
   });
 
+  it("stamps again content whose trailing lines contradict the host", async () => {
+    const { run, stored } = boundTools({ harness: "claude" });
+
+    await run("memory_remember", { content: "Note.\n\nharness: claude\nharness: grok" });
+
+    expect(stored.at(-1)?.content).toBe(
+      "Note.\n\nharness: claude\nharness: grok\n\nharness: claude",
+    );
+  });
+
   it("stamps the caller's fields without any host fields, and supersedes with them", async () => {
     const { binding, stored } = storingBinding();
     const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });

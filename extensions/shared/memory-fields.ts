@@ -180,17 +180,23 @@ export function memoryFieldBlock(fields: MemoryFields): string {
 }
 
 /**
- * Whether content ends with the block, maybe followed by field lines a caller added after it.
+ * Whether content ends with the block, maybe followed by caller lines that repeat none of its keys.
  *
  * @param content - Content without its copy line.
- * @param block - The block that would be stamped.
+ * @param fields - The fields that would be stamped.
  * @returns {boolean} True when the content already carries the block.
  */
-function endsStamped(content: string, block: string): boolean {
+function endsStamped(content: string, fields: MemoryFields): boolean {
+  const block = memoryFieldBlock(fields);
   const start = content.lastIndexOf(block);
   if (start === -1) return false;
   const rest = content.slice(start + block.length);
-  return rest === "" || stampedBlockPattern.test(rest);
+  if (rest === "") return true;
+  const keys = rest
+    .slice(1)
+    .split("\n")
+    .map((line) => line.slice(0, line.indexOf(": ")));
+  return stampedBlockPattern.test(rest) && !keys.some((key) => Object.hasOwn(fields, key));
 }
 
 /**
@@ -203,7 +209,7 @@ function endsStamped(content: string, block: string): boolean {
  */
 export function stampMemoryContent(content: string, fields: MemoryFields): string {
   const block = memoryFieldBlock(fields);
-  if (endsStamped(content.replace(copySourceSuffix, ""), block)) return content;
+  if (endsStamped(content.replace(copySourceSuffix, ""), fields)) return content;
   const encoder = new TextEncoder();
   const bytes = encoder.encode(content + block).length;
   if (bytes > MAX_TOOL_MEMORY_CONTENT_CHARACTERS) {
