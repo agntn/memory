@@ -108,7 +108,7 @@ A channel about one project can skip the split and go straight there. Map its id
 
 A channel with no project gets `null`. A channel missing from the map still works, it just splits by agent. The agent hears about it once per session, id included, so you can add it.
 
-Ingest keeps the envelope out of the conversation. In OpenBot, each message ends with only `author`, naming you, a teammate or the agent itself. Outside OpenBot, it adds nothing. The service doesn't need another memory saying the harness is Pi. The session ID already names the harness and project.
+Ingest keeps the envelope out of the conversation. In OpenBot, a message ends with only `author` when Pi knows who wrote it: you, a teammate or the agent itself. Outside OpenBot, it adds nothing. The service doesn't need another memory saying the harness is Pi. The session ID already names the harness and project.
 
 Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/agntn/memory.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
 
