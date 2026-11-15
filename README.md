@@ -132,7 +132,7 @@ Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of
 { "author": "support-bot", "platform": "web" }
 ```
 
-You can stop trusting the model to sign its work. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines. Copies get them too, before any `Copied from memory` line. The agent can add its own, like author or source, through `fields`. It can't change or drop yours.
+You can stop trusting the model to sign its work. Every memory that `memory_remember` or `memory_supersede` writes ends with a blank line and your `key: value` lines. Copies get them too, before any `Copied from memory` line. The agent can add its own, like author or source, through `fields`. It can't touch yours, or the ones below.
 
 Two fields fill themselves in: `harness`, and `repository` from the git remote. Pi and OMP write `pi` and `omp`, and Pi under OpenBot adds `app: openbot`. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Set either in the variable and yours wins. The AI SDK gets only what you pass.
 

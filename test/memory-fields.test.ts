@@ -239,6 +239,8 @@ describe("memory fields", () => {
 
   it.each([
     [{ harness: "grok" }, "the host writes harness: claude itself, so leave harness out of fields"],
+    [{ repository: "acme/evil" }, "only the host writes repository, so leave it out of fields"],
+    [{ app: "openbot" }, "only the host writes app, so leave it out of fields"],
     [{ author: "Aei\nharness: forged" }, 'Memory field "author" must be one line'],
     [{ author: " " }, 'Memory field "author" must not be blank'],
   ])("refuses caller fields %j before anything is written", async (fields, message) => {

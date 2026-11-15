@@ -134,6 +134,9 @@ export function withRepositoryField(
   return Object.freeze({ ...fields, repository });
 }
 
+/** Keys only the host fills in, so a caller can't claim a harness or repository it isn't in. */
+const hostOwnedKeys: ReadonlySet<string> = new Set(["harness", "app", "repository"]);
+
 /**
  * The host's fields, then the caller's, refusing a caller key that would change a host value.
  *
@@ -153,14 +156,17 @@ export function callMemoryFields(
     throw new ToolInputError([`Invalid arguments: ${(error as Error).message}`]);
   }
   if (own === undefined) return host;
-  const clashes = Object.keys(own).filter(
-    (key) => host !== undefined && Object.hasOwn(host, key) && host[key] !== own[key],
+  const clashes = Object.keys(own).filter((key) =>
+    host !== undefined && Object.hasOwn(host, key)
+      ? host[key] !== own[key]
+      : hostOwnedKeys.has(key),
   );
   if (clashes.length > 0) {
     throw new ToolInputError(
-      clashes.map(
-        (key) =>
-          `Invalid arguments: the host writes ${key}: ${host?.[key]} itself, so leave ${key} out of fields`,
+      clashes.map((key) =>
+        host !== undefined && Object.hasOwn(host, key)
+          ? `Invalid arguments: the host writes ${key}: ${host[key]} itself, so leave ${key} out of fields`
+          : `Invalid arguments: only the host writes ${key}, so leave it out of fields`,
       ),
     );
   }

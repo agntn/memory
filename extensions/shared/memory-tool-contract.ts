@@ -193,7 +193,7 @@ export const memoryFieldDescriptions = {
   rememberCopySource:
     "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
   rememberFields:
-    "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first, and a key the host already writes with another value is refused. Copies carry them too.",
+    "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
   copyNamespace: "Namespace of the copy.",
   copyProfile: "Profile inside the copy's namespace. The first write creates it.",
   messageRole: "Who produced the message.",
