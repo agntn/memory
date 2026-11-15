@@ -193,6 +193,21 @@ describe("memory fields", () => {
     );
   });
 
+  it("keeps a retried copy with caller fields byte for byte like the copies that landed", async () => {
+    const { run, stored } = boundTools({ harness: "claude" });
+    await run("memory_remember", {
+      content: "Note.",
+      fields: { author: "Aei" },
+      copies: [{ namespace: "support", profile: "shared" }],
+      copySource: true,
+    });
+    const landed = stored[2]?.content;
+
+    await run("memory_remember", { namespace: "support", profile: "other", content: landed });
+
+    expect(stored.at(-1)?.content).toBe(landed);
+  });
+
   it("stamps the caller's fields without any host fields, and supersedes with them", async () => {
     const { binding, stored } = storingBinding();
     const tools = createMemoryAiTools({ binding, namespace: "support", profile: "user-42" });

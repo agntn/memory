@@ -180,6 +180,20 @@ export function memoryFieldBlock(fields: MemoryFields): string {
 }
 
 /**
+ * Whether content ends with the block, maybe followed by field lines a caller added after it.
+ *
+ * @param content - Content without its copy line.
+ * @param block - The block that would be stamped.
+ * @returns {boolean} True when the content already carries the block.
+ */
+function endsStamped(content: string, block: string): boolean {
+  const start = content.lastIndexOf(block);
+  if (start === -1) return false;
+  const rest = content.slice(start + block.length);
+  return rest === "" || stampedBlockPattern.test(rest);
+}
+
+/**
  * Append the fields after a blank line, unless they already end the content or precede its copy line.
  *
  * @param content - Memory content the caller sent.
@@ -189,7 +203,7 @@ export function memoryFieldBlock(fields: MemoryFields): string {
  */
 export function stampMemoryContent(content: string, fields: MemoryFields): string {
   const block = memoryFieldBlock(fields);
-  if (content.replace(copySourceSuffix, "").endsWith(block)) return content;
+  if (endsStamped(content.replace(copySourceSuffix, ""), block)) return content;
   const encoder = new TextEncoder();
   const bytes = encoder.encode(content + block).length;
   if (bytes > MAX_TOOL_MEMORY_CONTENT_CHARACTERS) {
