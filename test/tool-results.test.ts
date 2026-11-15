@@ -140,6 +140,16 @@ describe("supersession", () => {
   });
 });
 
+describe("recall query language", () => {
+  it("tells callers to recall in English, where the summaries are", () => {
+    expect(memoryToolMeta.memory_recall.description).toContain("writes every summary in English");
+    expect(memoryToolMeta.memory_recall.description).toContain("ask again in English");
+    expect(memoryToolMeta.memory_recall_wait.description).toContain("English query");
+    expect(memoryFieldDescriptions.recallQuery).toContain("in English");
+    expect(memoryFieldDescriptions.recallVisibilityQuery).toContain("in English");
+  });
+});
+
 describe("memory summary trust", () => {
   it("marks generated summaries as untrusted in every tool description that returns records", () => {
     for (const name of [
