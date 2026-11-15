@@ -23,19 +23,9 @@ vi.mock("@earendil-works/pi-tui", () => ({ Text: class Text {} }));
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
-/* Message content as the ingest sends it, ending with Pi's fields. */
-const stamped = (
-  text: string,
-  author?: string,
-  context: Readonly<{ app?: string; agent?: string; channel?: string; channel_name?: string }> = {},
-) =>
-  [
-    `${text}\n\nharness: pi`,
-    ...Object.entries(context).map(([key, value]) => `${key}: ${value}`),
-    author && `author: ${author}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+/* Message content as the ingest sends it: the text, then its author when the host knows one. */
+const stamped = (text: string, author?: string) =>
+  author === undefined ? text : `${text}\n\nauthor: ${author}`;
 
 afterEach(() => {
   notify.mockClear();
@@ -231,6 +221,7 @@ describe("Pi turn ingest", () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "2");
+    vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"platform":"web"}');
     const ingest = vi
       .spyOn(memoryToolExecutors, "ingest")
       .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
@@ -437,27 +428,18 @@ describe("Pi turn ingest", () => {
           params.messages.map(({ content }) => content),
         ]),
       ).toEqual([
-        [
-          "rheatwoen/oritwoen",
-          [
-            stamped("Hi Rhea", "oritwoen", { agent: "rheatwoen" }),
-            stamped("Hi Ori", "rheatwoen", { agent: "rheatwoen" }),
-          ],
-        ],
+        ["rheatwoen/oritwoen", [stamped("Hi Rhea", "oritwoen"), stamped("Hi Ori", "rheatwoen")]],
         [
           "rheatwoen/miratwoen",
           [
-            stamped("Check the retry log", "miratwoen", { agent: "rheatwoen" }),
-            stamped("Done, Mira", "rheatwoen", { agent: "rheatwoen" }),
-            stamped("One more", "miratwoen", { agent: "rheatwoen" }),
+            stamped("Check the retry log", "miratwoen"),
+            stamped("Done, Mira", "rheatwoen"),
+            stamped("One more", "miratwoen"),
           ],
         ],
         [
           "rheatwoen/lira-two-en",
-          [
-            stamped("And me", "lira-two-en", { agent: "rheatwoen" }),
-            stamped("Both handled", "rheatwoen", { agent: "rheatwoen" }),
-          ],
+          [stamped("And me", "lira-two-en"), stamped("Both handled", "rheatwoen")],
         ],
       ]);
     } finally {
@@ -512,9 +494,7 @@ describe("Pi turn ingest", () => {
       expect(ingest.mock.calls[0]![0]).toMatchObject({
         namespace: "agntn",
         profile: "memory",
-        messages: [
-          { role: "user", content: stamped("Ship it", "oritwoen", { agent: "rheatwoen" }) },
-        ],
+        messages: [{ role: "user", content: stamped("Ship it", "oritwoen") }],
       });
     } finally {
       rmSync(agents, { recursive: true, force: true });
@@ -670,8 +650,8 @@ describe("Pi turn ingest", () => {
         namespace: "agntn",
         profile: "memory",
         messages: [
-          { role: "user", content: stamped("Ship it", undefined, { agent: "rheatwoen" }) },
-          { role: "assistant", content: stamped("Shipped", "rheatwoen", { agent: "rheatwoen" }) },
+          { role: "user", content: stamped("Ship it") },
+          { role: "assistant", content: stamped("Shipped", "rheatwoen") },
         ],
       });
     } finally {
@@ -821,6 +801,7 @@ describe("Pi turn ingest", () => {
       vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "aeitwoen");
       vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
       vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "50");
+      vi.stubEnv("AGNTN_MEMORY_FIELDS", '{"platform":"web"}');
       vi.spyOn(process, "argv", "get").mockReturnValue([
         "node",
         "pi",
@@ -855,25 +836,11 @@ describe("Pi turn ingest", () => {
       ).toEqual([
         [
           "rheatwoen/oritwoen",
-          [
-            stamped("Plan the release", "oritwoen", {
-              app: "openbot",
-              agent: "rheatwoen",
-              channel: "c1",
-            }),
-            stamped("Planned", "rheatwoen", { app: "openbot", agent: "rheatwoen", channel: "c1" }),
-          ],
+          [stamped("Plan the release", "oritwoen"), stamped("Planned", "rheatwoen")],
         ],
         [
           "rheatwoen/miratwoen",
-          [
-            stamped("Check the retry log", "miratwoen", {
-              app: "openbot",
-              agent: "rheatwoen",
-              channel: "c1",
-            }),
-            stamped("Checked", "rheatwoen", { app: "openbot", agent: "rheatwoen", channel: "c1" }),
-          ],
+          [stamped("Check the retry log", "miratwoen"), stamped("Checked", "rheatwoen")],
         ],
       ]);
 
@@ -936,14 +903,11 @@ describe("Pi turn ingest", () => {
     ]);
   });
 
-  it("leaves room for the fields when it cuts a long message", () => {
-    const fields = { harness: "pi", author: "rheatwoen" };
-    const chunks = ingestMessages({ role: "user", content: "ą".repeat(20_000) }, fields);
+  it("leaves room for the author when it cuts a long message", () => {
+    const chunks = ingestMessages({ role: "user", content: "ą".repeat(20_000) }, "rheatwoen");
     const sizes = chunks.map(({ content }) => new TextEncoder().encode(content).length);
     expect(Math.max(...sizes)).toBeLessThanOrEqual(32_768);
-    expect(
-      chunks.every(({ content }) => content.endsWith("\n\nharness: pi\nauthor: rheatwoen")),
-    ).toBe(true);
+    expect(chunks.every(({ content }) => content.endsWith("\n\nauthor: rheatwoen"))).toBe(true);
   });
 
   it("drops a timestamp past year 9999 instead of a message the service refuses", () => {

@@ -16,7 +16,6 @@ import {
   writeAgentNamespace,
 } from "./memory-openbot.ts";
 import { memoryName, projectMemoryScope } from "./memory-project-scope.ts";
-import type { MemoryFields } from "./memory-fields.ts";
 import type { ProfileParams } from "./memory-tools.types.ts";
 import { singleLineToolText } from "./terminal-text.ts";
 
@@ -30,8 +29,6 @@ export interface IngestRouterOptions {
   readonly openBotDatabase?: string;
   /** The project each OpenBot channel ingests into, by channel id; `null` leaves one unmapped. */
   readonly openBotChannels?: ReadonlyMap<string, ProfileParams | null>;
-  /** The host's fields; an OpenBot message also gets its `author`. */
-  readonly fields?: MemoryFields;
 }
 
 /** What the router reads from the host for one message. */
@@ -192,28 +189,6 @@ function userSegments(text: string, channel: ChannelSenders | undefined): OpenBo
 }
 
 /**
- * The fields every message of an OpenBot session shares: its agent, and its channel when it has one.
- *
- * @param hostFields - The host's fields.
- * @param openbot - The agent's namespace and the session's channel.
- * @returns {MemoryFields} Fields to which each message adds its `author`.
- */
-function openBotContextFields(
-  hostFields: MemoryFields | undefined,
-  openbot: Readonly<{ namespace: string; channel?: ChannelSenders }>,
-): MemoryFields {
-  const { channel } = openbot;
-  const name =
-    channel?.channelName === undefined ? "" : singleLineToolText(channel.channelName).trim();
-  return {
-    ...hostFields,
-    agent: openbot.namespace,
-    ...(channel === undefined ? {} : { channel: channel.channelId }),
-    ...(name === "" ? {} : { channel_name: name }),
-  };
-}
-
-/**
  * Route a session's messages, deciding the mode on the first one.
  *
  * @param options - The bound scope and the agent namespace template.
@@ -269,12 +244,10 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
    */
   function routeOpenBot(message: unknown, openbot: OpenBotMode): RoutedMessage[] {
     const project = sessionProject(openbot);
-    const context = openBotContextFields(options.fields, openbot);
     const { role, content, timestamp } = message as Record<string, unknown>;
     if (role !== "user") {
-      const fields = { ...context, author: openbot.namespace };
       return placed(
-        ingestMessages(message, fields),
+        ingestMessages(message, openbot.namespace),
         personalScope(openbot.namespace, interlocutor),
         project,
       );
@@ -283,8 +256,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     for (const segment of userSegments(messageText(content), openbot.channel)) {
       const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
       interlocutor = profile;
-      const fields = profile === undefined ? context : { ...context, author: profile };
-      const pieces = ingestMessages({ role, content: segment.text, timestamp }, fields);
+      const pieces = ingestMessages({ role, content: segment.text, timestamp }, profile);
       routed.push(...placed(pieces, personalScope(openbot.namespace, profile), project));
     }
     return routed;
@@ -309,7 +281,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     }
     const { scope } = current;
     const extra = current.fallback === undefined ? {} : { fallback: current.fallback };
-    return ingestMessages(message, options.fields).map((ingest) => ({
+    return ingestMessages(message).map((ingest) => ({
       scope,
       message: ingest,
       ...extra,

@@ -41,3 +41,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 - The fused score separates a real hit from the rest by orders of magnitude, so recall trims the candidates under 1% of the best one when the call names no cap. Measured 2026-09-22 over 24-candidate responses: an answered query scored 0.98 on the first line and 0.0011 on the second, a well-matched one kept nine lines within one order of magnitude of the top, and an unanswerable one flattened every line onto the same 0.0000374 floor.
 - Summaries come out in English whatever the content's language. All 60 did on one page of mostly Polish facts. So a Polish query has to match across languages, and it usually loses to its English translation.
 - That gap is a tendency, not a law. Measured 2026-11-15 on 12 query pairs, each run twice. English kept the target in the default view 12 of 12 times, first 8 times. Polish managed 9 or 10, first 6 times. Four Polish queries topped out under 0.05, and two still beat their English twins.
+
+## Extraction
+
+- Extraction reads field lines at the end of an ingested message as conversation. Measured 2026-11-15 on three real OpenBot channel windows of 3, 8 and 10 messages. With every field, 1 to 7 memories per window restated them, like `The harness used is pi`. With `author` alone, none did, and chat facts named the agent.

@@ -108,7 +108,7 @@ A channel about one project can skip the split and go straight there. Map its id
 
 A channel with no project gets `null`. A channel missing from the map still works, it just splits by agent. The agent hears about it once per session, id included, so you can add it.
 
-Every ingested message ends with your fields, like a remembered memory does, plus `author` in OpenBot: you, the teammate, or the agent itself. `agent`, `channel` and `channel_name` say where the conversation happened, so a fact keeps its context. Shared namespaces stay readable that way.
+Ingest keeps the envelope out of the conversation. In OpenBot, each message ends with only `author`, naming you, a teammate or the agent itself. Outside OpenBot, it adds nothing. The service doesn't need another memory saying the harness is Pi. The session ID already names the harness and project.
 
 Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/agntn/memory.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
 
@@ -137,6 +137,8 @@ You can stop trusting the model to sign its work. It never sees a fields argumen
 One field fills itself in: `harness`. Pi and OMP write `pi` and `omp`, and Pi running under OpenBot adds `app: openbot` after it. The MCP server writes `claude` or `grok` under those two, and the CLI falls back to `cli`. Put your own `harness` in the variable and it wins. The AI SDK gets only what you pass.
 
 Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
+
+Automatic ingest is the exception: it doesn't use your fields. Those stamps belong on remembered memories, not inside the conversation.
 
 Start keys with a lowercase letter, then use lowercase letters, digits or underscores. Values must be nonblank and single-line. A bad value stops the server, CLI or extension from starting, so it can't forge a second field.
 

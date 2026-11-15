@@ -1,7 +1,7 @@
 import { MAX_TOOL_INGEST_MESSAGES, MAX_TOOL_MESSAGE_CHARACTERS } from "./memory-tool-contract.ts";
 import type { IngestParams, ProfileParams } from "./memory-tools.types.ts";
 import { toolErrorMessage } from "./tool-errors.ts";
-import { type MemoryFields, memoryFieldBlock } from "./memory-fields.ts";
+import { memoryFieldBlock } from "./memory-fields.ts";
 
 type IngestMessage = IngestParams["messages"][number];
 
@@ -101,21 +101,20 @@ function isoTimestamp(timestamp: unknown): { timestamp?: string } {
 }
 
 /**
- * Turn one host message into the messages `memory_ingest` takes, each ending with the fields.
+ * Ingest messages for one host message, signed by `author` alone: other fields came back as facts.
  *
  * @param message - A Pi or OMP agent message.
- * @param fields - Lines every piece ends with, like its author.
+ * @param author - Profile of whoever wrote it, when the host knows.
  * @returns {IngestMessage[]} Nothing for tool results, custom messages and empty text.
  */
-export function ingestMessages(message: unknown, fields?: MemoryFields): IngestMessage[] {
+export function ingestMessages(message: unknown, author?: string): IngestMessage[] {
   if (typeof message !== "object" || message === null) return [];
   const { role, content, timestamp } = message as Record<string, unknown>;
   if (role !== "user" && role !== "assistant") return [];
   const text = messageText(content).trim();
   if (text === "") return [];
   const at = isoTimestamp(timestamp);
-  const block =
-    fields === undefined || Object.keys(fields).length === 0 ? "" : memoryFieldBlock(fields);
+  const block = author === undefined ? "" : memoryFieldBlock({ author });
   const limit = MAX_TOOL_MESSAGE_CHARACTERS - textEncoder.encode(block).length;
   return byteChunks(text, limit).map((chunk) => ({ role, content: chunk + block, ...at }));
 }
