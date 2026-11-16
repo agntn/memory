@@ -69,6 +69,61 @@ function personalScope(namespace: string, profile: string | undefined): ProfileP
   return profile === undefined ? undefined : { namespace, profile };
 }
 
+/** Namespace whose profiles collect everything one owner's projects say. */
+const OWNER_NAMESPACE = "default";
+
+/**
+ * The shared profile of a project's owner: `agntn/memory` also lands in `default/agntn`.
+ *
+ * @param project - The project scope.
+ * @returns {ProfileParams | undefined} The owner's scope, or nothing for a project already in `default`.
+ */
+function ownerScope(project: ProfileParams): ProfileParams | undefined {
+  return project.namespace === OWNER_NAMESPACE
+    ? undefined
+    : { namespace: OWNER_NAMESPACE, profile: project.namespace };
+}
+
+/** The cross-cutting profile every ingested message also lands in, whatever its scope. */
+const EVERYTHING_SCOPE: ProfileParams = { namespace: OWNER_NAMESPACE, profile: OWNER_NAMESPACE };
+
+/**
+ * Add one copy of each distinct message for `default/default`, unless a route already sends it there.
+ *
+ * @param routed - The message's routes; owner copies share the project copy's message object.
+ * @returns {RoutedMessage[]} The routes, then one `default/default` copy per distinct message.
+ */
+function withEverything(routed: readonly RoutedMessage[]): RoutedMessage[] {
+  const there = (scope: ProfileParams) =>
+    scope.namespace === EVERYTHING_SCOPE.namespace && scope.profile === EVERYTHING_SCOPE.profile;
+  const covered = new Set(routed.filter(({ scope }) => there(scope)).map(({ message }) => message));
+  const copies = [...new Set(routed.map(({ message }) => message))]
+    .filter((message) => !covered.has(message))
+    .map((message) => ({ scope: EVERYTHING_SCOPE, message }));
+  return [...routed, ...copies];
+}
+
+/**
+ * Route messages into a project, then copy them to its owner's profile, which has no fallback.
+ *
+ * @param messages - Pieces of one message.
+ * @param project - The project scope.
+ * @param fallback - Where the project's copies go when its namespace is missing, if anywhere.
+ * @returns {RoutedMessage[]} The project's copies, then the owner's.
+ */
+function intoProject(
+  messages: readonly Readonly<IngestMessage>[],
+  project: ProfileParams,
+  fallback: ProfileParams | undefined,
+): RoutedMessage[] {
+  const routed: RoutedMessage[] = messages.map((message) =>
+    fallback === undefined ? { scope: project, message } : { scope: project, message, fallback },
+  );
+  const owner = ownerScope(project);
+  if (owner === undefined) return routed;
+  return [...routed, ...messages.map((message) => ({ scope: owner, message }))];
+}
+
 /**
  * Give messages their scope: the project with the personal scope as fallback, else the personal one.
  *
@@ -82,19 +137,14 @@ function placed(
   personal: ProfileParams | undefined,
   project: ProfileParams | undefined,
 ): RoutedMessage[] {
-  if (project !== undefined) {
-    return messages.map((message) =>
-      personal === undefined
-        ? { scope: project, message }
-        : { scope: project, message, fallback: personal },
-    );
-  }
+  if (project !== undefined) return intoProject(messages, project, personal);
   return personal === undefined ? [] : messages.map((message) => ({ scope: personal, message }));
 }
 
 /** How the conversation is split once per session. */
 type Mode =
-  | { readonly kind: "scope"; readonly scope: ProfileParams; readonly fallback?: ProfileParams }
+  | { readonly kind: "scope"; readonly scope: ProfileParams }
+  | { readonly kind: "project"; readonly scope: ProfileParams; readonly fallback?: ProfileParams }
   | OpenBotMode
   | { readonly kind: "off" };
 
@@ -139,8 +189,8 @@ function plainMode(project: ProfileParams | undefined, fallback: ProfileParams |
     return fallback === undefined ? { kind: "off" } : { kind: "scope", scope: fallback };
   }
   return fallback === undefined
-    ? { kind: "scope", scope: project }
-    : { kind: "scope", scope: project, fallback };
+    ? { kind: "project", scope: project }
+    : { kind: "project", scope: project, fallback };
 }
 
 /**
@@ -273,19 +323,23 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     return mode;
   }
 
-  const route = (message: unknown, host: RouteHost): RoutedMessage[] => {
+  const routeScoped = (message: unknown, host: RouteHost): RoutedMessage[] => {
     const current = sessionModeOnce(host);
     if (current.kind === "off") return [];
     if (current.kind === "openbot") {
       return routeOpenBot(message, current);
     }
+    if (current.kind === "project") {
+      return intoProject(ingestMessages(message), current.scope, current.fallback);
+    }
     const { scope } = current;
-    const extra = current.fallback === undefined ? {} : { fallback: current.fallback };
-    return ingestMessages(message).map((ingest) => ({
-      scope,
-      message: ingest,
-      ...extra,
-    }));
+    return ingestMessages(message).map((ingest) => ({ scope, message: ingest }));
+  };
+
+  const route = (message: unknown, host: RouteHost): RoutedMessage[] => {
+    const routed = routeScoped(message, host);
+    if (routed.length > 0) return withEverything(routed);
+    return ingestMessages(message).map((ingest) => ({ scope: EVERYTHING_SCOPE, message: ingest }));
   };
 
   const unmappedChannel = (host: RouteHost): ChannelSenders | undefined => {

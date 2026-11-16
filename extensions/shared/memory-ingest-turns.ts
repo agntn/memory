@@ -223,6 +223,23 @@ export function createTurnIngest(every: number): TurnIngest {
   }
 
   /**
+   * Messages gathered by target, first target first, so a project and its owner copy send one run each.
+   *
+   * @param batch - Messages in the order they were queued.
+   * @returns {RoutedMessage[]} The same messages, each target's in their own order.
+   */
+  function grouped(batch: readonly RoutedMessage[]): RoutedMessage[] {
+    const groups = new Map<string | undefined, RoutedMessage[]>();
+    for (const routed of batch) {
+      const key = targetKey(routed);
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [routed]);
+      else group.push(routed);
+    }
+    return [...groups.values()].flat();
+  }
+
+  /**
    * The run of messages from `start` that share one target, at most one request's worth.
    *
    * @param batch - Messages being sent.
@@ -276,12 +293,15 @@ export function createTurnIngest(every: number): TurnIngest {
    * @returns {Promise<void>} Settles once the queue is empty or a run failed.
    */
   async function send(context: TurnContext, last: boolean): Promise<void> {
-    const batch = queued.splice(0);
+    let batch = grouped(queued.splice(0));
     let sent = 0;
     while (sent < batch.length) {
       const length = runLength(batch, sent);
       try {
-        if (!(await sendRun(batch.slice(sent, sent + length), context))) continue;
+        if (!(await sendRun(batch.slice(sent, sent + length), context))) {
+          batch = [...batch.slice(0, sent), ...grouped(batch.slice(sent))];
+          continue;
+        }
       } catch (error) {
         const landed = mayHaveLanded(error);
         queued.unshift(...batch.slice(landed ? sent + length : sent));
