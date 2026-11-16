@@ -336,6 +336,52 @@ export function grokMemorySessionId(
 }
 
 /**
+ * Derive opencode's session key from the variable its shell tool sets; MCP children never get it.
+ *
+ * @param env - Environment of a command run by opencode's shell tool.
+ * @param cwd - Working directory used as the project component.
+ * @returns {string | undefined} The derived key, or `undefined` outside an opencode shell.
+ */
+export function opencodeMemorySessionId(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  cwd: string = process.cwd(),
+): string | undefined {
+  const conversationId = env.OPENCODE_SESSION_ID?.trim();
+  if (!conversationId) return undefined;
+  return memorySessionId("opencode", cwd, conversationId);
+}
+
+/**
+ * Name the harness behind a command run from an agent's shell, opencode included.
+ *
+ * @param env - Environment of the command.
+ * @returns {string | undefined} `claude`, `grok` or `opencode`, or nothing outside an agent shell.
+ */
+export function shellMemoryHarness(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): string | undefined {
+  return detectedMemoryHarness(env) ?? (env.OPENCODE_SESSION_ID?.trim() ? "opencode" : undefined);
+}
+
+/**
+ * Session key for a command run from an agent's shell, Claude first, as {@link shellMemoryHarness} picks.
+ *
+ * @param env - Environment of the command.
+ * @param cwd - Working directory used as the project component.
+ * @returns {string | undefined} The derived key, or `undefined` outside an agent shell.
+ */
+export function shellMemorySessionId(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  cwd: string = process.cwd(),
+): string | undefined {
+  return (
+    claudeCodeMemorySessionId(env) ??
+    grokMemorySessionId(env, cwd) ??
+    opencodeMemorySessionId(env, cwd)
+  );
+}
+
+/**
  * Check a template that turns an agent's name into its namespace.
  *
  * @param value - Template with `{name}` in it.
