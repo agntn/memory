@@ -169,7 +169,7 @@ function failureWarning(
  * @param scope - Namespace and profile.
  * @returns {string} `namespace/profile`.
  */
-function scopeKey(scope: ProfileParams): string {
+export function scopeKey(scope: ProfileParams): string {
   return `${scope.namespace}/${scope.profile}`;
 }
 
@@ -220,6 +220,24 @@ export function createTurnIngest(every: number): TurnIngest {
   function targetKey(routed: RoutedMessage): string | undefined {
     const scope = target(routed);
     return scope === undefined ? undefined : scopeKey(scope);
+  }
+
+  /**
+   * Messages gathered by target, first target first, so a project and its owner copy send one run each.
+   * A fallback can land on a target the message already had, so a repeat there drops out.
+   *
+   * @param batch - Messages in the order they were queued.
+   * @returns {RoutedMessage[]} The same messages, each target's once and in their own order.
+   */
+  function grouped(batch: readonly RoutedMessage[]): RoutedMessage[] {
+    const groups = new Map<string | undefined, Map<RoutedMessage["message"], RoutedMessage>>();
+    for (const routed of batch) {
+      const key = targetKey(routed);
+      const group = groups.get(key) ?? new Map<RoutedMessage["message"], RoutedMessage>();
+      groups.set(key, group);
+      if (!group.has(routed.message)) group.set(routed.message, routed);
+    }
+    return [...groups.values()].flatMap((group) => [...group.values()]);
   }
 
   /**
@@ -276,12 +294,15 @@ export function createTurnIngest(every: number): TurnIngest {
    * @returns {Promise<void>} Settles once the queue is empty or a run failed.
    */
   async function send(context: TurnContext, last: boolean): Promise<void> {
-    const batch = queued.splice(0);
+    let batch = grouped(queued.splice(0));
     let sent = 0;
     while (sent < batch.length) {
       const length = runLength(batch, sent);
       try {
-        if (!(await sendRun(batch.slice(sent, sent + length), context))) continue;
+        if (!(await sendRun(batch.slice(sent, sent + length), context))) {
+          batch = [...batch.slice(0, sent), ...grouped(batch.slice(sent))];
+          continue;
+        }
       } catch (error) {
         const landed = mayHaveLanded(error);
         queued.unshift(...batch.slice(landed ? sent + length : sent));

@@ -27,6 +27,14 @@ type Handler = (event: unknown, ctx: unknown) => unknown;
 const stamped = (text: string, author?: string) =>
   author === undefined ? text : `${text}\n\nauthor: ${author}`;
 
+type IngestSpy = { mock: { calls: Parameters<typeof memoryToolExecutors.ingest>[] } };
+
+/* Calls outside `default/default`, the copy every message also gets, for tests about the scope. */
+const scoped = (spy: IngestSpy) =>
+  spy.mock.calls.filter(
+    ([params]) => `${params.namespace}/${params.profile}` !== "default/default",
+  );
+
 afterEach(() => {
   notify.mockClear();
   vi.restoreAllMocks();
@@ -90,8 +98,8 @@ describe("Pi turn ingest", () => {
     expect(ingest).not.toHaveBeenCalled();
     await exchange(handlers, "turn 9", 9);
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    expect(ingest).toHaveBeenCalledOnce();
-    expect(ingest.mock.calls[0]![0].messages).toHaveLength(20);
+    expect(scoped(ingest)).toHaveLength(1);
+    expect(scoped(ingest)[0]![0].messages).toHaveLength(20);
   });
 
   it("switches off with a count of 0", () => {
@@ -134,7 +142,64 @@ describe("Pi turn ingest", () => {
       await handlers.get("turn_end")!({}, inRepo);
       await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
 
-      expect(ingest.mock.calls[0]![0]).toMatchObject({ namespace: "agntn", profile: "my-repo" });
+      expect(scoped(ingest).map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+        "agntn/my-repo",
+        "default/agntn",
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("copies a project's turns to its owner in default, one run each", async () => {
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const host = (cwd: string) => ({
+      cwd,
+      sessionFile: () => undefined,
+      systemPrompt: () => "",
+      warn: () => {},
+    });
+    const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
+    try {
+      execFileSync("git", ["init", "-q", repo]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/danielroe/forges.git",
+      ]);
+      const turns = createTurnIngest(50);
+      const router = createIngestRouter({});
+      for (const content of ["one", "two"]) {
+        turns.add(router.route({ role: "user", content }, host(repo)));
+      }
+      await turns.flush({ warn: notify });
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/default/x.git",
+      ]);
+      const own = createIngestRouter({});
+      turns.add(own.route({ role: "user", content: "three" }, host(repo)));
+      await turns.flush({ warn: notify });
+
+      expect(
+        scoped(ingest).map(([params]) => [
+          `${params.namespace}/${params.profile}`,
+          params.messages.map(({ content }) => content),
+        ]),
+      ).toEqual([
+        ["danielroe/forges", ["one", "two"]],
+        ["default/danielroe", ["one", "two"]],
+        ["default/x", ["three"]],
+      ]);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -169,10 +234,12 @@ describe("Pi turn ingest", () => {
         await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
       }
 
-      expect(ingest.mock.calls.map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+      expect(scoped(ingest).map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
         "oritwoen/website",
         "aeitwoen/oritwoen",
+        "default/oritwoen",
         "aeitwoen/oritwoen",
+        "default/oritwoen",
       ]);
       expect(notify).toHaveBeenCalledWith(
         "Memory namespace oritwoen doesn't exist, so for this session oritwoen/website goes to aeitwoen/oritwoen. Create it with memory_namespace_create to fix that.",
@@ -183,15 +250,136 @@ describe("Pi turn ingest", () => {
     }
   });
 
-  it("ingests nothing with neither a remote nor a bound scope", async () => {
+  it("sends to default/default alone with neither a remote nor a bound scope", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
-    const ingest = vi.spyOn(memoryToolExecutors, "ingest");
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
     const handlers = loadPi();
 
     await exchange(handlers, "one", 0);
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    expect(ingest).not.toHaveBeenCalled();
+    expect(
+      ingest.mock.calls.map(([params]) => [
+        `${params.namespace}/${params.profile}`,
+        params.messages.map(({ content }) => content),
+      ]),
+    ).toEqual([["default/default", [stamped("one"), stamped("re: one")]]]);
+  });
+
+  it("keeps OpenBot's injected blocks out of default/default too", () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-rhea");
+      mkdirSync(join(cwd, ".pi", "agntn"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".pi", "agntn", "memory.json"),
+        JSON.stringify({ namespace: "rheatwoen" }),
+      );
+      const host = {
+        cwd,
+        sessionFile: () => undefined,
+        systemPrompt: () => '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+        warn: () => {},
+      };
+      const blocks = "<openbot_saved_memories>\nold fact\n</openbot_saved_memories>";
+      const route = (content: string) =>
+        createIngestRouter({})
+          .route({ role: "user", content }, host)
+          .map(({ scope, message }) => [`${scope.namespace}/${scope.profile}`, message.content]);
+
+      expect(route(blocks)).toEqual([]);
+      expect(route(`${blocks}\nShip it`)).toEqual([["default/default", "Ship it"]]);
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["default/default", ["agntn/memory", "default/default", "default/agntn"]],
+    ["default/agntn", ["agntn/memory", "default/agntn", "default/default"]],
+  ])(
+    "sends a message once when the fallback %s is a profile it already goes to",
+    async (bound, targets) => {
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockRejectedValueOnce(new MemoryNotFoundError("namespace 'agntn' not found", 404))
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
+      try {
+        execFileSync("git", ["init", "-q", repo]);
+        execFileSync("git", [
+          "-C",
+          repo,
+          "remote",
+          "add",
+          "origin",
+          "https://github.com/agntn/memory.git",
+        ]);
+        const host = {
+          cwd: repo,
+          sessionFile: () => undefined,
+          systemPrompt: () => "",
+          warn: () => {},
+        };
+        const [namespace, profile] = bound.split("/") as [string, string];
+        const router = createIngestRouter({ fallback: { namespace, profile } });
+        const turns = createTurnIngest(50);
+        for (const content of ["one", "two"])
+          turns.add(router.route({ role: "user", content }, host));
+        await turns.flush({ warn: notify });
+        turns.add(router.route({ role: "user", content: "three" }, host));
+        await turns.flush({ warn: notify });
+
+        expect(
+          ingest.mock.calls.map(([params]) => [
+            `${params.namespace}/${params.profile}`,
+            params.messages.map(({ content }) => content),
+          ]),
+        ).toEqual([
+          [targets[0], ["one", "two"]],
+          [targets[1], ["one", "two"]],
+          [targets[2], ["one", "two"]],
+          [targets[1], ["three"]],
+          [targets[2], ["three"]],
+        ]);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("copies every message to default/default once, after the scoped runs", async () => {
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const turns = createTurnIngest(50);
+    const host = {
+      cwd: "/nonexistent",
+      sessionFile: () => undefined,
+      systemPrompt: () => "",
+      warn: () => {},
+    };
+    for (const fallback of [
+      { namespace: "aeitwoen", profile: "oritwoen" },
+      { namespace: "default", profile: "default" },
+    ]) {
+      turns.add(
+        createIngestRouter({ fallback }).route({ role: "user", content: fallback.namespace }, host),
+      );
+    }
+    await turns.flush({ warn: notify });
+
+    expect(
+      ingest.mock.calls.map(([params]) => [
+        `${params.namespace}/${params.profile}`,
+        params.messages.map(({ content }) => content),
+      ]),
+    ).toEqual([
+      ["aeitwoen/oritwoen", ["aeitwoen"]],
+      ["default/default", ["aeitwoen", "default"]],
+    ]);
   });
 
   it("keeps the unsent chunks after one that may have landed", async () => {
@@ -212,8 +400,8 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
-    expect(ingest.mock.calls.map(([params]) => params.messages.length)).toEqual([500, 1]);
-    expect(ingest.mock.calls[1]![0].messages[0]!.content).toBe(stamped("m500"));
+    expect(scoped(ingest).map(([params]) => params.messages.length)).toEqual([500, 1]);
+    expect(scoped(ingest)[1]![0].messages[0]!.content).toBe(stamped("m500"));
   });
 
   it("ingests the new messages every second turn and the rest on shutdown", async () => {
@@ -234,7 +422,7 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     const sessionId = expect.stringMatching(/^pi-movie-enigma-[0-9a-f]{16}$/);
-    expect(ingest.mock.calls.map(([params]) => params)).toEqual([
+    expect(scoped(ingest).map(([params]) => params)).toEqual([
       {
         namespace: "default",
         profile: "oritwoen",
@@ -277,11 +465,11 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     expect(notify).toHaveBeenCalledWith(
-      "Memory ingest failed, 2 messages wait for the next try: Cloudflare answered [2J 503",
+      "Memory ingest failed, 4 messages wait for the next try: Cloudflare answered [2J 503",
       "warning",
     );
-    expect(ingest).toHaveBeenCalledTimes(2);
-    expect(ingest.mock.calls[1]![0].messages.map(({ content }) => content)).toEqual([
+    expect(scoped(ingest)).toHaveLength(2);
+    expect(scoped(ingest)[1]![0].messages.map(({ content }) => content)).toEqual([
       stamped("one"),
       stamped("re: one"),
     ]);
@@ -304,7 +492,7 @@ describe("Pi turn ingest", () => {
     await exchange(handlers, "two", 1_000);
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
-    expect(ingest).toHaveBeenCalledTimes(2);
+    expect(scoped(ingest)).toHaveLength(2);
     expect(notify).toHaveBeenCalledWith(
       "Memory ingest may have landed, so 2 messages won't be sent again: socket hang up",
       "warning",
@@ -323,7 +511,7 @@ describe("Pi turn ingest", () => {
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     expect(notify).toHaveBeenCalledWith(
-      "Memory ingest failed, 2 messages were not ingested: down",
+      "Memory ingest failed, 4 messages were not ingested: down",
       "warning",
     );
   });
@@ -423,7 +611,7 @@ describe("Pi turn ingest", () => {
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
       expect(
-        ingest.mock.calls.map(([params]) => [
+        scoped(ingest).map(([params]) => [
           `${params.namespace}/${params.profile}`,
           params.messages.map(({ content }) => content),
         ]),
@@ -491,7 +679,7 @@ describe("Pi turn ingest", () => {
       );
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
-      expect(ingest.mock.calls[0]![0]).toMatchObject({
+      expect(scoped(ingest)[0]![0]).toMatchObject({
         namespace: "agntn",
         profile: "memory",
         messages: [{ role: "user", content: stamped("Ship it", "oritwoen") }],
@@ -543,7 +731,7 @@ describe("Pi turn ingest", () => {
     await turns.flush({ warn: notify });
 
     expect(
-      ingest.mock.calls.map(([params]) => [
+      scoped(ingest).map(([params]) => [
         `${params.namespace}/${params.profile}`,
         params.messages.map(({ content }) => content),
       ]),
@@ -602,6 +790,7 @@ describe("Pi turn ingest", () => {
       );
       expect(routed.map(({ scope }) => `${scope.namespace}/${scope.profile}`)).toEqual([
         "rheatwoen/oritwoen",
+        "default/default",
       ]);
     } finally {
       rmSync(agents, { recursive: true, force: true });
@@ -646,7 +835,7 @@ describe("Pi turn ingest", () => {
       );
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
-      expect(ingest.mock.calls[0]![0]).toMatchObject({
+      expect(scoped(ingest)[0]![0]).toMatchObject({
         namespace: "agntn",
         profile: "memory",
         messages: [
@@ -683,7 +872,7 @@ describe("Pi turn ingest", () => {
       await handlers.get("message_end")!({ message: { role: "user", content: "hi" } }, iona);
       await handlers.get("session_shutdown")!({ reason: "quit" }, iona);
 
-      expect(ingest.mock.calls[0]![0]).toMatchObject({
+      expect(scoped(ingest)[0]![0]).toMatchObject({
         namespace: "team-iona",
         profile: "oritwoen",
       });
@@ -842,7 +1031,7 @@ describe("Pi turn ingest", () => {
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
       expect(
-        ingest.mock.calls.map(([params]) => [
+        scoped(ingest).map(([params]) => [
           `${params.namespace}/${params.profile}`,
           params.messages.map(({ content }) => content),
         ]),
@@ -871,8 +1060,9 @@ describe("Pi turn ingest", () => {
         rhea,
       );
       await mapped.get("session_shutdown")!({ reason: "quit" }, rhea);
-      expect(ingest.mock.calls.map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+      expect(scoped(ingest).map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
         "puzzles/gsmg",
+        "default/puzzles",
       ]);
       expect(await loadPi().get("before_agent_start")!({}, rhea)).toBeUndefined();
 

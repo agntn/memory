@@ -92,7 +92,13 @@ Pi also ingests the conversation on its own, no tool call needed. Every tenth tu
 
 Thinking, tool calls and tool results stay out, and whatever's left when the session ends goes in one last batch.
 
-The batch lands in the project, not on you. A checkout whose `upstream` or `origin` remote is `github.com/agntn/memory` ingests into `agntn/memory`, and `upstream` wins on a fork. No remote? Then it's the scope above. The working directory alone doesn't count, since folders get renamed and moved. Neither one? Nothing gets sent.
+The batch lands in the project, not on you. A checkout whose `upstream` or `origin` remote is `github.com/agntn/memory` ingests into `agntn/memory`, and `upstream` wins on a fork.
+
+The owner hears about it too. A copy goes to `default/agntn`, and `oritwoen/website` feeds `default/oritwoen`. One profile per owner, every repo in it.
+
+No remote? Then it's the scope above. The working directory alone doesn't count, since folders get renamed and moved.
+
+And whatever the scope, every message also lands in `default/default`. That's the profile that remembers everything, even a session with neither a remote nor a scope.
 
 OpenBot agents get a split of their own. Pi spots one by the `<agent_profile>` OpenBot puts in the prompt. The agent's namespace comes from `.pi/agntn/memory.json` in its folder, like `{"namespace": "iona"}`.
 
