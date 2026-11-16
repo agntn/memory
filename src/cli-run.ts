@@ -4,10 +4,9 @@ import { hostMemoryFields, type MemoryFields } from "../extensions/shared/memory
 import { projectRepository } from "../extensions/shared/memory-project-scope.ts";
 import { createMemoryTools } from "../extensions/shared/memory-tool-definitions.ts";
 import {
-  claudeCodeMemorySessionId,
   configuredMemoryScope,
-  detectedMemoryHarness,
-  grokMemorySessionId,
+  shellMemoryHarness,
+  shellMemorySessionId,
 } from "../extensions/shared/memory-scope.ts";
 import type { ProfileParams } from "../extensions/shared/memory-tools.types.ts";
 import { version } from "./version.ts";
@@ -23,7 +22,7 @@ export async function runMemoryCli(argv: readonly string[]): Promise<void> {
   let fields: MemoryFields | undefined;
   try {
     scope = configuredMemoryScope();
-    fields = hostMemoryFields(detectedMemoryHarness() ?? "cli");
+    fields = hostMemoryFields(shellMemoryHarness() ?? "cli");
   } catch (error) {
     process.stderr.write(`${sanitizeLine(error instanceof Error ? error.message : error)}\n`);
     process.exitCode = 1;
@@ -38,7 +37,7 @@ export async function runMemoryCli(argv: readonly string[]): Promise<void> {
         scope,
         fields,
         repository: () => projectRepository(process.cwd()),
-        writeSession: () => claudeCodeMemorySessionId() ?? grokMemorySessionId(),
+        writeSession: () => shellMemorySessionId(),
       }),
       mcp: { name: "memory", version },
       expected: (error) => error instanceof Error,
