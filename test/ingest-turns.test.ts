@@ -296,52 +296,59 @@ describe("Pi turn ingest", () => {
     }
   });
 
-  it("sends a message once when its fallback is a profile it already goes to", async () => {
-    const ingest = vi
-      .spyOn(memoryToolExecutors, "ingest")
-      .mockRejectedValueOnce(new MemoryNotFoundError("namespace 'agntn' not found", 404))
-      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
-    const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
-    try {
-      execFileSync("git", ["init", "-q", repo]);
-      execFileSync("git", [
-        "-C",
-        repo,
-        "remote",
-        "add",
-        "origin",
-        "https://github.com/agntn/memory.git",
-      ]);
-      const host = {
-        cwd: repo,
-        sessionFile: () => undefined,
-        systemPrompt: () => "",
-        warn: () => {},
-      };
-      const router = createIngestRouter({ fallback: { namespace: "default", profile: "default" } });
-      const turns = createTurnIngest(50);
-      for (const content of ["one", "two"])
-        turns.add(router.route({ role: "user", content }, host));
-      await turns.flush({ warn: notify });
-      turns.add(router.route({ role: "user", content: "three" }, host));
-      await turns.flush({ warn: notify });
+  it.each([
+    ["default/default", ["agntn/memory", "default/default", "default/agntn"]],
+    ["default/agntn", ["agntn/memory", "default/agntn", "default/default"]],
+  ])(
+    "sends a message once when the fallback %s is a profile it already goes to",
+    async (bound, targets) => {
+      const ingest = vi
+        .spyOn(memoryToolExecutors, "ingest")
+        .mockRejectedValueOnce(new MemoryNotFoundError("namespace 'agntn' not found", 404))
+        .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+      const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
+      try {
+        execFileSync("git", ["init", "-q", repo]);
+        execFileSync("git", [
+          "-C",
+          repo,
+          "remote",
+          "add",
+          "origin",
+          "https://github.com/agntn/memory.git",
+        ]);
+        const host = {
+          cwd: repo,
+          sessionFile: () => undefined,
+          systemPrompt: () => "",
+          warn: () => {},
+        };
+        const [namespace, profile] = bound.split("/") as [string, string];
+        const router = createIngestRouter({ fallback: { namespace, profile } });
+        const turns = createTurnIngest(50);
+        for (const content of ["one", "two"])
+          turns.add(router.route({ role: "user", content }, host));
+        await turns.flush({ warn: notify });
+        turns.add(router.route({ role: "user", content: "three" }, host));
+        await turns.flush({ warn: notify });
 
-      expect(
-        ingest.mock.calls.map(([params]) => [
-          `${params.namespace}/${params.profile}`,
-          params.messages.map(({ content }) => content),
-        ]),
-      ).toEqual([
-        ["agntn/memory", ["one", "two"]],
-        ["default/default", ["one", "two"]],
-        ["default/agntn", ["one", "two"]],
-        ["default/default", ["three"]],
-        ["default/agntn", ["three"]],
-      ]);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
+        expect(
+          ingest.mock.calls.map(([params]) => [
+            `${params.namespace}/${params.profile}`,
+            params.messages.map(({ content }) => content),
+          ]),
+        ).toEqual([
+          [targets[0], ["one", "two"]],
+          [targets[1], ["one", "two"]],
+          [targets[2], ["one", "two"]],
+          [targets[1], ["three"]],
+          [targets[2], ["three"]],
+        ]);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("copies every message to default/default once, after the scoped runs", async () => {
     const ingest = vi
