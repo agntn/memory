@@ -268,6 +268,81 @@ describe("Pi turn ingest", () => {
     ).toEqual([["default/default", [stamped("one"), stamped("re: one")]]]);
   });
 
+  it("keeps OpenBot's injected blocks out of default/default too", () => {
+    const agents = mkdtempSync(join(tmpdir(), "agntn-memory-openbot-"));
+    try {
+      const cwd = join(agents, "agent-rhea");
+      mkdirSync(join(cwd, ".pi", "agntn"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".pi", "agntn", "memory.json"),
+        JSON.stringify({ namespace: "rheatwoen" }),
+      );
+      const host = {
+        cwd,
+        sessionFile: () => undefined,
+        systemPrompt: () => '<agent_profile>\n{"id":"agent-rhea","name":"Rhea"}\n</agent_profile>',
+        warn: () => {},
+      };
+      const blocks = "<openbot_saved_memories>\nold fact\n</openbot_saved_memories>";
+      const route = (content: string) =>
+        createIngestRouter({})
+          .route({ role: "user", content }, host)
+          .map(({ scope, message }) => [`${scope.namespace}/${scope.profile}`, message.content]);
+
+      expect(route(blocks)).toEqual([]);
+      expect(route(`${blocks}\nShip it`)).toEqual([["default/default", "Ship it"]]);
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+    }
+  });
+
+  it("sends a message once when its fallback is a profile it already goes to", async () => {
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockRejectedValueOnce(new MemoryNotFoundError("namespace 'agntn' not found", 404))
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
+    try {
+      execFileSync("git", ["init", "-q", repo]);
+      execFileSync("git", [
+        "-C",
+        repo,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/agntn/memory.git",
+      ]);
+      const host = {
+        cwd: repo,
+        sessionFile: () => undefined,
+        systemPrompt: () => "",
+        warn: () => {},
+      };
+      const router = createIngestRouter({ fallback: { namespace: "default", profile: "default" } });
+      const turns = createTurnIngest(50);
+      for (const content of ["one", "two"])
+        turns.add(router.route({ role: "user", content }, host));
+      await turns.flush({ warn: notify });
+      turns.add(router.route({ role: "user", content: "three" }, host));
+      await turns.flush({ warn: notify });
+
+      expect(
+        ingest.mock.calls.map(([params]) => [
+          `${params.namespace}/${params.profile}`,
+          params.messages.map(({ content }) => content),
+        ]),
+      ).toEqual([
+        ["agntn/memory", ["one", "two"]],
+        ["default/default", ["one", "two"]],
+        ["default/agntn", ["one", "two"]],
+        ["default/default", ["three"]],
+        ["default/agntn", ["three"]],
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("copies every message to default/default once, after the scoped runs", async () => {
     const ingest = vi
       .spyOn(memoryToolExecutors, "ingest")

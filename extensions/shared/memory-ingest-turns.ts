@@ -169,7 +169,7 @@ function failureWarning(
  * @param scope - Namespace and profile.
  * @returns {string} `namespace/profile`.
  */
-function scopeKey(scope: ProfileParams): string {
+export function scopeKey(scope: ProfileParams): string {
   return `${scope.namespace}/${scope.profile}`;
 }
 
@@ -224,19 +224,20 @@ export function createTurnIngest(every: number): TurnIngest {
 
   /**
    * Messages gathered by target, first target first, so a project and its owner copy send one run each.
+   * A fallback can land on a target the message already had, so a repeat there drops out.
    *
    * @param batch - Messages in the order they were queued.
-   * @returns {RoutedMessage[]} The same messages, each target's in their own order.
+   * @returns {RoutedMessage[]} The same messages, each target's once and in their own order.
    */
   function grouped(batch: readonly RoutedMessage[]): RoutedMessage[] {
-    const groups = new Map<string | undefined, RoutedMessage[]>();
+    const groups = new Map<string | undefined, Map<RoutedMessage["message"], RoutedMessage>>();
     for (const routed of batch) {
       const key = targetKey(routed);
-      const group = groups.get(key);
-      if (group === undefined) groups.set(key, [routed]);
-      else group.push(routed);
+      const group = groups.get(key) ?? new Map<RoutedMessage["message"], RoutedMessage>();
+      groups.set(key, group);
+      if (!group.has(routed.message)) group.set(routed.message, routed);
     }
-    return [...groups.values()].flat();
+    return [...groups.values()].flatMap((group) => [...group.values()]);
   }
 
   /**
