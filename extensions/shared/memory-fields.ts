@@ -33,7 +33,7 @@ function parseMemoryField(key: string, value: unknown): string {
     throw new Error(`Memory field key ${JSON.stringify(key)} must match ${fieldKeyPattern.source}`);
   }
   const label = `Memory field ${JSON.stringify(key)}`;
-  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
   if (unprintablePattern.test(value)) {
     throw new Error(`${label} must be one line without control characters`);
   }
