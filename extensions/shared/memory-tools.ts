@@ -956,7 +956,7 @@ async function completeSupersession(
     content: [
       {
         type: "text",
-        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE}${step.superseded === undefined ? "" : SUPERSEDED_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
+        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE}${step.superseded === undefined ? "" : SUPERSEDED_REPLACED_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
       },
     ],
     details,
@@ -972,7 +972,13 @@ type SupersessionReport =
 type SupersessionRanking = { readonly ranked: readonly string[] } | { readonly unchecked: string };
 
 const SUPERSEDED_NOTE =
-  " superseded.ids: checked recall candidates whose updatedAt moved to this record's createdAt. memory_get still reads them. Unranked ones aren't listed.";
+  " superseded.ids: checked recall candidates whose updatedAt moved to this record's createdAt. Unranked ones aren't listed.";
+
+/** After a plain write every listed id is still there. */
+const SUPERSEDED_READABLE_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them.`;
+
+/** memory_supersede deletes the old id, which the list may name. */
+const SUPERSEDED_REPLACED_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them, except the old id this call deleted.`;
 
 /**
  * Content cut to the recall byte cap, on a whole character.
@@ -1165,7 +1171,7 @@ function storedCopiesText(stored: readonly StoredCopy[], write: Readonly<CopyWri
     write.sourceLine === undefined
       ? ""
       : ` Each copy ends with a blank line and ${write.sourceLine.trim()}`;
-  const supersededNote = write.report === true ? SUPERSEDED_NOTE : "";
+  const supersededNote = write.report === true ? SUPERSEDED_READABLE_NOTE : "";
   return `Stored the same memory in ${stored.length} profiles.${sourceNote} ${WRITTEN_CONTENT_NOTE}${supersededNote}\n${recordLines(records)}`;
 }
 
@@ -1278,7 +1284,7 @@ export const memoryToolExecutors = {
       content: [
         {
           type: "text",
-          text: `Stored memory in ${memoryTarget(params)}. ${WRITTEN_CONTENT_NOTE}${report ? SUPERSEDED_NOTE : ""}\n${record}`,
+          text: `Stored memory in ${memoryTarget(params)}. ${WRITTEN_CONTENT_NOTE}${report ? SUPERSEDED_READABLE_NOTE : ""}\n${record}`,
         },
       ],
       details: { ...memory, ...reported },

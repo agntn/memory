@@ -194,7 +194,7 @@ export const memoryFieldDescriptions = {
     "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
   rememberReportSuperseded: `List the memories superseded at the moment of this write, which the service never reports. Costs one recall, several seconds, and up to ${MAX_TOOL_EXPAND} reads per profile written. Only memories recall ranked for the content are checked, so an empty list proves nothing.`,
   supersedeReportSuperseded:
-    "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names.",
+    "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names. The old id can be among them, and this call deletes it.",
   rememberFields:
     "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
   copyNamespace: "Namespace of the copy.",

@@ -2417,8 +2417,8 @@ describe("supersession report", () => {
     expect(records(result)).toEqual([
       expect.objectContaining({ id: "new-project", superseded: { ids: ["mem-old"], checked: 2 } }),
     ]);
-    expect(textOf(result).split("\n")[0]).toContain(
-      "superseded.ids: checked recall candidates whose updatedAt moved to this record's createdAt.",
+    expect(textOf(result).split("\n")[0]).toMatch(
+      /superseded\.ids: checked recall candidates whose updatedAt moved to this record's createdAt\. Unranked ones aren't listed\. memory_get still reads them\.$/,
     );
     expect(result.details).toMatchObject({ superseded: { ids: ["mem-old"], checked: 2 } });
   });
@@ -2661,6 +2661,9 @@ describe("supersession report", () => {
       superseded: { ids: ["mem-old"], checked: 1 },
     });
     expect(textOf(result)).toContain('"superseded": {');
+    expect(textOf(result)).toContain(
+      "memory_get still reads them, except the old id this call deleted.",
+    );
   });
 });
 
