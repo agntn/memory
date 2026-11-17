@@ -193,7 +193,7 @@ function stripTerminalControls(value: unknown, cap = LINE_WIDTH_CAP): string {
   const bounded = long ? cutAt(text, cap) : text;
   const clean = stripVTControlCharacters(bounded)
     .replaceAll(UNSAFE_TERMINAL_CHARACTER, " ")
-    .replace(LONE_SURROGATE, " ");
+    .replaceAll(LONE_SURROGATE, " ");
   return long ? `${clean}…` : clean;
 }
 
