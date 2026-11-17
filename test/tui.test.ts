@@ -99,6 +99,12 @@ describe("call lines", () => {
     expect(line.meta).toEqual(["copies 1 with source"]);
   });
 
+  it("marks a write that reports what it superseded", () => {
+    const line = describeToolCall("Remember", { content: "a fact", reportSuperseded: true });
+
+    expect(line.meta).toEqual(["reports superseded"]);
+  });
+
   it("carries no icon when the harness reports no state", () => {
     expect(describeToolCall("Recall", { query: "q" }).icon).toBeUndefined();
   });

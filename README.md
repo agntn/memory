@@ -132,6 +132,8 @@ Opt in with `copySource: true` and copies get a parent. Each one ends with `Copi
 
 That's handy once the tool result is gone. Cloudflare's remember API takes only content and a session ID, so the reference has to live in the content. It marks origin, not independent confirmation, and won't follow later edits. If the line would push a copy past 32768 bytes, nothing is written. Without the flag, copies stay verbatim.
 
+A new fact on an old topic makes the old memory disappear from recall, and the write doesn't mention it. Opt in with `reportSuperseded: true` to get its id on each stored record. Expect one recall per profile, several seconds, and up to 30 reads. An empty list proves nothing: only memories recall ranked are checked.
+
 Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
 
 ```json

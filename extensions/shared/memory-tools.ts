@@ -9,6 +9,7 @@ import type {
   MemoryProvider,
   RecallCandidate,
   RecallResult,
+  RememberInput,
 } from "@agntn/memory";
 import { isStampedContent } from "./memory-fields.ts";
 import { isIngestedMessageId } from "./memory-ids.ts";
@@ -911,6 +912,8 @@ interface SupersessionStep {
   readonly done: string;
   /** Resume accepts field lines another host stamped; supersede checks the bytes it just wrote. */
   readonly contentMatches?: (stored: string, content: string) => boolean;
+  /** What the replacement's own write superseded, when asked. */
+  readonly superseded?: SupersessionReport;
 }
 
 async function completeSupersession(
@@ -947,15 +950,130 @@ async function completeSupersession(
     oldMemoryId: params.oldMemoryId,
     newMemory: verified.memory,
     ...verified.visibility,
+    ...(step.superseded === undefined ? {} : { superseded: step.superseded }),
   };
   return {
     content: [
       {
         type: "text",
-        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
+        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE}${step.superseded === undefined ? "" : SUPERSEDED_REPLACED_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
       },
     ],
     details,
+  };
+}
+
+/** What one reported write superseded, or why nobody knows. */
+type SupersessionReport =
+  | { readonly ids: readonly string[]; readonly checked: number; readonly unread?: number }
+  | { readonly unchecked: string };
+
+/** Recall's ranking before a write, or why it's missing. */
+type SupersessionRanking = { readonly ranked: readonly string[] } | { readonly unchecked: string };
+
+const SUPERSEDED_NOTE =
+  " superseded.ids: checked recall candidates whose updatedAt moved to this record's createdAt. Unranked ones aren't listed.";
+
+/** After a plain write every listed id is still there. */
+const SUPERSEDED_READABLE_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them.`;
+
+/** memory_supersede deletes the old id, which the list may name. */
+const SUPERSEDED_REPLACED_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them, except the old id this call deleted.`;
+
+/**
+ * Content cut to the recall byte cap, on a whole character.
+ *
+ * @param content - Content about to be written.
+ * @returns {string} Its start, as a recall query.
+ */
+function supersessionQuery(content: string): string {
+  const { read } = new TextEncoder().encodeInto(content, new Uint8Array(MAX_TOOL_QUERY_CHARACTERS));
+  return content.slice(0, read);
+}
+
+/**
+ * Rank what a write may supersede. A failed recall never stops the write.
+ *
+ * @param profile - Profile about to be written.
+ * @param call - Content and abort signal.
+ * @returns {Promise<SupersessionRanking>} Memory ids, best first.
+ */
+async function supersessionCandidates(
+  profile: MemoryProfile,
+  call: Readonly<{ content: string }> & AbortOptions,
+): Promise<SupersessionRanking> {
+  try {
+    const result = await requireCapability(profile, "recall")(supersessionQuery(call.content), {
+      thinkingLevel: "low",
+      responseLength: "short",
+      signal: call.signal,
+    });
+    const ranked = rankByScore(result.candidates)
+      .filter((candidate) => candidateKind(candidate) === "memory")
+      .slice(0, MAX_TOOL_EXPAND)
+      .map((candidate) => candidate.id);
+    return { ranked };
+  } catch (error) {
+    return { unchecked: `recall before the write failed: ${toolErrorMessage(error)}` };
+  }
+}
+
+/**
+ * Whether a memory was superseded at that instant. One written in the same millisecond wasn't.
+ *
+ * @param memory - A record read after the write.
+ * @param moved - `createdAt` of the stored record, in milliseconds.
+ * @returns {boolean} `true` when its `updatedAt` moved there.
+ */
+function isSupersededAt(memory: Memory, moved: number): boolean {
+  return memory.updatedAt.getTime() === moved && memory.createdAt.getTime() < moved;
+}
+
+/**
+ * Keep the ranked ids the stored record superseded. Never throws: the record is stored.
+ *
+ * @param profile - Profile that was written.
+ * @param call - Ranked ids, stored record and abort signal.
+ * @returns {Promise<SupersessionReport>} The report for that record.
+ */
+async function supersededBy(
+  profile: MemoryProfile,
+  call: Readonly<{ ranked: readonly string[]; stored: Memory }> & AbortOptions,
+): Promise<SupersessionReport> {
+  const ranked = call.ranked.filter((id) => id !== call.stored.id);
+  if (ranked.length === 0) return { ids: [], checked: 0 };
+  try {
+    const readings = [...(await readMemories(profile, ranked, { signal: call.signal }))];
+    const read = readings.flatMap(([, reading]) => ("memory" in reading ? [reading.memory] : []));
+    const moved = call.stored.createdAt.getTime();
+    const ids = read.filter((memory) => isSupersededAt(memory, moved)).map(({ id }) => id);
+    const unread = readings.length - read.length;
+    return { ids, checked: read.length, ...(unread === 0 ? {} : { unread }) };
+  } catch (error) {
+    return { unchecked: `reading the candidates back failed: ${toolErrorMessage(error)}` };
+  }
+}
+
+/**
+ * Store one memory, reporting what it superseded when asked.
+ *
+ * @param profile - Profile to write.
+ * @param call - The write, the report flag and abort signal.
+ * @returns {Promise<{ memory: Memory; superseded?: SupersessionReport }>} Record and report.
+ */
+async function storeMemory(
+  profile: MemoryProfile,
+  call: Readonly<{ write: RememberInput; report: boolean }> & AbortOptions,
+): Promise<{ memory: Memory; superseded?: SupersessionReport }> {
+  const remember = requireCapability(profile, "remember");
+  const options = { signal: call.signal };
+  if (!call.report) return { memory: await remember(call.write, options) };
+  const ranking = await supersessionCandidates(profile, { ...call.write, ...options });
+  const memory = await remember(call.write, options);
+  if ("unchecked" in ranking) return { memory, superseded: ranking };
+  return {
+    memory,
+    superseded: await supersededBy(profile, { ...ranking, stored: memory, ...options }),
   };
 }
 
@@ -1023,6 +1141,7 @@ function assertCopySource(params: Readonly<RememberParams>): void {
 interface StoredCopy {
   readonly target: string;
   readonly memory: Memory;
+  readonly superseded?: SupersessionReport;
 }
 
 interface CopyWrite {
@@ -1030,6 +1149,8 @@ interface CopyWrite {
   readonly sessionId?: string;
   /** The line each copy ends with, under copySource. */
   readonly sourceLine?: string;
+  /** Report what each copy superseded. */
+  readonly report?: boolean;
 }
 
 /**
@@ -1041,15 +1162,17 @@ interface CopyWrite {
  */
 function storedCopiesText(stored: readonly StoredCopy[], write: Readonly<CopyWrite>): string {
   const copied = `${write.content}${write.sourceLine ?? ""}`;
-  const records = stored.map(({ target, memory }, index) => ({
+  const records = stored.map(({ target, memory, superseded }, index) => ({
     target,
     ...writtenRecord(memory, index === 0 ? write.content : copied),
+    ...(superseded === undefined ? {} : { superseded }),
   }));
   const sourceNote =
     write.sourceLine === undefined
       ? ""
       : ` Each copy ends with a blank line and ${write.sourceLine.trim()}`;
-  return `Stored the same memory in ${stored.length} profiles.${sourceNote} ${WRITTEN_CONTENT_NOTE}\n${recordLines(records)}`;
+  const supersededNote = write.report === true ? SUPERSEDED_READABLE_NOTE : "";
+  return `Stored the same memory in ${stored.length} profiles.${sourceNote} ${WRITTEN_CONTENT_NOTE}${supersededNote}\n${recordLines(records)}`;
 }
 
 /**
@@ -1066,7 +1189,10 @@ function failedCopiesError(
   sourceLine?: string,
 ): Error {
   const storedText = stored
-    .map(({ target, memory }) => `${target} ${quoteToolText(memory.id)}`)
+    .map(
+      ({ target, memory, superseded }) =>
+        `${target} ${quoteToolText(memory.id)}${superseded === undefined ? "" : ` (superseded ${JSON.stringify(superseded)})`}`,
+    )
     .join(", ");
   const failedText = failed
     .map(
@@ -1101,20 +1227,30 @@ async function rememberCopies(
   };
   const settled = await Promise.allSettled(
     copies.map(async (scope) =>
-      requireCapability(await getProfile(scope, binding), "remember")(copy, options),
+      storeMemory(await getProfile(scope, binding), {
+        write: copy,
+        report: write.report === true,
+        ...options,
+      }),
     ),
   );
   const stored: StoredCopy[] = [main];
   const failed: { target: string; reason: unknown }[] = [];
   settled.forEach((outcome, index) => {
     const target = memoryTarget(copies[index] as ProfileParams);
-    if (outcome.status === "fulfilled") stored.push({ target, memory: outcome.value });
+    if (outcome.status === "fulfilled") stored.push({ target, ...outcome.value });
     else failed.push({ target, reason: outcome.reason });
   });
   if (failed.length > 0) throw failedCopiesError(stored, failed, write.sourceLine);
   return {
     content: [{ type: "text", text: storedCopiesText(stored, write) }],
-    details: { records: stored.map(({ target, memory }) => ({ target, ...memory })) },
+    details: {
+      records: stored.map(({ target, memory, superseded }) => ({
+        target,
+        ...memory,
+        ...(superseded === undefined ? {} : { superseded }),
+      })),
+    },
   };
 }
 
@@ -1127,29 +1263,31 @@ export const memoryToolExecutors = {
     if (params.copies !== undefined) assertCopies(params, params.copies);
     if (params.copySource === true) assertCopySource(params);
     const write = { content: params.content, sessionId: optionalString(params.sessionId) };
+    const report = params.reportSuperseded === true;
     const profile = await getProfile(params, binding);
-    const memory = await requireCapability(profile, "remember")(write, options);
+    const { memory, superseded } = await storeMemory(profile, { write, report, ...options });
     if (params.copies !== undefined) {
       const target = memoryTarget(params);
       return rememberCopies(
-        { target, memory },
+        { target, memory, superseded },
         params.copies,
         params.copySource === true
-          ? { ...write, sourceLine: copySourceLine(target, memory.id) }
-          : write,
+          ? { ...write, report, sourceLine: copySourceLine(target, memory.id) }
+          : { ...write, report },
         options,
         binding,
       );
     }
-    const record = recordLines([writtenRecord(memory, write.content)]);
+    const reported = superseded === undefined ? {} : { superseded };
+    const record = recordLines([{ ...writtenRecord(memory, write.content), ...reported }]);
     return {
       content: [
         {
           type: "text",
-          text: `Stored memory in ${memoryTarget(params)}. ${WRITTEN_CONTENT_NOTE}\n${record}`,
+          text: `Stored memory in ${memoryTarget(params)}. ${WRITTEN_CONTENT_NOTE}${report ? SUPERSEDED_READABLE_NOTE : ""}\n${record}`,
         },
       ],
-      details: memory as unknown as Record<string, unknown>,
+      details: { ...memory, ...reported },
     };
   },
 
@@ -1163,14 +1301,16 @@ export const memoryToolExecutors = {
       memoryId: params.oldMemoryId,
     });
     const profile = await getProfile(params, binding);
-    const replacement = await requireCapability(profile, "remember")(
-      { content: params.content, sessionId: optionalString(params.sessionId) },
-      options,
-    );
+    const { memory: replacement, superseded } = await storeMemory(profile, {
+      write: { content: params.content, sessionId: optionalString(params.sessionId) },
+      report: params.reportSuperseded === true,
+      ...options,
+    });
     return completeSupersession(
       {
         profile,
         params,
+        superseded,
         replacementMemoryId: replacement.id,
         verifyFailure: `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed`,
         done: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)}`,

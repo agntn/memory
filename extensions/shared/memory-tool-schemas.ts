@@ -153,6 +153,9 @@ export const rememberParameters = Type.Object(
     copySource: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.rememberCopySource }),
     ),
+    reportSuperseded: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.rememberReportSuperseded }),
+    ),
     fields: callerFields,
   },
   closed,
@@ -172,6 +175,9 @@ export const supersedeParameters = Type.Object(
         description: memoryFieldDescriptions.writeSessionId,
         maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
       }),
+    ),
+    reportSuperseded: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.supersedeReportSuperseded }),
     ),
     fields: callerFields,
   },

@@ -65,6 +65,8 @@ export interface RememberParams extends ProfileParams {
   copies?: readonly ProfileParams[];
   /** Ends each copy with a line naming the main record. */
   copySource?: boolean;
+  /** List what each write superseded, for one recall and some reads per profile. */
+  reportSuperseded?: boolean;
 }
 
 export interface SupersedeParams extends ProfileParams {
@@ -73,6 +75,8 @@ export interface SupersedeParams extends ProfileParams {
   query: string;
   timeoutSeconds: number;
   sessionId?: string;
+  /** List what the replacement's own write superseded. */
+  reportSuperseded?: boolean;
 }
 
 export interface ResumeSupersessionParams extends ProfileParams {
