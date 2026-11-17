@@ -134,6 +134,7 @@ describe("supersession", () => {
       expect(memoryToolMeta[name].description, name).toMatch(/supersed/i);
     }
     expect(memoryToolMeta.memory_remember.description).toContain("Events accumulate");
+    expect(memoryToolMeta.memory_remember.description).toContain("With reportSuperseded");
     expect(memoryToolMeta.memory_supersede.description).toContain("Never retry a failed call");
     expect(memoryToolMeta.memory_get.description).toContain(
       "updatedAt is later than its createdAt",
@@ -2317,6 +2318,349 @@ describe("remember copies", () => {
       }),
     ).rejects.toThrow(message);
     expect(urls).toEqual([]);
+  });
+});
+
+describe("supersession report", () => {
+  const STORED_AT = "2026-08-28T00:00:00.000Z";
+
+  interface ReportStub {
+    /** Recall candidates as id and score, per `namespace/profile` or for every profile. */
+    readonly candidates: Readonly<Record<string, ReadonlyArray<readonly [string, number]>>>;
+    /** Ids whose `updatedAt` moved to the new record's `createdAt`. */
+    readonly superseded?: readonly string[];
+    /** Ids written in the same millisecond as the new record, by someone else. */
+    readonly twins?: readonly string[];
+    /** Request path endings answered with a 400. */
+    readonly failing?: readonly string[];
+  }
+
+  interface ReportRequest {
+    readonly target: string;
+    readonly call: string;
+    readonly body?: unknown;
+  }
+
+  /* Split a profile URL into its target and the call under it, with the method in front. */
+  function reportRequest(url: string, init: RequestInit = {}): ReportRequest {
+    const [, namespace, profile, call] =
+      /\/namespaces\/([^/]+)\/profiles\/([^/]+)\/(.+)$/.exec(url) ?? [];
+    const body = typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : undefined;
+    return { target: `${namespace}/${profile}`, call: `${init.method ?? "GET"} ${call}`, body };
+  }
+
+  /* The recall answer for one profile, falling back to the `*` entry. */
+  function recallAnswer(stub: ReportStub, target: string): StubResponse {
+    const ranked = stub.candidates[target] ?? stub.candidates["*"] ?? [];
+    const candidates = ranked.map(([id, score]) => ({ id, summary: id, sessionId: null, score }));
+    return { result: { count: candidates.length, answer: "ready", candidates } };
+  }
+
+  /* Answer recall, remember, the reads and the delete of one reported write, and log each request. */
+  function stubReport(stub: ReportStub): ReportRequest[] {
+    const requests: ReportRequest[] = [];
+    const written = new Map<string, string>();
+    const superseded = new Set(stub.superseded);
+    const failing = stub.failing ?? [];
+    stubCloudflare((url, init) => {
+      const request = reportRequest(url, init);
+      requests.push(request);
+      if (failing.some((ending) => url.endsWith(ending))) {
+        return { failure: { status: 400, message: "refused" } };
+      }
+      if (request.call === "POST recall") return recallAnswer(stub, request.target);
+      if (request.call === "POST remember") {
+        const { content } = request.body as { content: string };
+        const id = `new-${request.target.split("/")[1]}`;
+        written.set(id, content);
+        return { result: { ...memoryEntry(id, null), content, createdAt: STORED_AT } };
+      }
+      const id = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+      const twin = stub.twins?.includes(id) === true;
+      const createdAt = twin ? STORED_AT : "2026-08-17T00:00:00.000Z";
+      const updatedAt = twin || superseded.has(id) ? STORED_AT : createdAt;
+      const content = written.get(id) ?? `content ${id}`;
+      return { result: { ...storedMemory(id), content, createdAt, updatedAt } };
+    });
+    return requests;
+  }
+
+  it("names the candidates the write superseded, recall first and reads after", async () => {
+    const requests = stubReport({
+      candidates: {
+        "*": [
+          ["mem-other", 0.4],
+          ["mem-old", 0.9],
+        ],
+      },
+      superseded: ["mem-old"],
+    });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "the notebook is blue",
+      reportSuperseded: true,
+    });
+
+    expect(requests.map(({ call }) => call)).toEqual([
+      "POST recall",
+      "POST remember",
+      "GET memories/mem-old",
+      "GET memories/mem-other",
+    ]);
+    expect(requests[0]?.body).toEqual({
+      query: "the notebook is blue",
+      thinkingLevel: "low",
+      responseLength: "short",
+    });
+    expect(records(result)).toEqual([
+      expect.objectContaining({ id: "new-project", superseded: { ids: ["mem-old"], checked: 2 } }),
+    ]);
+    expect(textOf(result).split("\n")[0]).toContain(
+      "superseded.ids: checked recall candidates whose updatedAt moved to this record's createdAt.",
+    );
+    expect(result.details).toMatchObject({ superseded: { ids: ["mem-old"], checked: 2 } });
+  });
+
+  it("leaves out a memory someone else wrote in the same millisecond", async () => {
+    stubReport({ candidates: { "*": [["mem-twin", 0.9]] }, twins: ["mem-twin"] });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "the notebook is blue",
+      reportSuperseded: true,
+    });
+
+    expect(result.details).toMatchObject({ superseded: { ids: [], checked: 1 } });
+  });
+
+  it("pays for nothing and says nothing without the flag", async () => {
+    const requests = stubReport({
+      candidates: { "*": [["mem-old", 0.9]] },
+      superseded: ["mem-old"],
+    });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "the notebook is blue",
+    });
+
+    expect(requests.map(({ call }) => call)).toEqual(["POST remember"]);
+    expect(textOf(result)).not.toContain("superseded");
+    expect(result.details).not.toHaveProperty("superseded");
+  });
+
+  it("reads back at most 30 memory candidates, best first, without messages", async () => {
+    const memories = Array.from({ length: 32 }, (_, index): [string, number] => [
+      `mem-${index}`,
+      (index + 1) / 100,
+    ]);
+    const requests = stubReport({
+      candidates: { "*": [["00000000000000000000000000", 0.99], ...memories] },
+    });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "a fresh fact",
+      reportSuperseded: true,
+    });
+
+    const reads = requests.filter(({ call }) => call.startsWith("GET")).map(({ call }) => call);
+    expect(reads).toEqual(
+      Array.from({ length: 30 }, (_, index) => `GET memories/mem-${31 - index}`),
+    );
+    expect(records(result)).toEqual([
+      expect.objectContaining({ superseded: { ids: [], checked: 30 } }),
+    ]);
+  });
+
+  it("stores the memory and says why when the recall before it fails", async () => {
+    const requests = stubReport({ candidates: {}, failing: ["/recall"] });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "a fresh fact",
+      reportSuperseded: true,
+    });
+
+    expect(requests.map(({ call }) => call)).toEqual(["POST recall", "POST remember"]);
+    const [record] = records<{ id: string; superseded: { unchecked: string } }>(result);
+    expect(record?.id).toBe("new-project");
+    expect(record?.superseded.unchecked).toMatch(/^recall before the write failed: .*refused/);
+  });
+
+  it("counts a candidate it could not read back instead of calling it untouched", async () => {
+    stubReport({
+      candidates: {
+        "*": [
+          ["mem-old", 0.9],
+          ["mem-gone", 0.5],
+        ],
+      },
+      superseded: ["mem-old"],
+      failing: ["/memories/mem-gone"],
+    });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "the notebook is blue",
+      reportSuperseded: true,
+    });
+
+    expect(records(result)).toEqual([
+      expect.objectContaining({ superseded: { ids: ["mem-old"], checked: 1, unread: 1 } }),
+    ]);
+  });
+
+  it.each([
+    ["two-byte letters", "ż".repeat(600), 512],
+    ["a pair that straddles the cap", `${"a".repeat(1_022)}😀tail`, 1_022],
+  ])(
+    "cuts the recall query at 1024 bytes on a whole character: %s",
+    async (_label, content, kept) => {
+      const requests = stubReport({ candidates: {} });
+
+      await memoryToolExecutors.remember({
+        namespace: "research",
+        profile: "project",
+        content,
+        reportSuperseded: true,
+      });
+
+      expect(requests[0]?.body).toMatchObject({ query: content.slice(0, kept) });
+    },
+  );
+
+  it("does not write once the host cancelled during the recall", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    stubCloudflare((url) => {
+      calls.push(url.slice(url.lastIndexOf("/") + 1));
+      controller.abort(new Error("host cancelled"));
+      return { failure: { status: 400, message: "refused" } };
+    });
+
+    await expect(
+      memoryToolExecutors.remember(
+        { namespace: "research", profile: "project", content: "a fact", reportSuperseded: true },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow("host cancelled");
+    expect(calls).toEqual(["recall"]);
+  });
+
+  it("still hands back the stored record when the host cancels after the write", async () => {
+    const controller = new AbortController();
+    stubCloudflare((url, init) => {
+      if (url.endsWith("/recall")) {
+        const candidates = [{ id: "mem-old", summary: "old", sessionId: null, score: 1 }];
+        return { result: { count: 1, answer: "ready", candidates } };
+      }
+      controller.abort(new Error("host cancelled"));
+      const { content } = JSON.parse(String(init?.body)) as { content: string };
+      return { result: { ...memoryEntry("mem-new", null), content } };
+    });
+
+    const result = await memoryToolExecutors.remember(
+      { namespace: "research", profile: "project", content: "a fact", reportSuperseded: true },
+      { signal: controller.signal },
+    );
+
+    const [record] = records<{ id: string; superseded: { unchecked: string } }>(result);
+    expect(record?.id).toBe("mem-new");
+    expect(record?.superseded.unchecked).toMatch(
+      /^reading the candidates back failed: .*host cancelled/,
+    );
+  });
+
+  it("reports each copy from its own profile's recall", async () => {
+    const requests = stubReport({
+      candidates: { "research/project": [["mem-a", 0.9]], "team/agent": [["mem-b", 0.9]] },
+      superseded: ["mem-b"],
+    });
+
+    const result = await memoryToolExecutors.remember({
+      namespace: "research",
+      profile: "project",
+      content: "shared fact",
+      copies: [{ namespace: "team", profile: "agent" }],
+      reportSuperseded: true,
+    });
+
+    expect(requests.map(({ target, call }) => `${target} ${call}`)).toEqual([
+      "research/project POST recall",
+      "research/project POST remember",
+      "research/project GET memories/mem-a",
+      "team/agent POST recall",
+      "team/agent POST remember",
+      "team/agent GET memories/mem-b",
+    ]);
+    expect(records(result)).toEqual([
+      expect.objectContaining({ target: "research/project", superseded: { ids: [], checked: 1 } }),
+      expect.objectContaining({ target: "team/agent", superseded: { ids: ["mem-b"], checked: 1 } }),
+    ]);
+  });
+
+  it("keeps the report of what landed when a copy fails", async () => {
+    stubReport({
+      candidates: { "*": [["mem-old", 0.9]] },
+      superseded: ["mem-old"],
+      failing: ["/profiles/agent/remember"],
+    });
+
+    await expect(
+      memoryToolExecutors.remember({
+        namespace: "research",
+        profile: "project",
+        content: "shared fact",
+        copies: [{ namespace: "team", profile: "agent" }],
+        reportSuperseded: true,
+      }),
+    ).rejects.toThrow(
+      'Stored memory in research/project "new-project" (superseded {"ids":["mem-old"],"checked":1}), but 1 of 1 copies failed.',
+    );
+  });
+
+  it("reports what the replacement superseded before memory_supersede deletes the old id", async () => {
+    const requests = stubReport({
+      candidates: {
+        "*": [
+          ["mem-old", 0.9],
+          ["new-project", 0.8],
+        ],
+      },
+      superseded: ["mem-old", "new-project"],
+    });
+
+    const result = await memoryToolExecutors.supersede({
+      namespace: "research",
+      profile: "project",
+      oldMemoryId: "mem-old",
+      content: "the notebook is blue",
+      query: "notebook colour",
+      timeoutSeconds: 30,
+      reportSuperseded: true,
+    });
+
+    expect(requests.map(({ call }) => call)).toEqual([
+      "POST recall",
+      "POST remember",
+      "GET memories/mem-old",
+      "GET memories/new-project",
+      "POST recall",
+      "DELETE memories/mem-old",
+    ]);
+    expect(result.details).toMatchObject({
+      oldMemoryId: "mem-old",
+      superseded: { ids: ["mem-old"], checked: 1 },
+    });
+    expect(textOf(result)).toContain('"superseded": {');
   });
 });
 

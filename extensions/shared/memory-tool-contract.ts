@@ -113,7 +113,7 @@ export const memoryToolMeta = {
   },
   memory_remember: {
     label: "Remember",
-    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. With copySource, each copy also ends with a line naming the first record's namespace, profile and id. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. With copySource, each copy also ends with a line naming the first record's namespace, profile and id. With reportSuperseded, each record also lists the memories superseded at the moment it was stored, as far as recall found them. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersede: {
     label: "Supersede Memory",
@@ -192,6 +192,9 @@ export const memoryFieldDescriptions = {
   rememberCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} more namespace and profile pairs that get the same content and session, in this namespace or any other, for example a project profile next to a shared one. Writes are not atomic: a failed copy names the records already stored and each profile still missing, so retry only those. Each pair must differ from the others and from the main profile.`,
   rememberCopySource:
     "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
+  rememberReportSuperseded: `List the memories superseded at the moment of this write, which the service never reports. Costs one recall, several seconds, and up to ${MAX_TOOL_EXPAND} reads per profile written. Only memories recall ranked for the content are checked, so an empty list proves nothing.`,
+  supersedeReportSuperseded:
+    "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names.",
   rememberFields:
     "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
   copyNamespace: "Namespace of the copy.",

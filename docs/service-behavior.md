@@ -28,6 +28,8 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 ## Supersession
 
 - A fact or instruction remembered on the topic of an existing one supersedes it: the older record leaves the listing and recall the moment the newer one is stored, stays readable by id, and has its `updatedAt` moved to the newer record's `createdAt`.
+- `remember` answers with the new record alone and never names what it superseded. The first read by id after the write, about half a second later, already showed the moved `updatedAt`.
+- A recall of the new content just before the write held the memory that write then superseded. Measured 2026-11-17 on all 13 supersessions that 14 rewrites caused, ranked first among memories in the 5 where the rank was read.
 - The same content remembered twice is two records with the first superseded.
 - Events accumulate.
 - Deleting the newest version does not bring back the one it superseded.
@@ -38,6 +40,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 
 - `recall` ranks the raw ingested messages next to the memories, as candidates with the same four fields: the message text as `summary`, verbatim with its newlines and cut at about 3,500 characters with an ellipsis, the ingest session or the derived `hash-` one as `sessionId`, and an id that is 26 Crockford base32 characters derived from the content, so its ULID time part decodes to an instant thousands of years off. A memory id is a ULID minted at write time, within 30 s of `createdAt` on 1,500 live records.
 - `get` and `delete` answer a message id with the same server error as an unknown id, a listing never shows it, and a session delete removes it. Measured 2026-09-19: two message candidates in every recall on a 4,280-memory profile, ranked as high as second.
+- A `low`, `short` recall took 4 to 16 seconds. Measured 2026-11-17 over 27 calls, on profiles from a dozen memories to over 8,000.
 - The fused score separates a real hit from the rest by orders of magnitude, so recall trims the candidates under 1% of the best one when the call names no cap. Measured 2026-09-22 over 24-candidate responses: an answered query scored 0.98 on the first line and 0.0011 on the second, a well-matched one kept nine lines within one order of magnitude of the top, and an unanswerable one flattened every line onto the same 0.0000374 floor.
 - Summaries come out in English whatever the content's language. All 60 did on one page of mostly Polish facts. So a Polish query has to match across languages, and it usually loses to its English translation.
 - That gap is a tendency, not a law. Measured 2026-11-15 on 12 query pairs, each run twice. English kept the target in the default view 12 of 12 times, first 8 times. Polish managed 9 or 10, first 6 times. Four Polish queries topped out under 0.05, and two still beat their English twins.
