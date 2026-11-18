@@ -83,6 +83,18 @@ async function exchange(handlers: Map<string, Handler>, prompt: string, at: numb
   await handlers.get("turn_end")!({}, ctx);
 }
 
+/* What the agent reads when the project's namespace isn't there. */
+const MISSING_ACME =
+  "agntn/memory: namespace acme doesn't exist, so this session's conversation can't be ingested into acme/widgets. Create it with memory_namespace_create and the next ingest goes there.";
+
+/* A checkout whose origin names a project nobody made a namespace for. */
+function widgetsRepo(): string {
+  const repo = mkdtempSync(join(tmpdir(), "agntn-memory-repo-"));
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/acme/widgets"]);
+  return repo;
+}
+
 describe("Pi turn ingest", () => {
   it("ingests every tenth turn when nothing sets a count", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
@@ -242,12 +254,194 @@ describe("Pi turn ingest", () => {
         "default/oritwoen",
       ]);
       expect(notify).toHaveBeenCalledWith(
-        "Memory namespace oritwoen doesn't exist, so for this session oritwoen/website goes to aeitwoen/oritwoen. Create it with memory_namespace_create to fix that.",
+        "Memory namespace oritwoen doesn't exist, so oritwoen/website goes to aeitwoen/oritwoen until it does.",
         "warning",
       );
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+
+  it("tells the agent about a missing project namespace on its first run", async () => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "notes");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "main");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      const getNamespace = vi
+        .spyOn(memoryToolExecutors, "getNamespace")
+        .mockRejectedValue(new MemoryNotFoundError("namespace 'acme' not found", 404));
+      vi.spyOn(memoryToolExecutors, "ingest").mockRejectedValue(
+        new MemoryNotFoundError("namespace 'acme' not found", 404),
+      );
+      const handlers = loadPi();
+      const inRepo = { ...ctx, cwd: repo };
+      const start = handlers.get("before_agent_start")!;
+
+      await handlers.get("session_start")!({ reason: "startup" }, inRepo);
+      expect(await start({}, inRepo)).toEqual({
+        message: { customType: "agntn-memory", content: MISSING_ACME, display: true },
+      });
+      expect(getNamespace.mock.calls.map(([params]) => params)).toEqual([{ namespace: "acme" }]);
+
+      await handlers.get("message_end")!({ message: { role: "user", content: "one" } }, inRepo);
+      await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
+      expect(notify).toHaveBeenCalledWith(
+        "Memory namespace acme doesn't exist, so acme/widgets goes to notes/main until it does.",
+        "warning",
+      );
+      expect(await start({}, inRepo)).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the first run five seconds for the answer, then tells the agent on the next", async () => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      const lookup = Promise.withResolvers<never>();
+      vi.spyOn(memoryToolExecutors, "getNamespace").mockReturnValue(lookup.promise);
+      const inRepo = { ...ctx, cwd: repo };
+      const start = loadPi().get("before_agent_start")!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const first = Promise.resolve(start({}, inRepo));
+      await vi.advanceTimersByTimeAsync(4999);
+      const early = await Promise.race([first, Promise.resolve("still waiting")]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect([early, await first]).toEqual(["still waiting", undefined]);
+
+      lookup.reject(new MemoryNotFoundError("namespace 'acme' not found", 404));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await start({}, inRepo)).toEqual({
+        message: { customType: "agntn-memory", content: MISSING_ACME, display: true },
+      });
+      expect(await start({}, inRepo)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["exists", () => Promise.resolve({ content: [], details: {} })],
+    ["can't be checked", () => Promise.reject(new MemoryServerError("down", 503))],
+  ])("says nothing when the project's namespace %s", async (_case, answer) => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      const getNamespace = vi.spyOn(memoryToolExecutors, "getNamespace").mockImplementation(answer);
+      const inRepo = { ...ctx, cwd: repo };
+      const start = loadPi().get("before_agent_start")!;
+
+      expect(await start({}, inRepo)).toBeUndefined();
+      expect(getNamespace).toHaveBeenCalledTimes(1);
+      expect(await start({}, inRepo)).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("goes back to the project once the agent creates its namespace", async () => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "notes");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "main");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      let exists = false;
+      const ingest = vi.spyOn(memoryToolExecutors, "ingest").mockImplementation(async (params) => {
+        if (params.namespace === "acme" && !exists)
+          throw new MemoryNotFoundError("namespace 'acme' not found", 404);
+        return { content: [{ type: "text", text: "submitted" }], details: {} };
+      });
+      const handlers = loadPi();
+      const inRepo = { ...ctx, cwd: repo };
+      const said = async (content: string) => {
+        await handlers.get("message_end")!({ message: { role: "user", content } }, inRepo);
+        await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
+        return scoped(ingest)
+          .splice(0)
+          .map(([params]) => `${params.namespace}/${params.profile}`);
+      };
+      const result = async (toolName: string, isError: boolean) =>
+        handlers.get("tool_result")!({ toolName, isError, input: { namespace: "acme" } }, inRepo);
+      const note = {
+        message: { customType: "agntn-memory", content: MISSING_ACME, display: true },
+      };
+      const start = handlers.get("before_agent_start")!;
+
+      expect(await said("one")).toEqual(["acme/widgets", "notes/main", "default/acme"]);
+      expect(await start({}, inRepo)).toEqual(note);
+      await result("memory_namespace_create", true);
+      await result("memory_namespace_get", false);
+      ingest.mockClear();
+      expect(await said("two")).toEqual(["notes/main", "default/acme"]);
+
+      await result("memory_namespace_create", false);
+      ingest.mockClear();
+      expect(await said("three")).toEqual(["acme/widgets", "notes/main", "default/acme"]);
+      expect(await start({}, inRepo)).toEqual(note);
+
+      exists = true;
+      await result("memory_namespace_create", false);
+      ingest.mockClear();
+      expect(await said("four")).toEqual(["acme/widgets", "default/acme"]);
+      expect(await start({}, inRepo)).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("drops the note for a namespace the agent created before reading it", async () => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "notes");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "main");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      vi.spyOn(memoryToolExecutors, "ingest").mockRejectedValueOnce(
+        new MemoryNotFoundError("namespace 'acme' not found", 404),
+      );
+      const handlers = loadPi();
+      const inRepo = { ...ctx, cwd: repo };
+
+      await handlers.get("message_end")!({ message: { role: "user", content: "one" } }, inRepo);
+      await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
+      await handlers.get("tool_result")!(
+        { toolName: "memory_namespace_create", isError: false, input: { namespace: "acme" } },
+        inRepo,
+      );
+      expect(await handlers.get("before_agent_start")!({}, inRepo)).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("sends a batch again when its namespace was created while the 404 was on its way", async () => {
+    const refusal = Promise.withResolvers<never>();
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockReturnValueOnce(refusal.promise)
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const onMissing = vi.fn();
+    const turns = createTurnIngest(50, { onMissing });
+    const scope = { namespace: "acme", profile: "widgets" };
+    const fallback = { namespace: "notes", profile: "main" };
+    turns.add([{ scope, message: { role: "user", content: "one" }, fallback }]);
+
+    const flushed = turns.flush({ warn: notify });
+    await vi.waitFor(() => {
+      expect(ingest).toHaveBeenCalledTimes(1);
+    });
+    turns.created("acme");
+    refusal.reject(new MemoryNotFoundError("namespace 'acme' not found", 404));
+    await flushed;
+
+    expect(ingest.mock.calls.map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+      "acme/widgets",
+      "acme/widgets",
+    ]);
+    expect([onMissing.mock.calls, notify.mock.calls]).toEqual([[], []]);
   });
 
   it("sends to default/default alone with neither a remote nor a bound scope", async () => {
@@ -527,7 +721,9 @@ describe("Pi turn ingest", () => {
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
       vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "");
       expect([...loadPi().keys()]).toEqual([
+        "session_start",
         "before_agent_start",
+        "tool_result",
         "message_end",
         "turn_end",
         "session_shutdown",
@@ -703,7 +899,7 @@ describe("Pi turn ingest", () => {
         ["c0", null],
         ["c1", { namespace: "puzzles", profile: "gsmg" }],
       ]);
-      expect(loadPi().size).toBe(4);
+      expect(loadPi().size).toBe(6);
     } finally {
       rmSync(piDir, { recursive: true, force: true });
     }

@@ -8,7 +8,7 @@ import {
   scopedCallArguments,
 } from "../shared/memory-tool-definitions.ts";
 import { hostMemoryFields } from "../shared/memory-fields.ts";
-import { hostRepository } from "../shared/memory-project-scope.ts";
+import { hostRepository, projectMemoryScope } from "../shared/memory-project-scope.ts";
 import {
   createIngestRouter,
   type IngestRouterOptions,
@@ -16,6 +16,7 @@ import {
   unmappedChannelNotice,
 } from "../shared/memory-ingest-routes.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
+import { createMissingNamespaces } from "../shared/memory-missing-namespaces.ts";
 import { openBotDatabasePath } from "../shared/memory-openbot.ts";
 import {
   configuredPiAgentNamespaceTemplate,
@@ -114,16 +115,41 @@ function routeHost(ctx: ExtensionContext): RouteHost {
  * @param every - Turns between ingests.
  */
 function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every: number): void {
-  const ingest = createTurnIngest(every);
+  const namespaces = createMissingNamespaces();
+  const ingest = createTurnIngest(every, { onMissing: namespaces.report });
   const router = createIngestRouter(options);
-  let noticed = false;
-  pi.on("before_agent_start", (_event, ctx) => {
-    if (noticed) return undefined;
-    noticed = true;
-    const channel = router.unmappedChannel(routeHost(ctx));
-    if (channel === undefined) return undefined;
-    const content = unmappedChannelNotice(channel, piScopePath());
+  let started = false;
+  /**
+   * What only the first run has to say, after a short wait for the project's namespace lookup.
+   *
+   * @param host - The host at the run's start.
+   * @returns {Promise<string[]>} The unmapped channel's note on the first run, else nothing.
+   */
+  async function firstRunNotices(host: RouteHost): Promise<string[]> {
+    if (started) return [];
+    started = true;
+    const project = router.project(host);
+    if (project !== undefined) await namespaces.watch(project);
+    const channel = router.unmappedChannel(host);
+    return channel === undefined ? [] : [unmappedChannelNotice(channel, piScopePath())];
+  }
+  /** Asks early, so the first run rarely has to wait. */
+  pi.on("session_start", (_event, ctx) => {
+    const project = projectMemoryScope(ctx.cwd);
+    if (project !== undefined) namespaces.check(project.namespace);
+  });
+  pi.on("before_agent_start", async (_event, ctx) => {
+    const notices = [...(await firstRunNotices(routeHost(ctx))), ...namespaces.notices()];
+    if (notices.length === 0) return undefined;
+    const content = notices.join("\n\n");
     return { message: { customType: "agntn-memory", content, display: true } };
+  });
+  pi.on("tool_result", (event) => {
+    const { namespace } = event.input;
+    if (event.toolName !== "memory_namespace_create" || event.isError) return;
+    if (typeof namespace !== "string") return;
+    namespaces.forget(namespace);
+    ingest.created(namespace);
   });
   pi.on("message_end", (event, ctx) => {
     ingest.add(router.route(event.message, routeHost(ctx)));
