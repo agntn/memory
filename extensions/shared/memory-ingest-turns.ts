@@ -29,6 +29,14 @@ export interface TurnIngest {
   turn(context: TurnContext): void;
   /** Ingest whatever is still queued, after any ingest already running. */
   flush(context: TurnContext): Promise<void>;
+  /** Route to a namespace again once somebody created it. */
+  created(namespace: string): void;
+}
+
+/** What the turn ingest reports besides warnings. */
+export interface TurnIngestOptions {
+  /** Called once per scope whose namespace an ingest found missing. */
+  readonly onMissing?: (scope: Readonly<ProfileParams>) => void;
 }
 
 const textEncoder = new TextEncoder();
@@ -185,16 +193,17 @@ function fallbackNotice(scope: ProfileParams, fallback: ProfileParams | undefine
     fallback === undefined
       ? `nothing goes to ${scopeKey(scope)}`
       : `${scopeKey(scope)} goes to ${scopeKey(fallback)}`;
-  return `Memory namespace ${scope.namespace} doesn't exist, so for this session ${instead}. Create it with memory_namespace_create to fix that.`;
+  return `Memory namespace ${scope.namespace} doesn't exist, so ${instead} until it does.`;
 }
 
 /**
  * Ingest a conversation every few turns, each message into the profile it was routed to.
  *
  * @param every - Turns between ingests.
+ * @param options - Who else hears about a missing namespace.
  * @returns {TurnIngest} The buffer the host feeds.
  */
-export function createTurnIngest(every: number): TurnIngest {
+export function createTurnIngest(every: number, options: TurnIngestOptions = {}): TurnIngest {
   const queued: RoutedMessage[] = [];
   /** Scopes whose namespace turned out missing; their messages go to their own fallbacks. */
   const missing = new Set<string>();
@@ -281,6 +290,7 @@ export function createTurnIngest(every: number): TurnIngest {
       const key = scopeKey(first.scope);
       if (!isMissingNamespace(error) || missing.has(key)) throw error;
       missing.add(key);
+      options.onMissing?.(first.scope);
       context.warn(fallbackNotice(first.scope, first.fallback));
       return false;
     }
@@ -343,6 +353,9 @@ export function createTurnIngest(every: number): TurnIngest {
     async flush(context) {
       await running;
       if (queued.length > 0) await start(context, true);
+    },
+    created(namespace) {
+      for (const key of missing) if (key.startsWith(`${namespace}/`)) missing.delete(key);
     },
   };
 }

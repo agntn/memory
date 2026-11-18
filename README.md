@@ -118,7 +118,7 @@ Ingest keeps the envelope out of the conversation. In OpenBot, a message ends wi
 
 Agents delete things now and then. A missing file comes back from `agentNamespace` in `~/.pi/agent/agntn/memory.json` or `AGNTN_MEMORY_AGENT_NAMESPACE`, `{name}` by default, and Pi tells you it wrote one. `"{name}-bot"` turns Iona into `iona-bot`. Saved memories OpenBot pastes into a message stay out, so old facts don't come back as news.
 
-Cloudflare creates profiles on the first write, but not namespaces. When the project's namespace is missing, Pi says so once and uses your scope for the rest of the session. `memory_namespace_create` keeps the project apart next time.
+Cloudflare creates profiles on the first write, but not namespaces. When the project's namespace is missing, Pi tells the agent at the start of a run, and the conversation goes to your scope. You can't call tools, the agent can. One `memory_namespace_create` later the next ingest goes to the project, and nobody restarts anything.
 
 Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `agntn/memory.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 

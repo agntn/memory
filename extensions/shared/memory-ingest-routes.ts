@@ -42,6 +42,8 @@ export interface RouteHost {
 /** Sends each host message to the profile it belongs in. */
 export interface IngestRouter {
   readonly route: (message: unknown, host: RouteHost) => RoutedMessage[];
+  /** The project the session ingests into, if it has one. */
+  readonly project: (host: RouteHost) => ProfileParams | undefined;
   /** The session's OpenBot channel when the configuration doesn't map it, else nothing. */
   readonly unmappedChannel: (host: RouteHost) => ChannelSenders | undefined;
 }
@@ -346,7 +348,13 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     return options.openBotChannels?.has(current.channel.channelId) ? undefined : current.channel;
   };
 
-  return { route, unmappedChannel };
+  const project = (host: RouteHost): ProfileParams | undefined => {
+    const current = sessionModeOnce(host);
+    if (current.kind === "project") return current.scope;
+    return current.kind === "openbot" ? sessionProject(current) : undefined;
+  };
+
+  return { route, project, unmappedChannel };
 }
 
 /**
