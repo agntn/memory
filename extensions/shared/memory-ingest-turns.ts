@@ -207,6 +207,8 @@ export function createTurnIngest(every: number, options: TurnIngestOptions = {})
   const queued: RoutedMessage[] = [];
   /** Scopes whose namespace turned out missing; their messages go to their own fallbacks. */
   const missing = new Set<string>();
+  /** How often each namespace got created, so a 404 from before the last time doesn't count. */
+  const creations = new Map<string, number>();
   let turns = 0;
   let running: Promise<void> | undefined;
 
@@ -274,7 +276,7 @@ export function createTurnIngest(every: number, options: TurnIngestOptions = {})
    *
    * @param run - Messages sharing one target.
    * @param context - Session and warning channel of the conversation.
-   * @returns {Promise<boolean>} False when the run's scope turned out missing and must be regrouped.
+   * @returns {Promise<boolean>} False when the run has to be regrouped and sent again.
    */
   async function sendRun(run: readonly RoutedMessage[], context: TurnContext): Promise<boolean> {
     const first = run[0]!;
@@ -283,12 +285,14 @@ export function createTurnIngest(every: number, options: TurnIngestOptions = {})
     const { memoryToolExecutors } = await import("./memory-tools.ts");
     const session = context.sessionId === undefined ? {} : { sessionId: context.sessionId };
     const messages = run.map((routed) => ({ ...routed.message }));
+    const createdBefore = creations.get(first.scope.namespace);
     try {
       await memoryToolExecutors.ingest({ ...scope, ...session, messages });
       return true;
     } catch (error) {
       const key = scopeKey(first.scope);
       if (!isMissingNamespace(error) || missing.has(key)) throw error;
+      if (creations.get(first.scope.namespace) !== createdBefore) return false;
       missing.add(key);
       options.onMissing?.(first.scope);
       context.warn(fallbackNotice(first.scope, first.fallback));
@@ -355,6 +359,7 @@ export function createTurnIngest(every: number, options: TurnIngestOptions = {})
       if (queued.length > 0) await start(context, true);
     },
     created(namespace) {
+      creations.set(namespace, (creations.get(namespace) ?? 0) + 1);
       for (const key of missing) if (key.startsWith(`${namespace}/`)) missing.delete(key);
     },
   };

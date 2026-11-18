@@ -393,6 +393,57 @@ describe("Pi turn ingest", () => {
     }
   });
 
+  it("drops the note for a namespace the agent created before reading it", async () => {
+    const repo = widgetsRepo();
+    try {
+      vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "notes");
+      vi.stubEnv("AGNTN_MEMORY_PROFILE", "main");
+      vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+      vi.spyOn(memoryToolExecutors, "ingest").mockRejectedValueOnce(
+        new MemoryNotFoundError("namespace 'acme' not found", 404),
+      );
+      const handlers = loadPi();
+      const inRepo = { ...ctx, cwd: repo };
+
+      await handlers.get("message_end")!({ message: { role: "user", content: "one" } }, inRepo);
+      await handlers.get("session_shutdown")!({ reason: "quit" }, inRepo);
+      await handlers.get("tool_result")!(
+        { toolName: "memory_namespace_create", isError: false, input: { namespace: "acme" } },
+        inRepo,
+      );
+      expect(await handlers.get("before_agent_start")!({}, inRepo)).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("sends a batch again when its namespace was created while the 404 was on its way", async () => {
+    const refusal = Promise.withResolvers<never>();
+    const ingest = vi
+      .spyOn(memoryToolExecutors, "ingest")
+      .mockReturnValueOnce(refusal.promise)
+      .mockResolvedValue({ content: [{ type: "text", text: "submitted" }], details: {} });
+    const onMissing = vi.fn();
+    const turns = createTurnIngest(50, { onMissing });
+    const scope = { namespace: "acme", profile: "widgets" };
+    const fallback = { namespace: "notes", profile: "main" };
+    turns.add([{ scope, message: { role: "user", content: "one" }, fallback }]);
+
+    const flushed = turns.flush({ warn: notify });
+    await vi.waitFor(() => {
+      expect(ingest).toHaveBeenCalledTimes(1);
+    });
+    turns.created("acme");
+    refusal.reject(new MemoryNotFoundError("namespace 'acme' not found", 404));
+    await flushed;
+
+    expect(ingest.mock.calls.map(([params]) => `${params.namespace}/${params.profile}`)).toEqual([
+      "acme/widgets",
+      "acme/widgets",
+    ]);
+    expect([onMissing.mock.calls, notify.mock.calls]).toEqual([[], []]);
+  });
+
   it("sends to default/default alone with neither a remote nor a bound scope", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
     vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");

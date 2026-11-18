@@ -57,7 +57,8 @@ export function createMissingNamespaces(): MissingNamespaces {
   /** One lookup per namespace, each resolving to whether the service lacks it. */
   const lookups = new Map<string, Promise<boolean>>();
   const told = new Set<string>();
-  const pending: string[] = [];
+  /** Notes nobody read yet, by namespace, so a created one takes its note along. */
+  const pending = new Map<string, string>();
 
   /**
    * The lookup for a namespace, started on the first ask.
@@ -79,7 +80,7 @@ export function createMissingNamespaces(): MissingNamespaces {
   function report(scope: Readonly<ProfileParams>): void {
     if (told.has(scope.namespace)) return;
     told.add(scope.namespace);
-    pending.push(agentNotice(scope));
+    pending.set(scope.namespace, agentNotice(scope));
   }
 
   return {
@@ -99,10 +100,15 @@ export function createMissingNamespaces(): MissingNamespaces {
       clearTimeout(timer);
     },
     report,
-    notices: () => pending.splice(0),
+    notices() {
+      const notes = [...pending.values()];
+      pending.clear();
+      return notes;
+    },
     forget(namespace) {
       lookups.delete(namespace);
       told.delete(namespace);
+      pending.delete(namespace);
     },
   };
 }
