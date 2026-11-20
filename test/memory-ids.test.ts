@@ -3,27 +3,24 @@ import {
   EARLIEST_MEMORY_MS,
   MEMORY_ID_CLOCK_SKEW_MS,
   isIngestedMessageId,
+  ulidAt,
   ulidTime,
 } from "../extensions/shared/memory-ids.ts";
 
-const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const NOW = Date.UTC(2026, 8, 19, 18, 0, 0);
-
-/** A ULID whose time part is the given instant and whose random part is all zeros. */
-function ulidAt(milliseconds: number): string {
-  let rest = milliseconds;
-  let time = "";
-  for (let index = 0; index < 10; index += 1) {
-    time = `${CROCKFORD_ALPHABET[rest % 32]}${time}`;
-    rest = Math.floor(rest / 32);
-  }
-  return `${time}0000000000000000`;
-}
 
 describe("ulid time", () => {
   it("decodes the instant a ULID was minted at", () => {
     expect(ulidTime(ulidAt(NOW))).toBe(NOW);
     expect(ulidTime("01M2XB6RGVDKFGNJP99YKP4PF8")).toBe(Date.parse("2026-09-19T17:25:13.371Z"));
+  });
+});
+
+describe("ulid at", () => {
+  it("spells the smallest id minted at an instant", () => {
+    expect(ulidAt(Date.parse("2026-09-19T17:25:13.371Z"))).toBe("01M2XB6RGV0000000000000000");
+    expect(ulidTime(ulidAt(NOW))).toBe(NOW);
+    expect(ulidAt(0)).toBe("0".repeat(26));
   });
 });
 

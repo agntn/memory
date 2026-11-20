@@ -143,7 +143,7 @@ export const memoryToolMeta = {
   },
   memory_get: {
     label: "Get Memories",
-    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does a memory_recall candidate marked kind: message, which is a raw ingested message with no memory record behind it.`,
+    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. With reportSuccessor, each such record also names the memory that replaced it. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does a memory_recall candidate marked kind: message, which is a raw ingested message with no memory record behind it.`,
   },
   memory_delete: {
     label: "Delete Memory",
@@ -231,6 +231,8 @@ export const memoryFieldDescriptions = {
   memoryId: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
   memoryIds:
     "Exact memory identifiers from memory_list, memory_remember, or memory_recall. Each unique id costs one read.",
+  getReportSuccessor:
+    "Name the memory that replaced each superseded record, which the service never says. Costs one listing page per supersession moment, up to five when the minute before it was busy. A successor deleted or superseded since isn't listed, so its list comes back empty.",
   sessionToDelete: "Exact session identifier. Every memory carrying it is removed.",
   summarySessionId:
     "Session named on the summary's Current session line instead of the most recent one. The summary body still covers the whole profile; memory_list with sessionId shows what one session holds.",

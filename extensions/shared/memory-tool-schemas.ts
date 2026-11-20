@@ -326,6 +326,9 @@ export const getParameters = Type.Object(
       maxItems: MAX_TOOL_EXPAND,
       description: memoryFieldDescriptions.memoryIds,
     }),
+    reportSuccessor: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.getReportSuccessor }),
+    ),
   },
   closed,
 );

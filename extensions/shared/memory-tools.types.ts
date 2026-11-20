@@ -121,6 +121,8 @@ export interface ListParams extends ProfileParams {
 
 export interface GetParams extends ProfileParams {
   memoryIds: string[];
+  /** Name the memory that superseded each superseded record. */
+  reportSuccessor?: boolean;
 }
 
 export interface MemoryParams extends ProfileParams {

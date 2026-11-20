@@ -5,6 +5,7 @@ import {
   memoryToolExecutors,
   memoryToolMeta,
 } from "../extensions/shared/memory-tools.ts";
+import { ulidAt } from "../extensions/shared/memory-ids.ts";
 import { toolErrorMessage } from "../extensions/shared/tool-errors.ts";
 
 interface StubResponse {
@@ -2864,6 +2865,253 @@ describe("get result", () => {
         memoryIds: Array.from({ length: 31 }, (_value, index) => `mem-${index}`),
       }),
     ).rejects.toThrow("Memory ids must be a list of 1 to 30 identifiers");
+  });
+});
+
+describe("get successor", () => {
+  const MOVED = Date.parse("2026-11-17T12:00:00.000Z");
+  const OLD_AT = "2026-11-01T00:00:00.000Z";
+
+  interface StoredRecord {
+    readonly id: string;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  }
+
+  /* A record minted lead ms before it was stored at that instant, never superseded. */
+  function minted(at: number, lead: number, suffix = "0"): StoredRecord {
+    const createdAt = new Date(at).toISOString();
+    return { id: ulidAt(at - lead).slice(0, -1) + suffix, createdAt, updatedAt: createdAt };
+  }
+
+  /* A record written long ago and superseded at that instant. */
+  function superseded(id: string, at: number): StoredRecord {
+    return { id, createdAt: OLD_AT, updatedAt: new Date(at).toISOString() };
+  }
+
+  /* Serve reads by id and listings that page by id from the cursor, like the service; log each call. */
+  function stubProfile(
+    stored: readonly StoredRecord[],
+    { failingList = false } = {},
+  ): { reads: string[]; listings: URLSearchParams[] } {
+    const log = { reads: [] as string[], listings: [] as URLSearchParams[] };
+    const listed = stored.filter((memory) => memory.updatedAt === memory.createdAt);
+    const sorted = [...listed].sort((a, b) => (a.id < b.id ? -1 : 1));
+    stubCloudflare((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/memories")) {
+        log.listings.push(parsed.searchParams);
+        if (failingList) return { failure: { status: 400, message: "refused" } };
+        const cursor = parsed.searchParams.get("cursor") ?? "";
+        const limit = Number(parsed.searchParams.get("per_page"));
+        const after = sorted.filter((memory) => memory.id > cursor);
+        const page = after
+          .slice(0, limit)
+          .map((memory) => ({ ...memoryEntry(memory.id, null), ...memory }));
+        const more = after.length > limit;
+        return { result: page, resultInfo: { cursor: more ? page.at(-1)?.id : null } };
+      }
+      const id = decodeURIComponent(parsed.pathname.slice(parsed.pathname.lastIndexOf("/") + 1));
+      log.reads.push(id);
+      const memory = stored.find((record) => record.id === id);
+      if (memory === undefined) return { failure: { status: 500, message: "internal" } };
+      return { result: { ...storedMemory(id), ...memory } };
+    });
+    return log;
+  }
+
+  it("names the memory created the moment the record was superseded", async () => {
+    const successor = minted(MOVED, 28_000);
+    const log = stubProfile([
+      superseded("OLD-GREEN", MOVED),
+      minted(MOVED - 5_000, 300),
+      successor,
+      minted(MOVED + 90_000, 300),
+    ]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD-GREEN"],
+      reportSuccessor: true,
+    });
+
+    expect(log.listings.map((query) => [query.get("cursor"), query.get("per_page")])).toEqual([
+      [ulidAt(MOVED - 60_000), "100"],
+    ]);
+    expect(records(result)).toEqual([
+      expect.objectContaining({ id: "OLD-GREEN", successor: { ids: [successor.id] } }),
+    ]);
+    expect(textOf(result).split("\n")[0]).toBe(
+      "successor.ids: listed memories created the moment each record was superseded. An empty list means the successor was deleted or superseded since.",
+    );
+  });
+
+  it("lists once per supersession instant and leaves current records alone", async () => {
+    const later = MOVED + 3_600_000;
+    const log = stubProfile([
+      superseded("OLD-A", MOVED),
+      superseded("OLD-B", MOVED),
+      superseded("OLD-C", later),
+      minted(MOVED, 500),
+      minted(later, 500, "S"),
+      { id: "CURRENT", createdAt: OLD_AT, updatedAt: OLD_AT },
+    ]);
+    const successor = minted(later, 500, "S").id;
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD-A", "OLD-B", "OLD-C", "CURRENT", successor],
+      reportSuccessor: true,
+    });
+
+    expect(new Set(log.listings.map((query) => query.get("cursor")))).toEqual(
+      new Set([ulidAt(MOVED - 60_000), ulidAt(later - 60_000)]),
+    );
+    expect(log.listings).toHaveLength(2);
+    const byId = Object.fromEntries(
+      records<{ id: string; successor?: { ids: string[] } }>(result).map((memory) => [
+        memory.id,
+        memory.successor?.ids.length,
+      ]),
+    );
+    expect(byId).toEqual({
+      "OLD-A": 1,
+      "OLD-B": 1,
+      "OLD-C": 1,
+      CURRENT: undefined,
+      [successor]: undefined,
+    });
+  });
+
+  it("answers an empty list when the successor is gone", async () => {
+    stubProfile([superseded("OLD-GREEN", MOVED), minted(MOVED + 1, 200)]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD-GREEN"],
+      reportSuccessor: true,
+    });
+
+    expect(records(result)).toEqual([expect.objectContaining({ successor: { ids: [] } })]);
+  });
+
+  it("pages on while the listing is still before the instant, then stops", async () => {
+    const burst = Array.from({ length: 150 }, (_value, index) =>
+      minted(MOVED - 50_000 + index, 0, String(index % 10)),
+    );
+    const successor = minted(MOVED, 1_000);
+    const log = stubProfile([
+      superseded("OLD", MOVED),
+      ...burst,
+      successor,
+      ...Array.from({ length: 200 }, (_value, index) =>
+        minted(MOVED + 3_600_000 + index, 0, String(index % 10)),
+      ),
+    ]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD"],
+      reportSuccessor: true,
+    });
+
+    expect(log.listings).toHaveLength(2);
+    expect(records(result)).toEqual([
+      expect.objectContaining({ successor: { ids: [successor.id] } }),
+    ]);
+  });
+
+  it("gives up after five pages instead of walking the profile", async () => {
+    const burst = Array.from({ length: 600 }, (_value, index) =>
+      minted(MOVED - 59_000 + index * 10, 0, String(index % 10)),
+    );
+    const log = stubProfile([superseded("OLD", MOVED), ...burst, minted(MOVED, 0)]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD"],
+      reportSuccessor: true,
+    });
+
+    expect(log.listings).toHaveLength(5);
+    expect(records(result)).toEqual([
+      expect.objectContaining({
+        successor: { unchecked: "more than 500 memories were written in the minute before it" },
+      }),
+    ]);
+  });
+
+  it("still returns the record when the listing fails", async () => {
+    stubProfile([superseded("OLD", MOVED)], { failingList: true });
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD"],
+      reportSuccessor: true,
+    });
+
+    const [record] = records<{ id: string; successor: { unchecked: string } }>(result);
+    expect(record?.id).toBe("OLD");
+    expect(record?.successor.unchecked).toMatch(/^listing failed: .*refused/);
+  });
+
+  it("rejects a cancelled lookup instead of calling it unchecked", async () => {
+    const controller = new AbortController();
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (new URL(String(input)).pathname.endsWith("/memories")) {
+          controller.abort();
+          init?.signal?.throwIfAborted();
+        }
+        return Response.json({
+          success: true,
+          result: { ...storedMemory("OLD"), ...superseded("OLD", MOVED) },
+        });
+      }),
+    );
+
+    await expect(
+      memoryToolExecutors.get(
+        { namespace: "research", profile: "project", memoryIds: ["OLD"], reportSuccessor: true },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("lists nothing and says nothing without the flag", async () => {
+    const log = stubProfile([superseded("OLD", MOVED), minted(MOVED, 500)]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["OLD"],
+    });
+
+    expect(log.listings).toEqual([]);
+    expect(textOf(result)).not.toContain("successor");
+  });
+
+  it("says nothing when no record read was superseded", async () => {
+    const log = stubProfile([{ id: "CURRENT", createdAt: OLD_AT, updatedAt: OLD_AT }]);
+
+    const result = await memoryToolExecutors.get({
+      namespace: "research",
+      profile: "project",
+      memoryIds: ["CURRENT"],
+      reportSuccessor: true,
+    });
+
+    expect(log.listings).toEqual([]);
+    expect(textOf(result)).not.toContain("successor");
   });
 });
 
