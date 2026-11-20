@@ -1080,7 +1080,7 @@ async function storeMemory(
 /** What superseded one record, or why nobody knows. */
 type SuccessorReport = { readonly ids: readonly string[] } | { readonly unchecked: string };
 
-/** Ids run up to 30 s ahead of createdAt, so listing starts a minute early. */
+/** Ids are minted up to 30 s before createdAt, so listing starts a minute early. */
 const SUCCESSOR_LEAD_MS = 60_000;
 
 /** Listing pages one supersession instant may cost before the lookup gives up. */
