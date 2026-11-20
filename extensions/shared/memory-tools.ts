@@ -12,7 +12,7 @@ import type {
   RememberInput,
 } from "@agntn/memory";
 import { isStampedContent } from "./memory-fields.ts";
-import { isIngestedMessageId } from "./memory-ids.ts";
+import { isIngestedMessageId, ulidAt, ulidTime } from "./memory-ids.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
@@ -1077,6 +1077,103 @@ async function storeMemory(
   };
 }
 
+/** What superseded one record, or why nobody knows. */
+type SuccessorReport = { readonly ids: readonly string[] } | { readonly unchecked: string };
+
+/** Ids run up to 30 s ahead of createdAt, so listing starts a minute early. */
+const SUCCESSOR_LEAD_MS = 60_000;
+
+/** Listing pages one supersession instant may cost before the lookup gives up. */
+const MAX_SUCCESSOR_PAGES = 5;
+
+const SUCCESSOR_NOTE =
+  "successor.ids: listed memories created the moment each record was superseded. An empty list means the successor was deleted or superseded since.";
+
+/**
+ * Whether the service moved a record's updatedAt, which only supersession does.
+ *
+ * @param memory - A record read by id.
+ * @returns {boolean} `true` for a superseded record.
+ */
+function isSuperseded(memory: Memory): boolean {
+  return memory.updatedAt.getTime() > memory.createdAt.getTime();
+}
+
+/**
+ * List the memories created at one instant, from a cursor a minute before it.
+ *
+ * @param list - The profile's listing.
+ * @param call - Instant in milliseconds and abort signal.
+ * @returns {Promise<SuccessorReport>} Their ids, or why the pages ran out first.
+ */
+async function createdAt(
+  list: NonNullable<MemoryProfile["list"]>,
+  call: Readonly<{ moved: number }> & AbortOptions,
+): Promise<SuccessorReport> {
+  const ids: string[] = [];
+  let cursor = ulidAt(Math.max(0, call.moved - SUCCESSOR_LEAD_MS));
+  for (let page = 0; page < MAX_SUCCESSOR_PAGES; page += 1) {
+    const result = await list({ limit: MAX_TOOL_LIST_LIMIT, cursor, signal: call.signal });
+    for (const memory of result.memories) {
+      if (memory.createdAt.getTime() === call.moved) ids.push(memory.id);
+    }
+    const last = result.memories.at(-1);
+    if (result.cursor === undefined || last === undefined || ulidTime(last.id) > call.moved) {
+      return { ids };
+    }
+    cursor = result.cursor;
+  }
+  return {
+    unchecked: `more than ${MAX_SUCCESSOR_PAGES * MAX_TOOL_LIST_LIMIT} memories were written in the minute before it`,
+  };
+}
+
+/**
+ * Find each superseded record's successor, one listing per instant. A failed listing never throws.
+ *
+ * @param profile - Profile the records were read from.
+ * @param memories - The records read.
+ * @param options - Request cancellation.
+ * @returns {Promise<Map<number, SuccessorReport>>} Reports keyed by supersession instant.
+ */
+async function successorsOf(
+  profile: MemoryProfile,
+  memories: readonly Memory[],
+  options: AbortOptions,
+): Promise<Map<number, SuccessorReport>> {
+  const instants = new Set(
+    memories.filter(isSuperseded).map((memory) => memory.updatedAt.getTime()),
+  );
+  const list = profile.list?.bind(profile);
+  const reports = await Promise.all(
+    [...instants].map(async (moved): Promise<[number, SuccessorReport]> => {
+      if (list === undefined) return [moved, { unchecked: "this provider lists no memories" }];
+      try {
+        return [moved, await createdAt(list, { moved, signal: options.signal })];
+      } catch (error) {
+        return [moved, { unchecked: `listing failed: ${toolErrorMessage(error)}` }];
+      }
+    }),
+  );
+  options.signal?.throwIfAborted();
+  return new Map(reports);
+}
+
+/**
+ * A read record with its successor report, when one was asked for and it was superseded.
+ *
+ * @param memory - A record read by id.
+ * @param successors - Reports by instant, absent without reportSuccessor.
+ * @returns {Memory | (Memory & { successor: SuccessorReport })} The record as the result shows it.
+ */
+function withSuccessor(
+  memory: Memory,
+  successors: ReadonlyMap<number, SuccessorReport> | undefined,
+): Memory | (Memory & { successor: SuccessorReport }) {
+  const successor = successors?.get(memory.updatedAt.getTime());
+  return successor === undefined || !isSuperseded(memory) ? memory : { ...memory, successor };
+}
+
 function attemptsText(attempts: number): string {
   return `${attempts} ${attempts === 1 ? "attempt" : "attempts"}`;
 }
@@ -1516,6 +1613,16 @@ export const memoryToolExecutors = {
     assertMemoryIds(params.memoryIds);
     const profile = await getProfile(params, binding);
     const readings = await readMemories(profile, params.memoryIds, options);
+    const successors =
+      params.reportSuccessor === true
+        ? await successorsOf(
+            profile,
+            [...readings.values()].flatMap((reading) =>
+              "memory" in reading ? [reading.memory] : [],
+            ),
+            options,
+          )
+        : undefined;
     const entries = [...readings.entries()];
     const failed = entries.filter(
       (entry): entry is [string, { error: unknown }] => "error" in entry[1],
@@ -1532,13 +1639,16 @@ export const memoryToolExecutors = {
     }
     const memories = entries.map(([id, reading]) =>
       "memory" in reading
-        ? reading.memory
+        ? withSuccessor(reading.memory, successors)
         : { id, error: describeReadError(params, id, reading.error) },
     );
-    const header =
+    const failures =
       failed.length === 0
         ? ""
         : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => singleLineToolText(id)).join(", ")}.\n`;
+    const header = memories.some((memory) => "successor" in memory)
+      ? `${failures}${SUCCESSOR_NOTE}\n`
+      : failures;
     return {
       content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
       details: { memories },

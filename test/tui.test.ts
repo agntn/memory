@@ -105,6 +105,12 @@ describe("call lines", () => {
     expect(line.meta).toEqual(["reports superseded"]);
   });
 
+  it("marks a read that names successors", () => {
+    const line = describeToolCall("Get Memories", { memoryIds: ["a"], reportSuccessor: true });
+
+    expect(line.meta).toEqual(["names successors"]);
+  });
+
   it("carries no icon when the harness reports no state", () => {
     expect(describeToolCall("Recall", { query: "q" }).icon).toBeUndefined();
   });

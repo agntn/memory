@@ -278,6 +278,24 @@ function callSubject(record: Readonly<Record<string, unknown>>): string | undefi
   return undefined;
 }
 
+/** Reports a call pays extra for. */
+const CALL_FLAG_LABELS = {
+  reportSuperseded: "reports superseded",
+  reportSuccessor: "names successors",
+} as const;
+
+/**
+ * Label each paid report the call asked for.
+ *
+ * @param record - Tool arguments.
+ * @returns {string[]} One label per flag set to true.
+ */
+function flagMeta(record: Readonly<Record<string, unknown>>): string[] {
+  return Object.entries(CALL_FLAG_LABELS).flatMap(([key, label]) =>
+    record[key] === true ? [label] : [],
+  );
+}
+
 function callMeta(
   record: Readonly<Record<string, unknown>>,
   subject: string | undefined,
@@ -289,7 +307,7 @@ function callMeta(
   if (Array.isArray(record.copies)) {
     meta.push(`copies ${record.copies.length}${record.copySource === true ? " with source" : ""}`);
   }
-  if (record.reportSuperseded === true) meta.push("reports superseded");
+  meta.push(...flagMeta(record));
   for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
     const value = scalarText(record[key]);
     if (value !== undefined) meta.push(`${metaLabel} ${field(value, META_WIDTH)}`);

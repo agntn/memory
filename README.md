@@ -134,6 +134,8 @@ That's handy once the tool result is gone. Cloudflare's remember API takes only 
 
 A new fact on an old topic makes the old memory disappear from recall, and the write doesn't mention it. Opt in with `reportSuperseded: true` to get its id on each stored record. Expect one recall per profile, several seconds, and up to 30 reads. An empty list proves nothing: only memories recall ranked are checked.
 
+An old memory can now name its replacement. Call `memory_get` with `reportSuccessor: true` and each superseded record gets a `successor` with its id. That beats timestamps, which only hinted that something took over. Expect one listing page per supersession moment. An empty list means the successor is gone too.
+
 Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
 
 ```json

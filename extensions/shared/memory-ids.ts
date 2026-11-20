@@ -20,6 +20,21 @@ export function ulidTime(id: string): number {
 }
 
 /**
+ * Spell an instant as the smallest ULID minted at it, which a listing takes as its cursor.
+ * @param milliseconds - Milliseconds since the Unix epoch.
+ * @returns {string} Ten time characters and a random part of zeros.
+ */
+export function ulidAt(milliseconds: number): string {
+  let rest = milliseconds;
+  let time = "";
+  for (let index = 0; index < 10; index += 1) {
+    time = `${CROCKFORD_ALPHABET[rest % 32]}${time}`;
+    rest = Math.floor(rest / 32);
+  }
+  return time.padEnd(26, "0");
+}
+
+/**
  * Whether a recall candidate id names a raw ingested message rather than a memory. A memory id is
  * a ULID minted at write time; a message id is derived from the content, so its time part is a
  * random instant that lands inside the service's lifetime for about one message in five thousand.

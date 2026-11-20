@@ -12,6 +12,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 
 - A profile listing orders by name, includes a profile once something was written to it, and ends with `cursor: null`.
 - A memory listing pages by id from the oldest memory up, takes no order, and its cursor is the last id of the page.
+- Any 26-character id works as a cursor, even one spelled from an instant with a zero random part. The page starts right after it. Measured 2026-11-20.
 - An unknown memory id returns 500, not a 404, with code 10000 and the same `You may contact support with the following Cf-Ray request id` text a passing server failure carries, so the answer alone does not tell the two apart. Measured 2026-10-05. An unknown namespace name returns a real 404 from its own endpoint and from its profile listing.
 - A summary always covers the whole profile, and its `sessionId` only picks the session named on its `Current session` line.
 
@@ -30,6 +31,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 - A fact or instruction remembered on the topic of an existing one supersedes it: the older record leaves the listing and recall the moment the newer one is stored, stays readable by id, and has its `updatedAt` moved to the newer record's `createdAt`.
 - `remember` answers with the new record alone and never names what it superseded. The first read by id after the write, about half a second later, already showed the moved `updatedAt`.
 - A recall of the new content just before the write held the memory that write then superseded. Measured 2026-11-17 on all 13 supersessions that 14 rewrites caused, ranked first among memories in the 5 where the rank was read.
+- The listing still shows the newer record, and its `createdAt` equals the older one's moved `updatedAt` to the millisecond. A listing from a cursor one minute earlier named the right successor in all 3 supersessions of one run on 2026-11-20. Once deleted, it named none.
 - The same content remembered twice is two records with the first superseded.
 - Events accumulate.
 - Deleting the newest version does not bring back the one it superseded.
@@ -38,7 +40,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 
 ## Recall
 
-- `recall` ranks the raw ingested messages next to the memories, as candidates with the same four fields: the message text as `summary`, verbatim with its newlines and cut at about 3,500 characters with an ellipsis, the ingest session or the derived `hash-` one as `sessionId`, and an id that is 26 Crockford base32 characters derived from the content, so its ULID time part decodes to an instant thousands of years off. A memory id is a ULID minted at write time, within 30 s of `createdAt` on 1,500 live records.
+- `recall` ranks the raw ingested messages next to the memories, as candidates with the same four fields: the message text as `summary`, verbatim with its newlines and cut at about 3,500 characters with an ellipsis, the ingest session or the derived `hash-` one as `sessionId`, and an id that is 26 Crockford base32 characters derived from the content, so its ULID time part decodes to an instant thousands of years off. A memory id is a ULID minted at write time, 26 ms to 30.2 s before `createdAt`. Measured 2026-11-20 on 3,921 live records in two profiles.
 - `get` and `delete` answer a message id with the same server error as an unknown id, a listing never shows it, and a session delete removes it. Measured 2026-09-19: two message candidates in every recall on a 4,280-memory profile, ranked as high as second.
 - A `low`, `short` recall took 4 to 16 seconds. Measured 2026-11-17 over 27 calls, on profiles from a dozen memories to over 8,000.
 - The fused score separates a real hit from the rest by orders of magnitude, so recall trims the candidates under 1% of the best one when the call names no cap. Measured 2026-09-22 over 24-candidate responses: an answered query scored 0.98 on the first line and 0.0011 on the second, a well-matched one kept nine lines within one order of magnitude of the top, and an unanswerable one flattened every line onto the same 0.0000374 floor.
