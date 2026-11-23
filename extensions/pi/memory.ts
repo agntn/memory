@@ -15,7 +15,12 @@ import {
   type RouteHost,
   unmappedChannelNotice,
 } from "../shared/memory-ingest-routes.ts";
-import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
+import {
+  createTurnIngest,
+  redactedMessage,
+  type TurnContext,
+} from "../shared/memory-ingest-turns.ts";
+import { configuredRedactionShapes, loadRedactor, type Redactor } from "../shared/redaction.ts";
 import { createMissingNamespaces } from "../shared/memory-missing-namespaces.ts";
 import { openBotDatabasePath } from "../shared/memory-openbot.ts";
 import {
@@ -131,6 +136,8 @@ function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every:
   const namespaces = createMissingNamespaces();
   const ingest = createTurnIngest(every, { onMissing: namespaces.report });
   const router = createIngestRouter(options);
+  const shapes = configuredRedactionShapes();
+  let redactor: Promise<Redactor> | undefined;
   let started = false;
   /**
    * What only the first run has to say, after a short wait for the project's namespace lookup.
@@ -164,8 +171,11 @@ function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every:
     namespaces.forget(namespace);
     ingest.created(namespace);
   });
-  pi.on("message_end", (event, ctx) => {
-    ingest.add(router.route(event.message, routeHost(ctx)));
+  /** Strikes secrets before routing, so a key never splits across two pieces. */
+  pi.on("message_end", async (event, ctx) => {
+    redactor ??= loadRedactor(shapes);
+    const message = redactedMessage(event.message, await redactor);
+    ingest.add(router.route(message, routeHost(ctx)));
   });
   pi.on("turn_end", (_event, ctx) => {
     ingest.turn(turnContext(ctx));

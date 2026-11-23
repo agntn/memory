@@ -21,7 +21,7 @@ import {
   withRelationLines,
 } from "./memory-relations.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
-import { configuredRedactionShapes, redactSecrets } from "./redaction.ts";
+import { configuredRedactionShapes, loadRedactor } from "./redaction.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
 import {
@@ -1862,22 +1862,20 @@ function assertSupersedeCopies(params: Readonly<SupersedeParams>): void {
 async function redactedMessages(
   messages: readonly Readonly<IngestParams["messages"][number]>[],
 ): Promise<{ messages: MemoryMessage[]; counts: Record<string, number> }> {
-  const shapes = configuredRedactionShapes();
+  const redact = await loadRedactor(configuredRedactionShapes());
   const counts: Record<string, number> = {};
-  const copied = await Promise.all(
-    messages.map(async (message) => {
-      const timestamp = optionalString(message.timestamp);
-      const redacted = await redactSecrets(message.content, shapes);
-      for (const [name, count] of Object.entries(redacted.counts)) {
-        counts[name] = (counts[name] ?? 0) + count;
-      }
-      return {
-        role: message.role,
-        content: redacted.text,
-        ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
-      };
-    }),
-  );
+  const copied = messages.map((message) => {
+    const timestamp = optionalString(message.timestamp);
+    const redacted = redact(message.content);
+    for (const [name, count] of Object.entries(redacted.counts)) {
+      counts[name] = (counts[name] ?? 0) + count;
+    }
+    return {
+      role: message.role,
+      content: redacted.text,
+      ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
+    };
+  });
   return { messages: copied, counts };
 }
 

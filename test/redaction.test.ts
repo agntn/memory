@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   configuredRedactionShapes,
+  loadRedactor,
   parseRedactionShapes,
-  redactSecrets,
 } from "../extensions/shared/redaction.ts";
+
+const redact = await loadRedactor();
 
 /* Published vectors: Bitcoin wiki WIF, BIP39 "abandon ... about", BIP32 test vector 1. */
 const WIF = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
@@ -16,7 +18,7 @@ const XPUB =
   "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
 const HEX = "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d";
 
-describe("redactSecrets", () => {
+describe("loadRedactor", () => {
   it.each([
     ["a WIF key", `key ${WIF} here`, "key [redacted:wif] here", "wif"],
     ["a compressed WIF key", `key ${COMPRESSED_WIF}`, "key [redacted:wif]", "wif"],
@@ -48,8 +50,8 @@ describe("redactSecrets", () => {
       "[redacted:cloudflare-token]",
       "cloudflare-token",
     ],
-  ])("strikes %s", async (_label, text, struck, shape) => {
-    await expect(redactSecrets(text)).resolves.toEqual({ text: struck, counts: { [shape]: 1 } });
+  ])("strikes %s", (_label, text, struck, shape) => {
+    expect(redact(text)).toEqual({ text: struck, counts: { [shape]: 1 } });
   });
 
   it.each([
@@ -59,8 +61,8 @@ describe("redactSecrets", () => {
     ["an xpub", XPUB],
     ["addresses", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"],
     ["plain prose", "We went to the park and then walked along the river until the sun went down"],
-  ])("leaves %s alone", async (_label, text) => {
-    await expect(redactSecrets(text)).resolves.toEqual({ text, counts: {} });
+  ])("leaves %s alone", (_label, text) => {
+    expect(redact(text)).toEqual({ text, counts: {} });
   });
 
   it("adds configured shapes after the built-in ones", async () => {
@@ -68,10 +70,23 @@ describe("redactSecrets", () => {
       [{ name: "ticket", pattern: "acme-\\d+", ignoreCase: true }],
       "shapes",
     );
-    await expect(redactSecrets(`ACME-12 and ${WIF}`, shapes)).resolves.toEqual({
+    const own = await loadRedactor(shapes);
+    expect(own(`ACME-12 and ${WIF}`)).toEqual({
       text: "[redacted:ticket] and [redacted:wif]",
       counts: { wif: 1, ticket: 1 },
     });
+  });
+
+  it("strikes a seed that a checksummed phrase overlaps", () => {
+    const seed = MNEMONIC.split(" ");
+    const text = ["april", ...seed.slice(0, 10), ...seed].join(" ");
+    expect(redact(text)).toEqual({ text: "[redacted:bip39]", counts: { bip39: 1 } });
+  });
+
+  it("gets through a message-sized whitespace run quickly", () => {
+    const started = performance.now();
+    redact(`x${" ".repeat(32_766)}x`);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });
 

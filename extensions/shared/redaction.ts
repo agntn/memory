@@ -14,6 +14,9 @@ export interface Redacted {
   readonly counts: Readonly<Record<string, number>>;
 }
 
+/** Strikes every shape from one text, synchronously once the checksum code is loaded. */
+export type Redactor = (text: string) => Redacted;
+
 /** Where one secret sits, as `slice` counts. */
 interface Span {
   readonly start: number;
@@ -23,10 +26,10 @@ interface Span {
 /** One shape and how it finds its secrets. */
 export interface Shape {
   readonly name: string;
-  readonly find: (text: string) => readonly Span[] | Promise<readonly Span[]>;
+  readonly find: (text: string) => readonly Span[];
 }
 
-/** Shapes a host configured, checked once at startup. */
+/** Shapes a host configured, checked once. */
 export type RedactionShapes = readonly Shape[];
 
 /** A pattern as `matchAll` takes it, without the mutable `lastIndex` of a shared `RegExp`. */
@@ -35,12 +38,20 @@ interface Pattern {
   readonly flags: string;
 }
 
+/** The checksum checks `@agntn/keys` lends, loaded on the first ingest. */
+interface Checks {
+  readonly isWif: (candidate: string) => boolean;
+  readonly isMnemonic: (phrase: string) => boolean;
+  readonly listed: Readonly<Record<string, boolean>>;
+}
+
 const MAX_REDACTION_SHAPES = 32;
 const SHAPE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 const BASE58 = "1-9A-HJ-NP-Za-km-z";
 const WIF_CHAINS = ["bitcoin", "litecoin", "dash", "dogecoin", "decred"] as const;
 const WIF_NETWORKS = ["mainnet", "testnet"] as const;
 const MNEMONIC_LENGTHS = [24, 21, 18, 15, 12] as const;
+const SHORTEST_MNEMONIC = 12;
 
 /** Armored keys, up to the end of the text when the paste lost its END line. */
 const PEM_PRIVATE_KEY: Pattern =
@@ -56,9 +67,9 @@ const WIF_CANDIDATE: Pattern = new RegExp(
 /** Twelve or more words the English list could hold, the only runs worth a checksum. */
 const WORD_RUN: Pattern = /(?<![\p{L}\p{N}])[a-z]{3,8}(?:\s+[a-z]{3,8}){11,}(?![\p{L}\p{N}])/giu;
 const WORD: Pattern = /[a-z]+/giu;
-/** Bare 64-digit hex is a txid or a hash far more often than a key, so it needs a label. */
+/** Bare hex is usually a txid or a hash, so a key needs a label like `ETH_PRIVATE_KEY`. */
 const LABELED_HEX_KEY: Pattern =
-  /(?<=\b(?:private[ _-]?key|privkey|priv|secret(?:[ _-]?key)?|seed)["'`]?(?:\s*[:=]\s*|\s+is\s+|\s+)["'`]?(?:0x)?)(?:[0-9a-f]{128}|[0-9a-f]{64})(?![0-9a-z])/giu;
+  /(?<![a-z0-9])(?:private[ _-]?key|privkey|priv|secret(?:[ _-]?key)?|seed)["'`]?(?:[ \t]*[:=][ \t]*|[ \t]+is[ \t]+|[ \t]+)["'`]?(?:0x)?([0-9a-f]{128}|[0-9a-f]{64})(?![0-9a-z])/dgiu;
 const GITHUB_TOKEN: Pattern =
   /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})(?![A-Za-z0-9_])/gu;
 const API_KEY: Pattern = /(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}/gu;
@@ -67,17 +78,17 @@ const CLOUDFLARE_TOKEN: Pattern =
   /(?<![A-Za-z0-9_])(?:cf(?:k|ut|at)_[A-Za-z0-9_-]{40,}|cfoat_[A-Za-z0-9_.-]{20,})/gu;
 
 /**
- * Every nonempty match of a global pattern.
+ * Every nonempty match of a global pattern, or of its first group when it has one.
  *
  * @param text - Text to search.
- * @param pattern - Source and flags, `g` among them.
+ * @param pattern - Source and flags, `g` among them, `d` for a group.
  * @returns {Span[]} The matches in reading order.
  */
 function spansOf(text: string, pattern: Pattern): Span[] {
-  return Array.from(text.matchAll(new RegExp(pattern.source, pattern.flags)), (match) => ({
-    start: match.index,
-    end: match.index + match[0].length,
-  })).filter(({ start, end }) => end > start);
+  return Array.from(text.matchAll(new RegExp(pattern.source, pattern.flags)), (match) => {
+    const [start, end] = match.indices?.[1] ?? [match.index, match.index + match[0].length];
+    return { start, end };
+  }).filter(({ start, end }) => end > start);
 }
 
 /**
@@ -92,14 +103,16 @@ function patternShape(name: string, pattern: Pattern): Shape {
 }
 
 /**
- * Whether one chain and network take the string as a private key, checksum and all.
+ * Load the checksum code once, so every later check runs synchronously.
  *
- * @param candidate - Base58 of WIF length.
- * @returns {Promise<boolean>} True for a real WIF.
+ * @returns {Promise<Checks>} WIF and BIP39 checks over the English list.
  */
-async function isWif(candidate: string): Promise<boolean> {
-  const { decode } = await import("@agntn/keys/wif");
-  return WIF_CHAINS.some((chain) =>
+async function loadChecks(): Promise<Checks> {
+  const [{ decode }, { validateMnemonic, wordlist }] = await Promise.all([
+    import("@agntn/keys/wif"),
+    import("@agntn/keys/bip39"),
+  ]);
+  const decodes = (candidate: string, chain: (typeof WIF_CHAINS)[number]) =>
     WIF_NETWORKS.some((network) => {
       try {
         decode(candidate, { chain, network });
@@ -107,66 +120,19 @@ async function isWif(candidate: string): Promise<boolean> {
       } catch {
         return false;
       }
-    }),
-  );
+    });
+  return {
+    isWif: (candidate) => WIF_CHAINS.some((chain) => decodes(candidate, chain)),
+    isMnemonic: (phrase) => validateMnemonic(phrase),
+    listed: Object.fromEntries(wordlist.map((word) => [word, true])),
+  };
 }
 
-/**
- * Private keys in wallet import format; a lookalike with a bad checksum stays.
- *
- * @param text - Text to search.
- * @returns {Promise<Span[]>} Where the keys sit.
- */
-async function wifSpans(text: string): Promise<Span[]> {
-  const candidates = spansOf(text, WIF_CANDIDATE);
-  if (candidates.length === 0) return [];
-  const real = await Promise.all(candidates.map(({ start, end }) => isWif(text.slice(start, end))));
-  return candidates.filter((_span, index) => real[index] === true);
-}
+let checks: Promise<Checks> | undefined;
 
 /** One word of a run, lowercased, with where it sits. */
 interface RunWord extends Span {
   readonly word: string;
-}
-
-/**
- * The longest checksummed phrase starting at one word.
- *
- * @param words - The run's words.
- * @param valid - Checks one phrase.
- * @returns {number} Its word count, or 0 when none starts there.
- */
-function phraseAt(words: readonly RunWord[], valid: (phrase: string) => boolean): number {
-  for (const length of MNEMONIC_LENGTHS) {
-    const phrase = words.slice(0, length);
-    if (phrase.length === length && valid(phrase.map(({ word }) => word).join(" "))) return length;
-  }
-  return 0;
-}
-
-/**
- * English BIP39 phrases whose checksum holds, so twelve plain words in a row stay.
- *
- * @param text - Text to search.
- * @returns {Promise<Span[]>} Where the phrases sit.
- */
-async function mnemonicSpans(text: string): Promise<Span[]> {
-  const runs = spansOf(text, WORD_RUN);
-  if (runs.length === 0) return [];
-  const { validateMnemonic, wordlist } = await import("@agntn/keys/bip39");
-  const listed: Record<string, boolean> = Object.fromEntries(wordlist.map((word) => [word, true]));
-  /** Repeated text checks each phrase once. */
-  const checked = new Map<string, boolean>();
-  const valid = (phrase: string) => {
-    const known = checked.get(phrase);
-    if (known !== undefined) return known;
-    const result = validateMnemonic(phrase);
-    checked.set(phrase, result);
-    return result;
-  };
-  return runs.flatMap((run) =>
-    listedRuns(wordsIn(text, run), listed).flatMap((words) => phrasesIn(words, valid)),
-  );
 }
 
 /**
@@ -200,42 +166,98 @@ function listedRuns(
     if (Object.hasOwn(listed, word.word)) stretches.at(-1)!.push(word);
     else stretches.push([]);
   }
-  return stretches.filter((stretch) => stretch.length >= MNEMONIC_LENGTHS.at(-1)!);
+  return stretches.filter((stretch) => stretch.length >= SHORTEST_MNEMONIC);
 }
 
 /**
- * The checksummed phrases in one stretch, longest first at each word.
+ * Every checksummed phrase in one stretch, from every word, so an overlapping seed can't hide.
  *
  * @param words - Words that are all on the list.
  * @param valid - Checks one phrase.
- * @returns {Span[]} Where the phrases sit.
+ * @returns {Span[]} The phrases, overlapping ones merged.
  */
 function phrasesIn(words: readonly RunWord[], valid: (phrase: string) => boolean): Span[] {
   const spans: Span[] = [];
-  for (let index = 0; index < words.length;) {
-    const length = phraseAt(words.slice(index), valid);
-    if (length === 0) {
-      index += 1;
-      continue;
-    }
-    spans.push({ start: words[index]!.start, end: words[index + length - 1]!.end });
-    index += length;
+  for (let index = 0; index + SHORTEST_MNEMONIC <= words.length; index += 1) {
+    const length = MNEMONIC_LENGTHS.find(
+      (size) =>
+        index + size <= words.length &&
+        valid(
+          words
+            .slice(index, index + size)
+            .map(({ word }) => word)
+            .join(" "),
+        ),
+    );
+    if (length === undefined) continue;
+    const span = { start: words[index]!.start, end: words[index + length - 1]!.end };
+    const last = spans.at(-1);
+    if (last !== undefined && span.start <= last.end) {
+      spans[spans.length - 1] = { start: last.start, end: Math.max(last.end, span.end) };
+    } else spans.push(span);
   }
   return spans;
 }
 
-/** What every ingest strikes, armored keys first so their base64 goes whole. */
-const BUILT_IN_SHAPES: readonly Shape[] = [
-  patternShape("private-key", PEM_PRIVATE_KEY),
-  patternShape("extended-private-key", EXTENDED_PRIVATE_KEY),
-  { name: "wif", find: wifSpans },
-  { name: "bip39", find: mnemonicSpans },
-  patternShape("hex-private-key", LABELED_HEX_KEY),
-  patternShape("github-token", GITHUB_TOKEN),
-  patternShape("api-key", API_KEY),
-  patternShape("slack-token", SLACK_TOKEN),
-  patternShape("cloudflare-token", CLOUDFLARE_TOKEN),
-];
+/**
+ * English BIP39 phrases whose checksum holds, so twelve plain words in a row stay.
+ *
+ * @param text - Text to search.
+ * @param loaded - The checks.
+ * @returns {Span[]} Where the phrases sit.
+ */
+function mnemonicSpans(text: string, loaded: Checks): Span[] {
+  const checked = new Map<string, boolean>();
+  const valid = (phrase: string) => {
+    const known = checked.get(phrase);
+    if (known !== undefined) return known;
+    const result = loaded.isMnemonic(phrase);
+    checked.set(phrase, result);
+    return result;
+  };
+  return spansOf(text, WORD_RUN).flatMap((run) =>
+    listedRuns(wordsIn(text, run), loaded.listed).flatMap((words) => phrasesIn(words, valid)),
+  );
+}
+
+/**
+ * What every ingest strikes, armored keys first so their base64 goes whole.
+ *
+ * @param loaded - The checksum checks.
+ * @returns {Shape[]} The built-in shapes.
+ */
+function builtInShapes(loaded: Checks): Shape[] {
+  return [
+    patternShape("private-key", PEM_PRIVATE_KEY),
+    patternShape("extended-private-key", EXTENDED_PRIVATE_KEY),
+    {
+      name: "wif",
+      find: (text) =>
+        spansOf(text, WIF_CANDIDATE).filter(({ start, end }) =>
+          loaded.isWif(text.slice(start, end)),
+        ),
+    },
+    { name: "bip39", find: (text) => mnemonicSpans(text, loaded) },
+    patternShape("hex-private-key", LABELED_HEX_KEY),
+    patternShape("github-token", GITHUB_TOKEN),
+    patternShape("api-key", API_KEY),
+    patternShape("slack-token", SLACK_TOKEN),
+    patternShape("cloudflare-token", CLOUDFLARE_TOKEN),
+  ];
+}
+
+/** Names the built-in shapes take, which a configured one can't reuse. */
+const BUILT_IN_NAMES = [
+  "private-key",
+  "extended-private-key",
+  "wif",
+  "bip39",
+  "hex-private-key",
+  "github-token",
+  "api-key",
+  "slack-token",
+  "cloudflare-token",
+] as const;
 
 /**
  * Check one configured shape and compile its pattern.
@@ -306,7 +328,7 @@ export function parseRedactionShapes(value: unknown, source: string): RedactionS
   if (value.length > MAX_REDACTION_SHAPES) {
     throw new Error(`${source} takes at most ${MAX_REDACTION_SHAPES} shapes`);
   }
-  const taken = new Set(BUILT_IN_SHAPES.map(({ name }) => name));
+  const taken = new Set<string>(BUILT_IN_NAMES);
   const shapes = value.map((entry: unknown, index) => {
     const shape = parseShape(entry, `${source}[${index}]`);
     if (taken.has(shape.name)) throw new Error(`${source} names ${shape.name} twice`);
@@ -354,20 +376,23 @@ function strike(text: string, spans: readonly Span[], name: string): string {
 }
 
 /**
- * Strike every built-in and configured secret shape from a text.
+ * Load the redactor for the built-in shapes and the host's own.
  *
- * @param text - A message as written.
  * @param shapes - Shapes the host adds after the built-in ones.
- * @returns {Promise<Redacted>} The struck text and the count per shape that matched.
+ * @returns {Promise<Redactor>} A synchronous redactor.
  */
-export async function redactSecrets(text: string, shapes: RedactionShapes = []): Promise<Redacted> {
-  let result = text;
-  const counts: Record<string, number> = {};
-  for (const shape of [...BUILT_IN_SHAPES, ...shapes]) {
-    const spans = await shape.find(result);
-    if (spans.length === 0) continue;
-    counts[shape.name] = spans.length;
-    result = strike(result, spans, shape.name);
-  }
-  return { text: result, counts };
+export async function loadRedactor(shapes: RedactionShapes = []): Promise<Redactor> {
+  checks ??= loadChecks();
+  const all = [...builtInShapes(await checks), ...shapes];
+  return (text) => {
+    let result = text;
+    const counts: Record<string, number> = {};
+    for (const shape of all) {
+      const spans = shape.find(result);
+      if (spans.length === 0) continue;
+      counts[shape.name] = spans.length;
+      result = strike(result, spans, shape.name);
+    }
+    return { text: result, counts };
+  };
 }

@@ -140,6 +140,38 @@ describe("Pi turn ingest", () => {
     expect(bodies[0]).toContain("[redacted:ticket] is done, my key is [redacted:wif]");
   });
 
+  it("strikes a key before cutting a long message, so neither piece carries half of it", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_MEMORY_REDACT", '[{"name":"ticket","pattern":"T-\\\\d"}]');
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const wif = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+    const handlers = loadPi();
+
+    await handlers.get("message_end")!(
+      { message: { role: "user", content: `${"T-1".repeat(10_900)}${wif} tail` } },
+      ctx,
+    );
+    await handlers.get("turn_end")!({}, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toMatch(/T-1|5HueCGU8|bTLvyTJ/u);
+    }
+  });
+
   it("switches off with a count of 0", () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
