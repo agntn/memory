@@ -138,6 +138,8 @@ A new fact on an old topic makes the old memory disappear from recall, and the w
 
 An old memory can now name its replacement. Call `memory_get` with `reportSuccessor: true` and each superseded record gets a `successor` with its id. That beats timestamps, which only hinted that something took over. Expect one listing page per supersession moment. An empty list means the successor is gone too.
 
+Not every follow-up is a complement. Give `memory_remember` a `relates` list when the new memory corrects, refutes or narrows an older one. Then `memory_get` with `reportRelations: true` shows the old record who's been arguing with it.
+
 Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
 
 ```json

@@ -6,6 +6,7 @@ import type {
   ResponseLength,
   ThinkingLevel,
 } from "@agntn/memory";
+import type { MemoryRelation } from "./memory-relations.ts";
 
 export interface NamespaceResult {
   id: string;
@@ -67,6 +68,8 @@ export interface RememberParams extends ProfileParams {
   copySource?: boolean;
   /** List what each write superseded, for one recall and some reads per profile. */
   reportSuperseded?: boolean;
+  /** Older memories in this profile it bears on, each ending the content as a relates: line. */
+  relates?: readonly MemoryRelation[];
 }
 
 /** A copy of the old memory in another profile. */
@@ -133,6 +136,8 @@ export interface GetParams extends ProfileParams {
   memoryIds: string[];
   /** Name the memory that superseded each superseded record. */
   reportSuccessor?: boolean;
+  /** List the memories whose relates: lines name each record. */
+  reportRelations?: boolean;
 }
 
 export interface MemoryParams extends ProfileParams {

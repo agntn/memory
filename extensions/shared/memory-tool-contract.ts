@@ -46,6 +46,19 @@ export const MAX_TOOL_MEMORY_CONTENT_CHARACTERS = 32_768;
 export const MAX_TOOL_INGEST_MESSAGES = 500;
 /** Extra profiles one memory_remember call may copy into; each copy is one more write. */
 export const MAX_TOOL_MEMORY_COPIES = 4;
+/** How a newer memory bears on an older one, one `relates:` line each. */
+export const MEMORY_RELATION_KINDS = [
+  "confirms",
+  "complements",
+  "narrows",
+  "corrects",
+  "refutes",
+  "depends-on",
+] as const;
+/** Older memories one write may name; each costs one read before it. */
+export const MAX_TOOL_MEMORY_RELATIONS = 8;
+/** Characters of the point a relation is about. */
+export const MAX_TOOL_RELATION_POINT_CHARACTERS = 200;
 /** A memory id is a ULID, so copySource can size its line before the first record has one. */
 export const MEMORY_ID_CHARACTERS = 26;
 /**
@@ -113,7 +126,7 @@ export const memoryToolMeta = {
   },
   memory_remember: {
     label: "Remember",
-    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. With copySource, each copy also ends with a line naming the first record's namespace, profile and id. With reportSuperseded, each record also lists the memories superseded at the moment it was stored, as far as recall found them. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Store one durable memory in a Cloudflare Agent Memory profile. The service writes the content verbatim and assigns the memory type itself. A fact or instruction on the topic of an existing one supersedes it: the older memory leaves memory_list and memory_recall as soon as the newer one is stored, while memory_get still reads it by id, and remembering the same content twice creates a second record that supersedes the first. Events accumulate instead. With copies, the same content and session land in each listed profile as well, in one call instead of one call per profile: the first profile is written first, the copies only after it is stored, and each record keeps its own id. With copySource, each copy also ends with a line naming the first record's namespace, profile and id. With reportSuperseded, each record also lists the memories superseded at the moment it was stored, as far as recall found them. With relates, the memory ends with one relates: line per older memory it confirms, complements, narrows, corrects, refutes or depends on, so the older one can be checked against it later; memory_get with reportRelations finds those lines from the older side. A correction on the older fact's topic still supersedes it. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersede: {
     label: "Supersede Memory",
@@ -143,7 +156,7 @@ export const memoryToolMeta = {
   },
   memory_get: {
     label: "Get Memories",
-    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. With reportSuccessor, each such record also names the memory that replaced it. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does a memory_recall candidate marked kind: message, which is a raw ingested message with no memory record behind it.`,
+    description: `Get up to ${MAX_TOOL_EXPAND} memories, including their content, by exact identifier in one call. Duplicate ids are read once and records return in request order; when only some reads fail, those entries carry an error message instead of a record. A memory whose updatedAt is later than its createdAt was superseded at that moment by a newer memory on its topic: it stays readable here but is hidden from memory_list and memory_recall. With reportSuccessor, each such record also names the memory that replaced it. With reportRelations, each record also lists the memories whose relates: lines name it, as far as recall found them. ${MEMORY_SUMMARY_TRUST_GUIDANCE} An identifier that does not exist comes back as a server error rather than a not-found result, and so does a memory_recall candidate marked kind: message, which is a raw ingested message with no memory record behind it.`,
   },
   memory_delete: {
     label: "Delete Memory",
@@ -197,6 +210,10 @@ export const memoryFieldDescriptions = {
     "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names. The old id can be among them, and this call deletes it.",
   rememberFields:
     "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
+  rememberRelates: `Up to ${MAX_TOOL_MEMORY_RELATIONS} older memories in this profile that this one bears on. Each is read by id before the write, and each becomes a relates: line with the kind, the id and the quoted point, after any field lines. Copies carry the lines too.`,
+  relationId: "Exact id of the older memory, in this profile.",
+  relationKind: "How this memory bears on the older one.",
+  relationPoint: `The claim or detail it is about, one line of up to ${MAX_TOOL_RELATION_POINT_CHARACTERS} characters.`,
   supersedeCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} copies of the old memory in other profiles, each replaced after the main record with the same content, session and query. Name a copy's old id, or leave it out to find the copy ending with the old memory's Copied from memory line through one recall in that profile. Every old copy is found before the first write. Each pair must differ from the others and from the main profile.`,
   supersedeCopyOldMemoryId:
     "Exact id of the old copy. Left out, recall looks for the copy that ends with the old memory's Copied from memory line.",
@@ -236,6 +253,7 @@ export const memoryFieldDescriptions = {
     "Exact memory identifiers from memory_list, memory_remember, or memory_recall. Each unique id costs one read.",
   getReportSuccessor:
     "Name the memory that replaced each superseded record, which the service never says. Costs one listing page per supersession moment, up to five when the minute before it was busy. A successor deleted or superseded since isn't listed, so its list comes back empty.",
+  getReportRelations: `List the memories whose relates: lines name each record. Costs one recall and up to ${MAX_TOOL_EXPAND} reads per record. Only memories recall ranked for the id are checked, so an empty list proves nothing.`,
   sessionToDelete: "Exact session identifier. Every memory carrying it is removed.",
   summarySessionId:
     "Session named on the summary's Current session line instead of the most recent one. The summary body still covers the whole profile; memory_list with sessionId shows what one session holds.",
