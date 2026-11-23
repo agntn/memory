@@ -69,12 +69,22 @@ export interface RememberParams extends ProfileParams {
   reportSuperseded?: boolean;
 }
 
+/** A copy of the old memory in another profile. */
+export interface SupersedeCopyParams extends ProfileParams {
+  /** The old copy's id; left out, its Copied from memory line finds it. */
+  oldMemoryId?: string;
+}
+
 export interface SupersedeParams extends ProfileParams {
   oldMemoryId: string;
   content: string;
   query: string;
   timeoutSeconds: number;
   sessionId?: string;
+  /** Copies of the old memory, replaced once the main one is. */
+  copies?: readonly SupersedeCopyParams[];
+  /** Ends each new copy with a line naming the main replacement. */
+  copySource?: boolean;
   /** List what the replacement's own write superseded. */
   reportSuperseded?: boolean;
 }

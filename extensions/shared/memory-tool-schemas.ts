@@ -72,6 +72,11 @@ const callerFields = Type.Optional(
     additionalProperties: false,
   }),
 );
+/** Where a copy lands, shared by both tools that write copies. */
+const copyScope = {
+  namespace: namespaceString(memoryFieldDescriptions.copyNamespace),
+  profile: profileString(memoryFieldDescriptions.copyProfile),
+};
 /** One recall poll, three callers: `memory_recall_wait` and both supersession tools. */
 const recallCheckParameters = {
   query: Type.String({
@@ -135,20 +140,11 @@ export const rememberParameters = Type.Object(
       }),
     ),
     copies: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            namespace: namespaceString(memoryFieldDescriptions.copyNamespace),
-            profile: profileString(memoryFieldDescriptions.copyProfile),
-          },
-          closed,
-        ),
-        {
-          description: memoryFieldDescriptions.rememberCopies,
-          minItems: 1,
-          maxItems: MAX_TOOL_MEMORY_COPIES,
-        },
-      ),
+      Type.Array(Type.Object(copyScope, closed), {
+        description: memoryFieldDescriptions.rememberCopies,
+        minItems: 1,
+        maxItems: MAX_TOOL_MEMORY_COPIES,
+      }),
     ),
     copySource: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.rememberCopySource }),
@@ -175,6 +171,31 @@ export const supersedeParameters = Type.Object(
         description: memoryFieldDescriptions.writeSessionId,
         maxLength: MAX_TOOL_SESSION_ID_CHARACTERS,
       }),
+    ),
+    copies: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            ...copyScope,
+            oldMemoryId: Type.Optional(
+              Type.String({
+                description: memoryFieldDescriptions.supersedeCopyOldMemoryId,
+                minLength: 1,
+                pattern: MEMORY_ID_PATTERN,
+              }),
+            ),
+          },
+          closed,
+        ),
+        {
+          description: memoryFieldDescriptions.supersedeCopies,
+          minItems: 1,
+          maxItems: MAX_TOOL_MEMORY_COPIES,
+        },
+      ),
+    ),
+    copySource: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.rememberCopySource }),
     ),
     reportSuperseded: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.supersedeReportSuperseded }),
@@ -451,7 +472,7 @@ function rebuildOperationalSchemas(
  */
 export function createLockedMemoryToolSchemas(): Record<OperationalSchemaName, TObject> {
   return rebuildOperationalSchemas((name) =>
-    name === "rememberParameters"
+    name === "rememberParameters" || name === "supersedeParameters"
       ? Type.Omit(scopelessSchema(name), ["copies", "copySource"], closed)
       : scopelessSchema(name),
   );

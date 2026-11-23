@@ -117,7 +117,7 @@ export const memoryToolMeta = {
   },
   memory_supersede: {
     label: "Supersede Memory",
-    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_supersession_resume and the ids the failure reported. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_supersession_resume and the ids the failure reported. With copies, the old memory's copies in other profiles get replaced the same way, after the main one. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersession_resume: {
     label: "Resume Memory Supersession",
@@ -197,6 +197,9 @@ export const memoryFieldDescriptions = {
     "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names. The old id can be among them, and this call deletes it.",
   rememberFields:
     "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
+  supersedeCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} copies of the old memory in other profiles, each replaced after the main record with the same content, session and query. Name a copy's old id, or leave it out to find the copy ending with the old memory's Copied from memory line through one recall in that profile. Every old copy is found before the first write. Each pair must differ from the others and from the main profile.`,
+  supersedeCopyOldMemoryId:
+    "Exact id of the old copy. Left out, recall looks for the copy that ends with the old memory's Copied from memory line.",
   copyNamespace: "Namespace of the copy.",
   copyProfile: "Profile inside the copy's namespace. The first write creates it.",
   messageRole: "Who produced the message.",

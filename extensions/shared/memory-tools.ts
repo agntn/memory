@@ -49,6 +49,7 @@ import type {
   ResumeSupersessionParams,
   SessionParams,
   SummaryParams,
+  SupersedeCopyParams,
   SupersedeParams,
 } from "./memory-tools.types.ts";
 
@@ -1218,10 +1219,12 @@ function copySourceLine(source: string, id: string): string {
 /**
  * Refuse copySource before the first write when it has nothing to annotate or no room left.
  *
- * @param params - The remember call that asked for copySource.
+ * @param params - The call that asked for copySource.
  * @throws {Error} Without copies, or past the size cap.
  */
-function assertCopySource(params: Readonly<RememberParams>): void {
+function assertCopySource(
+  params: Readonly<ProfileParams & { content: string; copies?: readonly ProfileParams[] }>,
+): void {
   if (params.copies === undefined) {
     throw new Error("copySource needs copies; it annotates copies, not the main record");
   }
@@ -1351,6 +1354,288 @@ async function rememberCopies(
   };
 }
 
+/** An old copy found before any write, and where it lives. */
+interface OldCopy {
+  readonly scope: Readonly<ProfileParams>;
+  readonly profile: MemoryProfile;
+  readonly oldMemoryId: string;
+}
+
+/**
+ * Read a named copy id, so a typo stops the call before any write.
+ *
+ * @param copy - The copy and its id.
+ * @param options - Request cancellation.
+ * @param binding - Workers binding, if any.
+ * @returns {Promise<OldCopy>} The copy, ready to replace.
+ * @throws {Error} When the id can't be read.
+ */
+async function namedOldCopy(
+  copy: Readonly<SupersedeCopyParams> & { readonly oldMemoryId: string },
+  options: AbortOptions,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<OldCopy> {
+  const profile = await getProfile(copy, binding);
+  try {
+    await requireCapability(profile, "get")(copy.oldMemoryId, options);
+  } catch (error) {
+    throw new Error(
+      `Old copy ${quoteToolText(copy.oldMemoryId)} could not be read: ${describeReadError(copy, copy.oldMemoryId, error)}`,
+      { cause: error },
+    );
+  }
+  return { scope: copy, profile, oldMemoryId: copy.oldMemoryId };
+}
+
+/**
+ * Ids of the ranked memories that end with the old record's copy line.
+ *
+ * @param profile - The copy's profile.
+ * @param call - Recall query, the line to match and abort signal.
+ * @returns {Promise<{ ids: string[]; checked: number }>} Matches, and how many memories were read.
+ */
+async function copiesEndingWith(
+  profile: MemoryProfile,
+  call: Readonly<{ query: string; line: string }> & AbortOptions,
+): Promise<{ ids: string[]; checked: number }> {
+  const options = { signal: call.signal };
+  const result = await requireCapability(profile, "recall")(call.query, {
+    thinkingLevel: "low",
+    responseLength: "short",
+    ...options,
+  });
+  const ranked = rankByScore(result.candidates)
+    .filter((candidate) => candidateKind(candidate) === "memory")
+    .slice(0, MAX_TOOL_EXPAND)
+    .map(({ id }) => id);
+  const readings = [...(await readMemories(profile, ranked, options)).values()];
+  const ids = readings.flatMap((reading) =>
+    "memory" in reading && reading.memory.content.endsWith(call.line) ? [reading.memory.id] : [],
+  );
+  return { ids, checked: readings.length };
+}
+
+/**
+ * Find a copy by its Copied from memory line, through one recall.
+ *
+ * @param copy - Where the copy lives.
+ * @param old - The old main record and its profile.
+ * @param options - Request cancellation.
+ * @param binding - Workers binding, if any.
+ * @returns {Promise<OldCopy>} The one copy carrying that line.
+ * @throws {Error} When no memory or more than one carries it.
+ */
+async function sourcedOldCopy(
+  copy: Readonly<ProfileParams>,
+  old: Readonly<{ memory: Memory; target: string }>,
+  options: AbortOptions,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<OldCopy> {
+  const target = memoryTarget(copy);
+  const line = copySourceLine(old.target, old.memory.id);
+  const profile = await getProfile(copy, binding);
+  let found: { ids: string[]; checked: number };
+  try {
+    found = await copiesEndingWith(profile, {
+      query: supersessionQuery(old.memory.content),
+      line,
+      ...options,
+    });
+  } catch (error) {
+    throw new Error(`Looking for the copy in ${target} failed: ${toolErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+  const [oldMemoryId, ...others] = found.ids;
+  if (oldMemoryId !== undefined && others.length === 0)
+    return { scope: copy, profile, oldMemoryId };
+  const where = `${target} ending with ${JSON.stringify(line.trim())}`;
+  throw new Error(
+    oldMemoryId === undefined
+      ? `Found no memory in ${where} among the ${found.checked} that recall ranked; pass that copy's oldMemoryId`
+      : `Found ${found.ids.length} memories in ${where}: ${found.ids.map((id) => quoteToolText(id)).join(", ")}; pass the one to replace as oldMemoryId`,
+  );
+}
+
+/**
+ * Find every old copy before the first write, so a missing one changes nothing.
+ *
+ * @param params - The supersede call with its copies.
+ * @param copies - The copies it names.
+ * @param options - Request cancellation.
+ * @param binding - Workers binding, if any.
+ * @returns {Promise<OldCopy[]>} Each copy with the id to delete.
+ * @throws {Error} When a copy isn't found, before any write.
+ */
+async function findOldCopies(
+  params: Readonly<SupersedeParams>,
+  copies: readonly Readonly<SupersedeCopyParams>[],
+  options: AbortOptions,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<OldCopy[]> {
+  const target = memoryTarget(params);
+  let old: Promise<{ memory: Memory; target: string }> | undefined;
+  const readOld = async () => {
+    const profile = await getProfile(params, binding);
+    try {
+      return {
+        memory: await requireCapability(profile, "get")(params.oldMemoryId, options),
+        target,
+      };
+    } catch (error) {
+      throw new Error(
+        `the old memory, whose copy line it looks for, could not be read: ${describeReadError(params, params.oldMemoryId, error)}`,
+        { cause: error },
+      );
+    }
+  };
+  const settled = await Promise.allSettled(
+    copies.map(async (copy) => {
+      const { oldMemoryId } = copy;
+      if (oldMemoryId !== undefined)
+        return namedOldCopy({ ...copy, oldMemoryId }, options, binding);
+      old ??= readOld();
+      return sourcedOldCopy(copy, await old, options, binding);
+    }),
+  );
+  options.signal?.throwIfAborted();
+  const failed = settled.flatMap((outcome, index) =>
+    outcome.status === "rejected"
+      ? [`${memoryTarget(copies[index] as ProfileParams)}: ${toolErrorMessage(outcome.reason)}`]
+      : [],
+  );
+  if (failed.length > 0) {
+    throw new Error(
+      `Nothing was written: ${failed.length} of ${copies.length} old copies weren't found. ${failed.join("; ")}`,
+    );
+  }
+  return settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+}
+
+/** One finished supersession, as the result lists it. */
+interface ReplacedRecord {
+  readonly target: string;
+  readonly written: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * One result line, content only where the service changed it.
+ *
+ * @param record - The step's target, written content and details.
+ * @returns {Record<string, unknown>} The line's fields.
+ */
+function replacedLine(record: Readonly<ReplacedRecord>): Record<string, unknown> {
+  const { newMemory, ...rest } = record.details as { newMemory: Memory };
+  return { target: record.target, ...rest, ...writtenRecord(newMemory, record.written) };
+}
+
+/**
+ * Replace one old copy the way the main record was replaced.
+ *
+ * @param copy - The old copy found before any write.
+ * @param call - The supersede call, the copy content and the report flag.
+ * @param options - Request cancellation.
+ * @returns {Promise<ReplacedRecord>} The finished step.
+ */
+async function supersedeCopy(
+  copy: Readonly<OldCopy>,
+  call: Readonly<{ params: SupersedeParams; content: string }>,
+  options: AbortOptions,
+): Promise<ReplacedRecord> {
+  const { params, content } = call;
+  const scoped = { ...params, ...copy.scope, oldMemoryId: copy.oldMemoryId, content };
+  const { memory, superseded } = await storeMemory(copy.profile, {
+    write: { content, sessionId: optionalString(params.sessionId) },
+    report: params.reportSuperseded === true,
+    ...options,
+  });
+  const done = await completeSupersession(
+    {
+      profile: copy.profile,
+      params: scoped,
+      superseded,
+      replacementMemoryId: memory.id,
+      verifyFailure: `Stored replacement copy ${quoteToolText(memory.id)} for old copy ${quoteToolText(copy.oldMemoryId)}, but verification failed`,
+      done: "",
+    },
+    options,
+  );
+  return { target: memoryTarget(copy.scope), written: content, details: done.details };
+}
+
+/**
+ * Replace the old copies after the main record, naming every gap.
+ *
+ * @param main - The finished main step and the call.
+ * @param copies - The old copies found before the first write.
+ * @param options - Request cancellation.
+ * @returns {Promise<MemoryToolResult>} One line per replaced record, main first.
+ * @throws {Error} Naming what was replaced and how to finish each failed copy.
+ */
+async function supersedeCopies(
+  main: Readonly<{ params: SupersedeParams; record: ReplacedRecord; sourceLine?: string }>,
+  copies: readonly Readonly<OldCopy>[],
+  options: AbortOptions,
+): Promise<MemoryToolResult> {
+  const content = `${main.params.content}${main.sourceLine ?? ""}`;
+  const settled = await Promise.allSettled(
+    copies.map((copy) => supersedeCopy(copy, { params: main.params, content }, options)),
+  );
+  const replaced = [main.record];
+  const failed: string[] = [];
+  settled.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") replaced.push(outcome.value);
+    else
+      failed.push(
+        `${memoryTarget((copies[index] as OldCopy).scope)} ${quoteToolText((copies[index] as OldCopy).oldMemoryId)}: ${withCredentialStep(toolErrorMessage(outcome.reason), outcome.reason)}`,
+      );
+  });
+  const lines = replaced.map((record) => replacedLine(record));
+  if (failed.length > 0) {
+    const done = lines.map(({ target, oldMemoryId, id }) =>
+      [target, quoteToolText(String(oldMemoryId)), "->", quoteToolText(String(id))].join(" "),
+    );
+    throw new Error(
+      `Replaced the memory in ${done.join(", ")}, but ${failed.length} of ${copies.length} copies failed. ${failed.join("; ")}. Finish each failed copy on its own: memory_supersession_resume with the ids its failure names when the replacement copy is stored, memory_supersede without copies when it isn't. Repeating this call would replace the main record again.${main.sourceLine === undefined ? "" : ` Resume a copy with content that ends with ${JSON.stringify(main.sourceLine)}, as the stored ones do.`}`,
+    );
+  }
+  const sourceNote =
+    main.sourceLine === undefined
+      ? ""
+      : ` Each copy ends with a blank line and ${main.sourceLine.trim()}`;
+  const report = main.params.reportSuperseded === true ? SUPERSEDED_REPLACED_NOTE : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Superseded the memory in ${replaced.length} profiles: each new record was read back and found by recall before its old id was deleted.${sourceNote} ${WRITTEN_CONTENT_NOTE}${report}\n${recordLines(lines)}`,
+      },
+    ],
+    details: { records: lines },
+  };
+}
+
+/**
+ * Check a supersede call's copies before any read or write.
+ *
+ * @param params - The supersede call.
+ * @throws {Error} On a bad copy list, a malformed copy id, or a copy line past the cap.
+ */
+function assertSupersedeCopies(params: Readonly<SupersedeParams>): void {
+  if (params.copies !== undefined) {
+    assertCopies(params, params.copies);
+    if (
+      params.copies.some(
+        ({ oldMemoryId }) => oldMemoryId !== undefined && !validMemoryId(oldMemoryId),
+      )
+    ) {
+      throw new Error("Old copy memory id is invalid");
+    }
+  }
+  if (params.copySource === true) assertCopySource(params);
+}
+
 export const memoryToolExecutors = {
   async remember(
     params: RememberParams,
@@ -1397,21 +1682,46 @@ export const memoryToolExecutors = {
       ...params,
       memoryId: params.oldMemoryId,
     });
+    assertSupersedeCopies(params);
+    const copies =
+      params.copies === undefined
+        ? undefined
+        : await findOldCopies(params, params.copies, options, binding);
     const profile = await getProfile(params, binding);
     const { memory: replacement, superseded } = await storeMemory(profile, {
       write: { content: params.content, sessionId: optionalString(params.sessionId) },
       report: params.reportSuperseded === true,
       ...options,
     });
-    return completeSupersession(
+    const untouched = copies === undefined ? "" : " No copy was touched.";
+    let done: MemoryToolResult;
+    try {
+      done = await completeSupersession(
+        {
+          profile,
+          params,
+          superseded,
+          replacementMemoryId: replacement.id,
+          verifyFailure: `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed`,
+          done: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)}`,
+        },
+        options,
+      );
+    } catch (error) {
+      if (untouched === "" || !(error instanceof Error)) throw error;
+      throw new Error(`${error.message}${untouched}`, { cause: error.cause });
+    }
+    if (copies === undefined) return done;
+    const target = memoryTarget(params);
+    return supersedeCopies(
       {
-        profile,
         params,
-        superseded,
-        replacementMemoryId: replacement.id,
-        verifyFailure: `Stored replacement memory ${quoteToolText(replacement.id)} for old memory ${quoteToolText(params.oldMemoryId)}, but verification failed`,
-        done: `Superseded memory ${quoteToolText(params.oldMemoryId)} with ${quoteToolText(replacement.id)}`,
+        record: { target, written: params.content, details: done.details },
+        ...(params.copySource === true
+          ? { sourceLine: copySourceLine(target, replacement.id) }
+          : {}),
       },
+      copies,
       options,
     );
   },

@@ -132,6 +132,8 @@ Opt in with `copySource: true` and copies get a parent. Each one ends with `Copi
 
 That's handy once the tool result is gone. Cloudflare's remember API takes only content and a session ID, so the reference has to live in the content. It marks origin, not independent confirmation, and won't follow later edits. If the line would push a copy past 32768 bytes, nothing is written. Without the flag, copies stay verbatim.
 
+You can pass `copies` and `copySource` to `memory_supersede` too. No more stale twin hanging around in recall. Give each copy an `oldMemoryId` or let recall find it by its source line. Missing or ambiguous matches stop everything before any write. The main record is replaced first. Each copy is then written, read back, recalled, and its old ID deleted.
+
 A new fact on an old topic makes the old memory disappear from recall, and the write doesn't mention it. Opt in with `reportSuperseded: true` to get its id on each stored record. Expect one recall per profile, several seconds, and up to 30 reads. An empty list proves nothing: only memories recall ranked are checked.
 
 An old memory can now name its replacement. Call `memory_get` with `reportSuccessor: true` and each superseded record gets a `successor` with its id. That beats timestamps, which only hinted that something took over. Expect one listing page per supersession moment. An empty list means the successor is gone too.

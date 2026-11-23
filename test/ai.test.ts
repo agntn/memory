@@ -339,6 +339,9 @@ describe("@agntn/memory/ai locked to one profile", () => {
     const remember = writes.find((tool) => tool.name === "memory_remember");
     expect(Object.keys(remember!.input.properties)).not.toContain("copies");
     expect(Object.keys(remember!.input.properties)).not.toContain("copySource");
+    const supersede = writes.find((tool) => tool.name === "memory_supersede");
+    expect(Object.keys(supersede!.input.properties)).not.toContain("copies");
+    expect(Object.keys(supersede!.input.properties)).not.toContain("copySource");
   });
 
   it("refuses copies that would carry a write out of the locked profile", async () => {
