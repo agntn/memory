@@ -250,7 +250,7 @@ export const memoryFieldDescriptions = {
   memoryType: "Filter by the type the service assigned when the memory was written.",
   memoryId: "Exact memory identifier from memory_list, memory_remember, or memory_recall.",
   memoryIds:
-    "Exact memory identifiers from memory_list, memory_remember, or memory_recall. Each unique id costs one read.",
+    "Exact memory identifiers from memory_list, memory_remember, or memory_recall, in an array even for one. Each unique id costs one read.",
   getReportSuccessor:
     "Name the memory that replaced each superseded record, which the service never says. Costs one listing page per supersession moment, up to five when the minute before it was busy. A successor deleted or superseded since isn't listed, so its list comes back empty.",
   getReportRelations: `List the memories whose relates: lines name each record. Costs one recall and up to ${MAX_TOOL_EXPAND} reads per record. Only memories recall ranked for the id are checked, so an empty list proves nothing.`,

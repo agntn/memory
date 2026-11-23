@@ -78,6 +78,19 @@ function renderers(name: MemoryToolName, scope: ProfileParams | undefined): PiRe
 }
 
 /**
+ * Moves a lone string `id` into the `memoryIds` list `memory_get` takes.
+ *
+ * @param args - Raw model arguments.
+ * @returns {unknown} The repaired call, or `args` untouched.
+ */
+function singleIdAsList(args: unknown): unknown {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  const { id, ...rest } = args as Record<string, unknown>;
+  if (typeof id !== "string" || Object.hasOwn(rest, "memoryIds")) return args;
+  return { ...rest, memoryIds: [id] };
+}
+
+/**
  * Session and warning channel of the conversation behind a Pi event.
  *
  * @param ctx - Pi's context for the event.
@@ -187,6 +200,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
     writeSession: (host) => hostSessionId("pi", host),
   });
   registerPiTools(pi, tools, {
+    prepareArguments: { memory_get: singleIdAsList },
     renderers: Object.fromEntries(
       tools.map((tool) => [tool.name, renderers(tool.name as MemoryToolName, scope)]),
     ),
