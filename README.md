@@ -138,11 +138,7 @@ A new fact on an old topic makes the old memory disappear from recall, and the w
 
 An old memory can now name its replacement. Call `memory_get` with `reportSuccessor: true` and each superseded record gets a `successor` with its id. That beats timestamps, which only hinted that something took over. Expect one listing page per supersession moment. An empty list means the successor is gone too.
 
-An old record can finally hear it was challenged. Pass `relates` to `memory_remember` with an `id`, a `rel` and an optional `point`. Pick `confirms`, `complements`, `narrows`, `corrects`, `refutes` or `depends-on`. Not every follow-up is a complement.
-
-Each one ends the content as `relates: corrects <id> "region"`, after your fields and in every copy. An id that doesn't read back in that profile stops the write.
-
-Then `memory_get` with `reportRelations: true` gives each record a `relatedBy` list. Expect one recall and up to 30 reads per record. An empty list proves nothing: only memories recall ranked are checked.
+Not every follow-up is a complement. Give `memory_remember` a `relates` list when the new memory corrects, refutes or narrows an older one. Then `memory_get` with `reportRelations: true` shows the old record who's been arguing with it.
 
 Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
 
