@@ -1897,6 +1897,27 @@ describe("ingest result", () => {
     expect(urls).toEqual([]);
   });
 
+  it("cuts a message that markers grew past the byte cap", async () => {
+    let requestBody: { messages: { content: string }[] } | undefined;
+    stubCloudflare((_url, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return { result: null };
+    });
+    vi.stubEnv("AGNTN_MEMORY_REDACT", '[{"name":"ticket","pattern":"T-\\\\d+"}]');
+
+    await memoryToolExecutors.ingest({
+      namespace: "ingest-redact",
+      profile: "agent",
+      messages: [{ role: "user", content: "T-1 ".repeat(3000) }],
+    });
+
+    const pieces = requestBody!.messages.map(({ content }) => content);
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces)
+      expect(new TextEncoder().encode(piece).length).toBeLessThanOrEqual(32_768);
+    expect(pieces.join("")).toBe("[redacted:ticket] ".repeat(3000));
+  });
+
   it("states that extraction is asynchronous", async () => {
     stubCloudflare({ result: null });
 

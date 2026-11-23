@@ -70,21 +70,16 @@ export function messageText(content: unknown): string {
 }
 
 /**
- * The host message with secrets struck from its text, before routing cuts it into pieces.
+ * The host message as ingest reads it, joined text struck, so a key split across parts goes too.
  *
  * @param message - A Pi or OMP agent message.
  * @param redact - The loaded redactor.
- * @returns {unknown} The message, its text parts struck, anything else untouched.
+ * @returns {unknown} The message with its text as one struck string.
  */
 export function redactedMessage(message: unknown, redact: Redactor): unknown {
   if (typeof message !== "object" || message === null) return message;
   const { content } = message as { content?: unknown };
-  if (typeof content === "string") return { ...message, content: redact(content).text };
-  if (!Array.isArray(content)) return message;
-  const parts = content.map((part: unknown) =>
-    isTextPart(part) ? { ...part, text: redact(part.text).text } : part,
-  );
-  return { ...message, content: parts };
+  return { ...message, content: redact(messageText(content)).text };
 }
 
 /**
@@ -94,7 +89,7 @@ export function redactedMessage(message: unknown, redact: Redactor): unknown {
  * @param limit - Most bytes one piece may hold.
  * @returns {string[]} Pieces of at most `limit` bytes.
  */
-function byteChunks(text: string, limit: number): string[] {
+export function byteChunks(text: string, limit: number): string[] {
   if (textEncoder.encode(text).length <= limit) return [text];
   const chunks: string[] = [];
   let chunk = "";

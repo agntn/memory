@@ -22,6 +22,7 @@ import {
 } from "./memory-relations.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
 import { configuredRedactionShapes, loadRedactor } from "./redaction.ts";
+import { byteChunks } from "./memory-ingest-turns.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
 import {
@@ -34,6 +35,8 @@ import {
   MAX_TOOL_EXPAND,
   MAX_TOOL_MEMORY_COPIES,
   MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
+  MAX_TOOL_INGEST_MESSAGES,
+  MAX_TOOL_MESSAGE_CHARACTERS,
   MEMORY_ID_CHARACTERS,
   DEFAULT_TOOL_RECALL_CANDIDATES,
   RECALL_RELEVANCE_FLOOR,
@@ -1864,18 +1867,24 @@ async function redactedMessages(
 ): Promise<{ messages: MemoryMessage[]; counts: Record<string, number> }> {
   const redact = await loadRedactor(configuredRedactionShapes());
   const counts: Record<string, number> = {};
-  const copied = messages.map((message) => {
+  const copied = messages.flatMap((message) => {
     const timestamp = optionalString(message.timestamp);
     const redacted = redact(message.content);
     for (const [name, count] of Object.entries(redacted.counts)) {
       counts[name] = (counts[name] ?? 0) + count;
     }
-    return {
+    const at = timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) };
+    return byteChunks(redacted.text, MAX_TOOL_MESSAGE_CHARACTERS).map((content) => ({
       role: message.role,
-      content: redacted.text,
-      ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
-    };
+      content,
+      ...at,
+    }));
   });
+  if (copied.length > MAX_TOOL_INGEST_MESSAGES) {
+    throw new Error(
+      `Redaction markers grew the messages past ${MAX_TOOL_INGEST_MESSAGES} pieces of ${MAX_TOOL_MESSAGE_CHARACTERS} bytes; send fewer messages per call`,
+    );
+  }
   return { messages: copied, counts };
 }
 

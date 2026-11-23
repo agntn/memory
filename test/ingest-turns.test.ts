@@ -172,6 +172,33 @@ describe("Pi turn ingest", () => {
     }
   });
 
+  it("strikes a PEM key whose header and body sit in different text parts", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const handlers = loadPi();
+    const content = [
+      { type: "text", text: "-----BEGIN PRIVATE KEY-----" },
+      { type: "text", text: "c2VjcmV0cGF5bG9hZA==\n-----END PRIVATE KEY-----" },
+    ];
+
+    await handlers.get("message_end")!({ message: { role: "user", content } }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toContain("c2VjcmV0cGF5bG9hZA");
+  });
+
   it("switches off with a count of 0", () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
