@@ -16,6 +16,8 @@ export interface RegisteredTool {
   approval?: string;
   /** Pi orders these `(args, theme, context)`, OMP `(args, options, theme)`. */
   renderCall?: (args: Record<string, unknown>, second?: unknown, third?: unknown) => RenderedText;
+  /** Pi runs it on the raw model arguments before validation. */
+  prepareArguments?: (args: unknown) => unknown;
   renderResult?: (
     result: unknown,
     options?: unknown,

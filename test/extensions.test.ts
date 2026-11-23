@@ -323,6 +323,20 @@ describe("memory extensions", () => {
     }
   });
 
+  it("moves a lone Pi id into memoryIds and leaves every other shape to validation", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "/nonexistent/agntn-memory-test");
+    const { prepareArguments } = tool(piTools(), "memory_get");
+    const call = { namespace: "research", profile: "project" };
+    const native = { ...call, memoryIds: ["mem-1"] };
+    const both = { ...call, id: "mem-1", memoryIds: ["mem-2"] };
+    const numeric = { ...call, id: 7 };
+
+    expect(prepareArguments!({ ...call, id: "mem-1" })).toEqual(native);
+    expect(prepareArguments!(native)).toBe(native);
+    expect(prepareArguments!(both)).toBe(both);
+    expect(prepareArguments!(numeric)).toBe(numeric);
+  });
+
   it("binds Pi operational tools from its agent-local scope file", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "agntn-memory-pi-"));
     mkdirSync(join(agentDir, "agntn"), { recursive: true });
