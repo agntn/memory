@@ -114,6 +114,91 @@ describe("Pi turn ingest", () => {
     expect(scoped(ingest)[0]![0].messages).toHaveLength(20);
   });
 
+  it("sends the conversation with its secrets struck", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_MEMORY_REDACT", '[{"name":"ticket","pattern":"ACME-\\\\d+"}]');
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const wif = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+    const handlers = loadPi();
+
+    await exchange(handlers, `ACME-42 is done, my key is ${wif}`, 1);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toMatch(/ACME-42|5HueCGU8/u);
+    expect(bodies[0]).toContain("[redacted:ticket] is done, my key is [redacted:wif]");
+  });
+
+  it("strikes a key before cutting a long message, so neither piece carries half of it", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_MEMORY_REDACT", '[{"name":"ticket","pattern":"T-\\\\d"}]');
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const wif = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+    const handlers = loadPi();
+
+    await handlers.get("message_end")!(
+      { message: { role: "user", content: `${"T-1".repeat(10_900)}${wif} tail` } },
+      ctx,
+    );
+    await handlers.get("turn_end")!({}, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toMatch(/T-1|5HueCGU8|bTLvyTJ/u);
+    }
+  });
+
+  it("strikes a PEM key whose header and body sit in different text parts", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const handlers = loadPi();
+    const content = [
+      { type: "text", text: "-----BEGIN PRIVATE KEY-----" },
+      { type: "text", text: "c2VjcmV0cGF5bG9hZA==\n-----END PRIVATE KEY-----" },
+    ];
+
+    await handlers.get("message_end")!({ message: { role: "user", content } }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toContain("c2VjcmV0cGF5bG9hZA");
+  });
+
   it("switches off with a count of 0", () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
@@ -1182,7 +1267,7 @@ describe("Pi turn ingest", () => {
         ownerAgentId: "agent-mira",
       });
       task("from-mira", {
-        instruction: "Check the retry log",
+        instruction: "Check the retry log with sk-aaaaaaaaaaaaaaaaaaaaaaaa",
         parentTaskId: "mira-root",
         requestMessageId: "m-y",
         ownerAgentId: "agent-rhea",
@@ -1222,7 +1307,7 @@ describe("Pi turn ingest", () => {
 
       await said("user", "Plan the release");
       await said("assistant", "Planned");
-      await said("user", "Check the retry log");
+      await said("user", "Check the retry log with sk-aaaaaaaaaaaaaaaaaaaaaaaa");
       await said("assistant", "Checked");
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
@@ -1238,7 +1323,10 @@ describe("Pi turn ingest", () => {
         ],
         [
           "rheatwoen/miratwoen",
-          [stamped("Check the retry log", "miratwoen"), stamped("Checked", "rheatwoen")],
+          [
+            stamped("Check the retry log with [redacted:api-key]", "miratwoen"),
+            stamped("Checked", "rheatwoen"),
+          ],
         ],
       ]);
 

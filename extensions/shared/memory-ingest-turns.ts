@@ -69,13 +69,26 @@ export function messageText(content: unknown): string {
 }
 
 /**
+ * The host message as ingest reads it, joined text struck, so a key split across parts goes too.
+ *
+ * @param message - A Pi or OMP agent message.
+ * @param redact - Strikes secrets from one text.
+ * @returns {unknown} The message with its text as one struck string.
+ */
+export function redactedMessage(message: unknown, redact: (text: string) => string): unknown {
+  if (typeof message !== "object" || message === null) return message;
+  const { content } = message as { content?: unknown };
+  return { ...message, content: redact(messageText(content)) };
+}
+
+/**
  * Cut text into pieces the service takes as one message each.
  *
  * @param text - Message text.
  * @param limit - Most bytes one piece may hold.
  * @returns {string[]} Pieces of at most `limit` bytes.
  */
-function byteChunks(text: string, limit: number): string[] {
+export function byteChunks(text: string, limit: number): string[] {
   if (textEncoder.encode(text).length <= limit) return [text];
   const chunks: string[] = [];
   let chunk = "";

@@ -122,6 +122,8 @@ Cloudflare creates profiles on the first write, but not namespaces. When the pro
 
 Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `agntn/memory.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 
+Ingest strikes private keys, seed phrases and API tokens from messages before the batch leaves your machine. Got your own shapes? Add them with `AGNTN_MEMORY_REDACT` as a JSON array like `[{ "name": "ticket", "pattern": "ACME-\\d+" }]`.
+
 The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
 
 Writes keep the host's session ID wherever they go, and the model can't pass `sessionId` as an argument. A default should be a starting point, not a fence.

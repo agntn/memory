@@ -16,6 +16,7 @@ import {
   unmappedChannelNotice,
 } from "../shared/memory-ingest-routes.ts";
 import { createTurnIngest, type TurnContext } from "../shared/memory-ingest-turns.ts";
+import { configuredRedactionShapes, loadRedactor, type Redactor } from "../shared/redaction.ts";
 import { createMissingNamespaces } from "../shared/memory-missing-namespaces.ts";
 import { openBotDatabasePath } from "../shared/memory-openbot.ts";
 import {
@@ -130,7 +131,9 @@ function routeHost(ctx: ExtensionContext): RouteHost {
 function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every: number): void {
   const namespaces = createMissingNamespaces();
   const ingest = createTurnIngest(every, { onMissing: namespaces.report });
-  const router = createIngestRouter(options);
+  const shapes = configuredRedactionShapes();
+  let redactor: Redactor | undefined;
+  const router = createIngestRouter({ ...options, redact: (text) => redactor!(text).text });
   let started = false;
   /**
    * What only the first run has to say, after a short wait for the project's namespace lookup.
@@ -164,7 +167,8 @@ function ingestEveryTurns(pi: ExtensionAPI, options: IngestRouterOptions, every:
     namespaces.forget(namespace);
     ingest.created(namespace);
   });
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", async (event, ctx) => {
+    redactor ??= await loadRedactor(shapes);
     ingest.add(router.route(event.message, routeHost(ctx)));
   });
   pi.on("turn_end", (_event, ctx) => {
