@@ -84,7 +84,7 @@ export function configuredMemoryFields(
 }
 
 /**
- * Whether stored content is the given content, bare or with field lines some host stamped on it.
+ * Whether stored content is the given content, bare or with fields stamped before any copy line.
  *
  * @param stored - Content the service holds.
  * @param content - Content the caller expects.
@@ -92,6 +92,10 @@ export function configuredMemoryFields(
  */
 export function isStampedContent(stored: string, content: string): boolean {
   if (stored === content) return true;
+  const line = copySourceSuffix.exec(content)?.[0];
+  if (line !== undefined && stored.endsWith(line)) {
+    return isStampedContent(stored.slice(0, -line.length), content.slice(0, -line.length));
+  }
   if (!stored.startsWith(`${content}\n`)) return false;
   return stampedBlockPattern.test(stored.slice(content.length + 1));
 }

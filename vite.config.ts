@@ -49,6 +49,7 @@ const readonlyParameterOptions = {
         "StatusTheme",
         "SummaryOptions",
         "SummaryParams",
+        "SupersedeCopyParams",
         "SupersedeParams",
       ],
     },

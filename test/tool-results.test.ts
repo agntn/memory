@@ -2322,6 +2322,381 @@ describe("remember copies", () => {
   });
 });
 
+describe("supersede copies", () => {
+  const OLD_LINE = '\n\nCopied from memory "mem-old" in research/project.';
+
+  interface CopyStub {
+    /* Stored records per namespace/profile, by id. */
+    readonly stored: Record<string, Record<string, string>>;
+    /* Profiles whose remember fails. */
+    readonly failing?: readonly string[];
+    /* Profiles whose recall fails. */
+    readonly recallDown?: readonly string[];
+  }
+
+  interface ProfileCall {
+    readonly target: string;
+    readonly profile: string;
+    readonly records: Record<string, string>;
+    readonly init?: RequestInit;
+  }
+
+  /* remember mints new-<profile>, unless the profile refuses writes. */
+  function remember(stub: CopyStub, call: ProfileCall): StubResponse {
+    if (stub.failing?.includes(call.target)) {
+      return { failure: { status: 400, message: "profile refused" } };
+    }
+    const { content } = JSON.parse(String(call.init?.body)) as { content: string };
+    const id = `new-${call.profile}`;
+    call.records[id] = content;
+    return { result: { ...memoryEntry(id, null), content } };
+  }
+
+  /* recall ranks everything the profile holds, unless it's down. */
+  function recall(stub: CopyStub, call: ProfileCall): StubResponse {
+    if (stub.recallDown?.includes(call.target)) {
+      return { failure: { status: 400, message: "recall down" } };
+    }
+    const candidates = Object.keys(call.records).map((id) => ({
+      id,
+      summary: `summary ${id}`,
+      sessionId: null,
+      score: 0.9,
+    }));
+    return { result: { count: candidates.length, answer: "ready", candidates } };
+  }
+
+  /* get and delete answer the record, or the service's 500 for an unknown id. */
+  function byId(id: string, call: ProfileCall): StubResponse {
+    const content = call.records[id];
+    if (content === undefined) return { failure: { status: 500, message: "internal error" } };
+    if (call.init?.method === "DELETE") delete call.records[id];
+    return { result: { ...memoryEntry(id, null), content } };
+  }
+
+  /* A small in-memory service over the stored records, logging each call. */
+  function stubProfiles(stub: CopyStub): string[] {
+    const calls: string[] = [];
+    stubCloudflare((url, init) => {
+      const [, namespace, profile, path] =
+        /\/namespaces\/([^/]+)\/profiles\/([^/]+)\/(.+)$/.exec(new URL(url).pathname) ?? [];
+      const target = `${namespace}/${profile}`;
+      const operation = decodeURIComponent(String(path));
+      calls.push(`${target} ${init?.method ?? "GET"} ${operation}`);
+      const scoped = {
+        target,
+        profile: String(profile),
+        records: (stub.stored[target] ??= {}),
+        init,
+      };
+      if (operation === "remember") return remember(stub, scoped);
+      if (operation === "recall") return recall(stub, scoped);
+      return byId(operation.slice("memories/".length), scoped);
+    });
+    return calls;
+  }
+
+  const call = {
+    namespace: "research",
+    profile: "project",
+    oldMemoryId: "mem-old",
+    content: "the notebook is blue",
+    query: "notebook colour",
+    timeoutSeconds: 30,
+  };
+
+  it("replaces a named copy after the main record, each checked before its old id goes", async () => {
+    const stored = {
+      "research/project": { "mem-old": "the notebook is red" },
+      "notes/shared": { "copy-old": "the notebook is red" },
+    };
+    const calls = stubProfiles({ stored });
+
+    const result = await memoryToolExecutors.supersede({
+      ...call,
+      sessionId: "s-1",
+      copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-old" }],
+    });
+
+    expect(calls).toEqual([
+      "research/project GET memories/mem-old",
+      "notes/shared GET memories/copy-old",
+      "research/project POST remember",
+      "research/project GET memories/new-project",
+      "research/project POST recall",
+      "research/project DELETE memories/mem-old",
+      "notes/shared POST remember",
+      "notes/shared GET memories/new-shared",
+      "notes/shared POST recall",
+      "notes/shared DELETE memories/copy-old",
+    ]);
+    expect(stored).toEqual({
+      "research/project": { "new-project": "the notebook is blue" },
+      "notes/shared": { "new-shared": "the notebook is blue" },
+    });
+    expect(textOf(result).split("\n")[0]).toBe(
+      "Superseded the memory in 2 profiles: each new record was read back and found by recall before its old id was deleted. Content that matches what this call passed is left out; memory_get reads it whole.",
+    );
+    expect(records(result)).toEqual([
+      expect.objectContaining({
+        target: "research/project",
+        oldMemoryId: "mem-old",
+        id: "new-project",
+      }),
+      expect.objectContaining({
+        target: "notes/shared",
+        oldMemoryId: "copy-old",
+        id: "new-shared",
+      }),
+    ]);
+    expect(textOf(result)).not.toContain("the notebook is blue");
+  });
+
+  it("sends each copy the call's session", async () => {
+    const bodies: unknown[] = [];
+    const stored = {
+      "research/project": { "mem-old": "red" },
+      "notes/shared": { "copy-old": "red" },
+    };
+    stubProfiles({ stored });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/remember")) bodies.push(JSON.parse(String(init?.body)));
+        return fetch(input, init);
+      }),
+    );
+
+    await memoryToolExecutors.supersede({
+      ...call,
+      sessionId: "s-1",
+      copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-old" }],
+    });
+
+    expect(bodies).toEqual([
+      { content: "the notebook is blue", sessionId: "s-1" },
+      { content: "the notebook is blue", sessionId: "s-1" },
+    ]);
+  });
+
+  it("finds a copy by its Copied from memory line and gives the new one its own", async () => {
+    const stored = {
+      "research/project": { "mem-old": "the notebook is red" },
+      "notes/shared": {
+        "copy-other": "the notebook is red",
+        "copy-old": `the notebook is red${OLD_LINE}`,
+      },
+    };
+    const calls = stubProfiles({ stored });
+
+    const result = await memoryToolExecutors.supersede({
+      ...call,
+      copies: [{ namespace: "notes", profile: "shared" }],
+      copySource: true,
+    });
+
+    expect(calls.slice(0, 4)).toEqual([
+      "research/project GET memories/mem-old",
+      "notes/shared POST recall",
+      "notes/shared GET memories/copy-other",
+      "notes/shared GET memories/copy-old",
+    ]);
+    expect(stored["notes/shared"]).toEqual({
+      "copy-other": "the notebook is red",
+      "new-shared": 'the notebook is blue\n\nCopied from memory "new-project" in research/project.',
+    });
+    expect(textOf(result).split("\n")[0]).toContain(
+      'Each copy ends with a blank line and Copied from memory "new-project" in research/project.',
+    );
+    expect(contentUnder(result, "new-shared")).toEqual([]);
+  });
+
+  it.each([
+    [
+      { "copy-other": "unrelated" },
+      String.raw`Found no memory in notes/shared ending with "Copied from memory \"mem-old\" in research/project." among the 1 that recall ranked; pass that copy's oldMemoryId`,
+    ],
+    [
+      { "copy-old": `red${OLD_LINE}`, "copy-again": `red${OLD_LINE}` },
+      'Found 2 memories in notes/shared ending with "Copied from memory \\"mem-old\\" in research/project.": "copy-old", "copy-again"; pass the one to replace as oldMemoryId',
+    ],
+  ])("writes nothing when the line finds no copy or two (%#)", async (copies, message) => {
+    const calls = stubProfiles({
+      stored: { "research/project": { "mem-old": "red" }, "notes/shared": copies },
+    });
+
+    const error = await memoryToolExecutors
+      .supersede({ ...call, copies: [{ namespace: "notes", profile: "shared" }] })
+      .catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toBe(
+      `Nothing was written: 1 of 1 old copies weren't found. notes/shared: ${message}`,
+    );
+    expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
+  });
+
+  it("writes nothing when a ranked memory can't be read to rule out a second copy", async () => {
+    const stored = {
+      "research/project": { "mem-old": "red" },
+      "notes/shared": { "copy-old": `red${OLD_LINE}`, "copy-gone": `red${OLD_LINE}` },
+    };
+    const calls = stubProfiles({ stored });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).endsWith("/memories/copy-gone")
+          ? Response.json({ success: false, errors: [{ message: "internal" }] }, { status: 500 })
+          : fetch(input, init),
+      ),
+    );
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared" }],
+      }),
+    ).rejects.toThrow(
+      "notes/shared: 1 of the 2 memories recall ranked couldn't be read, so another copy may end with that line; pass that copy's oldMemoryId",
+    );
+    expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
+  });
+
+  it("writes nothing when the old memory is gone, even with every copy id named", async () => {
+    const calls = stubProfiles({
+      stored: { "research/project": {}, "notes/shared": { "copy-old": "red" } },
+    });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-old" }],
+      }),
+    ).rejects.toThrow(/^Nothing was written: old memory "mem-old" could not be read/);
+    expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
+  });
+
+  it("writes nothing when a named copy id can't be read", async () => {
+    const calls = stubProfiles({ stored: { "research/project": { "mem-old": "red" } } });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-typo" }],
+      }),
+    ).rejects.toThrow(
+      /^Nothing was written: .*notes\/shared: Old copy "copy-typo" could not be read/,
+    );
+    expect(calls).toEqual([
+      "research/project GET memories/mem-old",
+      "notes/shared GET memories/copy-typo",
+    ]);
+  });
+
+  it("writes nothing when the old memory can't be read to find a copy's line", async () => {
+    const calls = stubProfiles({ stored: {} });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared" }],
+      }),
+    ).rejects.toThrow(/^Nothing was written: old memory "mem-old" could not be read/);
+    expect(calls).toEqual(["research/project GET memories/mem-old"]);
+  });
+
+  it.each([
+    [[{ namespace: "research", profile: "project" }], 'Copies name "research/project" twice'],
+    [
+      [{ namespace: "notes", profile: "shared", oldMemoryId: ".." }],
+      "Old copy memory id is invalid",
+    ],
+    [[], "Copies must be a list of 1 to 4 profiles"],
+  ])("refuses copies %j before any request", async (copies, message) => {
+    const calls = stubProfiles({ stored: {} });
+
+    await expect(memoryToolExecutors.supersede({ ...call, copies })).rejects.toThrow(message);
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses copySource without copies before any request", async () => {
+    const calls = stubProfiles({ stored: {} });
+
+    await expect(memoryToolExecutors.supersede({ ...call, copySource: true })).rejects.toThrow(
+      "copySource needs copies",
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("names the replaced records and how to finish a copy that failed", async () => {
+    const stored = {
+      "research/project": { "mem-old": "red" },
+      "notes/shared": { "copy-a": "red" },
+      "notes/team": { "copy-b": "red" },
+    };
+    stubProfiles({ stored, failing: ["notes/team"] });
+
+    const error = await memoryToolExecutors
+      .supersede({
+        ...call,
+        copies: [
+          { namespace: "notes", profile: "shared", oldMemoryId: "copy-a" },
+          { namespace: "notes", profile: "team", oldMemoryId: "copy-b" },
+        ],
+      })
+      .catch((caught: unknown) => caught);
+
+    const { message } = error as Error;
+    expect(message).toMatch(
+      /^Replaced the memory in research\/project "mem-old" -> "new-project", notes\/shared "copy-a" -> "new-shared", but 1 of 2 copies failed\. notes\/team "copy-b": .*profile refused/,
+    );
+    expect(message).toContain(
+      "memory_supersession_resume with the ids its failure names when the replacement copy is stored, memory_supersede without copies when it isn't. Repeating this call would replace the main record again.",
+    );
+    expect(message).not.toContain("Resume a copy with content");
+    expect(stored["notes/team"]).toEqual({ "copy-b": "red" });
+  });
+
+  it("hands a failed copy the source line to resume with", async () => {
+    stubProfiles({
+      stored: { "research/project": { "mem-old": "red" }, "notes/team": { "copy-b": "red" } },
+      failing: ["notes/team"],
+    });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "team", oldMemoryId: "copy-b" }],
+        copySource: true,
+      }),
+    ).rejects.toThrow(
+      'Resume a copy with content that ends with "\\n\\nCopied from memory \\"new-project\\" in research/project.", as the stored ones do.',
+    );
+  });
+
+  it("touches no copy when the main replacement fails its check", async () => {
+    const stored = {
+      "research/project": { "mem-old": "red" },
+      "notes/shared": { "copy-old": "red" },
+    };
+    const calls = stubProfiles({ stored, recallDown: ["research/project"] });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-old" }],
+      }),
+    ).rejects.toThrow(
+      /The old memory was not deleted; keep both ids for cleanup\. No copy was touched\.$/,
+    );
+    expect(calls.filter((line) => line.startsWith("notes/"))).toEqual([
+      "notes/shared GET memories/copy-old",
+    ]);
+    expect(stored["notes/shared"]).toEqual({ "copy-old": "red" });
+  });
+});
+
 describe("supersession report", () => {
   const STORED_AT = "2026-08-28T00:00:00.000Z";
 
