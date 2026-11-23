@@ -282,6 +282,7 @@ function callSubject(record: Readonly<Record<string, unknown>>): string | undefi
 const CALL_FLAG_LABELS = {
   reportSuperseded: "reports superseded",
   reportSuccessor: "names successors",
+  reportRelations: "finds relations",
 } as const;
 
 /**
@@ -307,6 +308,7 @@ function callMeta(
   if (Array.isArray(record.copies)) {
     meta.push(`copies ${record.copies.length}${record.copySource === true ? " with source" : ""}`);
   }
+  if (Array.isArray(record.relates)) meta.push(`relates ${record.relates.length}`);
   meta.push(...flagMeta(record));
   for (const [key, metaLabel] of Object.entries(CALL_META_LABELS)) {
     const value = scalarText(record[key]);

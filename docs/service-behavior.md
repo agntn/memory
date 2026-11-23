@@ -32,6 +32,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 - `remember` answers with the new record alone and never names what it superseded. The first read by id after the write, about half a second later, already showed the moved `updatedAt`.
 - A recall of the new content just before the write held the memory that write then superseded. Measured 2026-11-17 on all 13 supersessions that 14 rewrites caused, ranked first among memories in the 5 where the rank was read.
 - The listing still shows the newer record, and its `createdAt` equals the older one's moved `updatedAt` to the millisecond. A listing from a cursor one minute earlier named the right successor in all 3 supersessions of one run on 2026-11-20. Once deleted, it named none.
+- A memory that corrects an older fact on its topic supersedes it like any other newer fact, so the older one leaves recall. Measured 2026-11-23 on one correction.
 - The same content remembered twice is two records with the first superseded.
 - Events accumulate.
 - Deleting the newest version does not bring back the one it superseded.
@@ -44,6 +45,7 @@ What a run against the live Cloudflare Agent Memory API did. Keep the date where
 - `get` and `delete` answer a message id with the same server error as an unknown id, a listing never shows it, and a session delete removes it. Measured 2026-09-19: two message candidates in every recall on a 4,280-memory profile, ranked as high as second.
 - A `low`, `short` recall took 4 to 16 seconds. Measured 2026-11-17 over 27 calls, on profiles from a dozen memories to over 8,000.
 - The fused score separates a real hit from the rest by orders of magnitude, so recall trims the candidates under 1% of the best one when the call names no cap. Measured 2026-09-22 over 24-candidate responses: an answered query scored 0.98 on the first line and 0.0011 on the second, a well-matched one kept nine lines within one order of magnitude of the top, and an unanswerable one flattened every line onto the same 0.0000374 floor.
+- A recall for a bare memory id ranks the memories whose content quotes that id. Measured 2026-11-23 on 24 ids from a busy profile: all 26 quoting memories came back among 30 candidates, 23 above the 1% floor and 22 in the top ten.
 - Summaries come out in English whatever the content's language. All 60 did on one page of mostly Polish facts. So a Polish query has to match across languages, and it usually loses to its English translation.
 - That gap is a tendency, not a law. Measured 2026-11-15 on 12 query pairs, each run twice. English kept the target in the default view 12 of 12 times, first 8 times. Polish managed 9 or 10, first 6 times. Four Polish queries topped out under 0.05, and two still beat their English twins.
 

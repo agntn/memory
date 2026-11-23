@@ -5,16 +5,19 @@ import {
   MAX_TOOL_LIST_LIMIT,
   MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
   MAX_TOOL_MEMORY_COPIES,
+  MAX_TOOL_MEMORY_RELATIONS,
   MAX_TOOL_MESSAGE_CHARACTERS,
   MAX_TOOL_NAMESPACE_CHARACTERS,
   MAX_TOOL_PROFILE_CHARACTERS,
   MAX_TOOL_QUERY_CHARACTERS,
   MAX_TOOL_RECALL_VISIBILITY_TIMEOUT_SECONDS,
   MAX_TOOL_EXPAND,
+  MAX_TOOL_RELATION_POINT_CHARACTERS,
   MAX_TOOL_SESSION_ID_CHARACTERS,
   MEMORY_FIELD_KEY_PATTERN,
   MEMORY_ID_PATTERN,
   MEMORY_NAME_PATTERN,
+  MEMORY_RELATION_KINDS,
   memoryFieldDescriptions,
 } from "./memory-tool-contract.ts";
 import type { ProfileParams } from "./memory-tools.types.ts";
@@ -71,6 +74,36 @@ const callerFields = Type.Optional(
     description: memoryFieldDescriptions.rememberFields,
     additionalProperties: false,
   }),
+);
+/** Older memories a remember call bears on. */
+const relates = Type.Optional(
+  Type.Array(
+    Type.Object(
+      {
+        id: Type.String({
+          description: memoryFieldDescriptions.relationId,
+          minLength: 1,
+          pattern: MEMORY_ID_PATTERN,
+        }),
+        rel: Type.Enum([...MEMORY_RELATION_KINDS], {
+          description: memoryFieldDescriptions.relationKind,
+        }),
+        point: Type.Optional(
+          Type.String({
+            description: memoryFieldDescriptions.relationPoint,
+            minLength: 1,
+            maxLength: MAX_TOOL_RELATION_POINT_CHARACTERS,
+          }),
+        ),
+      },
+      closed,
+    ),
+    {
+      description: memoryFieldDescriptions.rememberRelates,
+      minItems: 1,
+      maxItems: MAX_TOOL_MEMORY_RELATIONS,
+    },
+  ),
 );
 /** Where a copy lands, shared by both tools that write copies. */
 const copyScope = {
@@ -152,6 +185,7 @@ export const rememberParameters = Type.Object(
     reportSuperseded: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.rememberReportSuperseded }),
     ),
+    relates,
     fields: callerFields,
   },
   closed,
@@ -349,6 +383,9 @@ export const getParameters = Type.Object(
     }),
     reportSuccessor: Type.Optional(
       Type.Boolean({ description: memoryFieldDescriptions.getReportSuccessor }),
+    ),
+    reportRelations: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.getReportRelations }),
     ),
   },
   closed,

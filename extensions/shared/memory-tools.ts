@@ -13,6 +13,12 @@ import type {
 } from "@agntn/memory";
 import { isStampedContent } from "./memory-fields.ts";
 import { isIngestedMessageId, ulidAt, ulidTime } from "./memory-ids.ts";
+import {
+  type MemoryRelation,
+  parseRelations,
+  relationsIn,
+  withRelationLines,
+} from "./memory-relations.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
@@ -1175,6 +1181,197 @@ function withSuccessor(
   return successor === undefined || !isSuperseded(memory) ? memory : { ...memory, successor };
 }
 
+/** Memories whose relates: lines name one record, or why nobody knows. */
+type RelationsReport =
+  | {
+      readonly from: readonly (Omit<MemoryRelation, "id"> & { readonly by: string })[];
+      readonly checked: number;
+      readonly unread?: number;
+    }
+  | { readonly unchecked: string };
+
+const RELATIONS_NOTE =
+  "relatedBy.from: checked recall candidates whose relates: lines name this record, as by, rel and point. Unranked ones aren't listed.";
+
+/**
+ * Rank the memories that may name one record; a failed recall only skips the report.
+ *
+ * @param profile - Profile the record was read from.
+ * @param call - The record's id and abort signal.
+ * @returns {Promise<SupersessionRanking>} Memory ids, best first.
+ */
+async function relationCandidates(
+  profile: MemoryProfile,
+  call: Readonly<{ id: string }> & AbortOptions,
+): Promise<SupersessionRanking> {
+  try {
+    const result = await requireCapability(profile, "recall")(call.id, {
+      thinkingLevel: "low",
+      responseLength: "short",
+      signal: call.signal,
+    });
+    const ranked = rankByScore(result.candidates)
+      .filter((candidate) => candidate.id !== call.id && candidateKind(candidate) === "memory")
+      .slice(0, MAX_TOOL_EXPAND)
+      .map((candidate) => candidate.id);
+    return { ranked };
+  } catch (error) {
+    return { unchecked: `recall for the id failed: ${toolErrorMessage(error)}` };
+  }
+}
+
+/**
+ * Keep the ranked memories whose relates: lines name the record.
+ *
+ * @param id - The record's id.
+ * @param ranked - Candidate ids from recall.
+ * @param readings - Every candidate read, shared across records.
+ * @returns {RelationsReport} The report for that record.
+ */
+function relationsReport(
+  id: string,
+  ranked: readonly string[],
+  readings: ReadonlyMap<string, MemoryReading>,
+): RelationsReport {
+  const read = ranked.flatMap((candidate) => {
+    const reading = readings.get(candidate);
+    return reading !== undefined && "memory" in reading ? [reading.memory] : [];
+  });
+  const from = read.flatMap((memory) =>
+    relationsIn(memory.content)
+      .filter((relation) => relation.id === id)
+      .map(({ id: _id, ...relation }) => ({ by: memory.id, ...relation })),
+  );
+  const unread = ranked.length - read.length;
+  return { from, checked: read.length, ...(unread === 0 ? {} : { unread }) };
+}
+
+/**
+ * Find the memories that name each record, one recall per record.
+ *
+ * @param profile - Profile the records were read from.
+ * @param memories - The records read.
+ * @param options - Request cancellation.
+ * @returns {Promise<Map<string, RelationsReport>>} Reports by record id.
+ */
+async function relationsOf(
+  profile: MemoryProfile,
+  memories: readonly Memory[],
+  options: AbortOptions,
+): Promise<Map<string, RelationsReport>> {
+  const rankings = await Promise.all(
+    memories.map(
+      async ({ id }) => [id, await relationCandidates(profile, { id, ...options })] as const,
+    ),
+  );
+  const ids = rankings.flatMap(([, ranking]) => ("ranked" in ranking ? ranking.ranked : []));
+  let readings: ReadonlyMap<string, MemoryReading>;
+  try {
+    readings = await readMemories(profile, ids, options);
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    const unchecked = `reading the candidates failed: ${toolErrorMessage(error)}`;
+    return new Map(rankings.map(([id]) => [id, { unchecked }]));
+  }
+  return new Map(
+    rankings.map(([id, ranking]) => [
+      id,
+      "ranked" in ranking ? relationsReport(id, ranking.ranked, readings) : ranking,
+    ]),
+  );
+}
+
+/**
+ * Read every related memory before the write, so a typo stores nothing.
+ *
+ * @param profile - Profile about to be written.
+ * @param params - The remember call, for its profile name.
+ * @param relations - Checked relations.
+ * @param options - Request cancellation.
+ * @throws {Error} Naming each id that couldn't be read.
+ */
+async function assertRelatedMemories(
+  profile: MemoryProfile,
+  params: Readonly<RememberParams>,
+  relations: readonly MemoryRelation[],
+  options: AbortOptions,
+): Promise<void> {
+  const readings = await readMemories(
+    profile,
+    relations.map(({ id }) => id),
+    options,
+  );
+  const failed = [...readings].flatMap(([id, reading]) =>
+    "error" in reading
+      ? [`${quoteToolText(id)}: ${describeReadError(params, id, reading.error)}`]
+      : [],
+  );
+  if (failed.length > 0) {
+    throw new Error(
+      `Nothing was written: related memories must be read in this profile first, and ${failed.join("; ")}`,
+    );
+  }
+}
+
+/**
+ * The content a remember call stores: as sent, then one relates: line per relation.
+ *
+ * @param params - The remember call.
+ * @returns {object} The content and the checked relations, empty without relates.
+ * @throws {Error} On a bad relation or content past the cap.
+ */
+function relatedContent(params: Readonly<RememberParams>): {
+  content: string;
+  relations: MemoryRelation[];
+} {
+  if (params.relates === undefined) return { content: params.content, relations: [] };
+  const relations = parseRelations(params.relates);
+  return { content: withRelationLines(params.content, relations), relations };
+}
+
+/**
+ * Run the reports a get asked for, side by side.
+ *
+ * @param profile - Profile the records were read from.
+ * @param params - The get call and its flags.
+ * @param readings - The records read.
+ * @param options - Request cancellation.
+ * @returns {Promise<object>} Successor and relation reports, each absent unless asked for.
+ */
+async function readReports(
+  profile: MemoryProfile,
+  params: GetParams,
+  readings: ReadonlyMap<string, MemoryReading>,
+  options: AbortOptions,
+): Promise<{
+  successors?: Map<number, SuccessorReport>;
+  relations?: Map<string, RelationsReport>;
+}> {
+  const read = [...readings.values()].flatMap((reading) =>
+    "memory" in reading ? [reading.memory] : [],
+  );
+  const [successors, relations] = await Promise.all([
+    params.reportSuccessor === true ? successorsOf(profile, read, options) : undefined,
+    params.reportRelations === true ? relationsOf(profile, read, options) : undefined,
+  ]);
+  return { successors, relations };
+}
+
+/**
+ * A read record with the memories that name it, when they were asked for.
+ *
+ * @param memory - A record as the result shows it.
+ * @param relations - Reports by id, absent without reportRelations.
+ * @returns {object} The record, with relatedBy when there is a report.
+ */
+function withRelations<T extends Memory>(
+  memory: T,
+  relations: ReadonlyMap<string, RelationsReport> | undefined,
+): T | (T & { relatedBy: RelationsReport }) {
+  const relatedBy = relations?.get(memory.id);
+  return relatedBy === undefined ? memory : { ...memory, relatedBy };
+}
+
 function attemptsText(attempts: number): string {
   return `${attempts} ${attempts === 1 ? "attempt" : "attempts"}`;
 }
@@ -1661,10 +1858,12 @@ export const memoryToolExecutors = {
     binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
     if (params.copies !== undefined) assertCopies(params, params.copies);
-    if (params.copySource === true) assertCopySource(params);
-    const write = { content: params.content, sessionId: optionalString(params.sessionId) };
-    const report = params.reportSuperseded === true;
+    const { content, relations } = relatedContent(params);
+    if (params.copySource === true) assertCopySource({ ...params, content });
     const profile = await getProfile(params, binding);
+    if (relations.length > 0) await assertRelatedMemories(profile, params, relations, options);
+    const write = { content, sessionId: optionalString(params.sessionId) };
+    const report = params.reportSuperseded === true;
     const { memory, superseded } = await storeMemory(profile, { write, report, ...options });
     if (params.copies !== undefined) {
       const target = memoryTarget(params);
@@ -1941,16 +2140,7 @@ export const memoryToolExecutors = {
     assertMemoryIds(params.memoryIds);
     const profile = await getProfile(params, binding);
     const readings = await readMemories(profile, params.memoryIds, options);
-    const successors =
-      params.reportSuccessor === true
-        ? await successorsOf(
-            profile,
-            [...readings.values()].flatMap((reading) =>
-              "memory" in reading ? [reading.memory] : [],
-            ),
-            options,
-          )
-        : undefined;
+    const { successors, relations } = await readReports(profile, params, readings, options);
     const entries = [...readings.entries()];
     const failed = entries.filter(
       (entry): entry is [string, { error: unknown }] => "error" in entry[1],
@@ -1967,16 +2157,18 @@ export const memoryToolExecutors = {
     }
     const memories = entries.map(([id, reading]) =>
       "memory" in reading
-        ? withSuccessor(reading.memory, successors)
+        ? withRelations(withSuccessor(reading.memory, successors), relations)
         : { id, error: describeReadError(params, id, reading.error) },
     );
     const failures =
       failed.length === 0
         ? ""
         : `Read ${entries.length - failed.length} of ${entries.length} memories; error entries for: ${failed.map(([id]) => singleLineToolText(id)).join(", ")}.\n`;
-    const header = memories.some((memory) => "successor" in memory)
-      ? `${failures}${SUCCESSOR_NOTE}\n`
-      : failures;
+    const notes = [
+      ...(memories.some((memory) => "successor" in memory) ? [SUCCESSOR_NOTE] : []),
+      ...(relations === undefined ? [] : [RELATIONS_NOTE]),
+    ];
+    const header = `${failures}${notes.map((note) => `${note}\n`).join("")}`;
     return {
       content: [{ type: "text", text: `${header}${recordLines(memories)}` }],
       details: { memories },
