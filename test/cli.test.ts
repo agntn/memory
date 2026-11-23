@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { describe, expect, it } from "vite-plus/test";
 
 const root = resolve(import.meta.dirname, "..");
@@ -91,6 +93,41 @@ function loadedFrom(loaded: readonly string[], directory: string): string[] {
   return loaded.filter((url) => url.includes(directory));
 }
 
+/** Connect a client of one protocol era to `memory mcp` from the built bin. */
+async function connectBin(
+  mode: "legacy" | Readonly<{ pin: string }>,
+  env: Readonly<Record<string, string>>,
+): Promise<Client> {
+  const client = new Client(
+    { name: "memory-test", version: "1.0.0" },
+    { versionNegotiation: { mode } },
+  );
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [bin, "mcp"],
+      cwd: root,
+      env: { ...environment, ...env } as Record<string, string>,
+      stderr: "ignore",
+    }),
+  );
+  return client;
+}
+
+/** List the tool names over one connection, then close it. */
+async function listedNames(client: Client): Promise<string[]> {
+  try {
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } finally {
+    await client.close();
+  }
+}
+
+const builds = [
+  { from: "source", env: {} },
+  { from: "bundle", env: { MEMORY_DIST: "1" } },
+] as const;
+
 describe("memory usage paths", () => {
   it.each([
     {
@@ -145,9 +182,45 @@ describe("memory usage paths", () => {
     expect(serverName(result.stdout)).toBe("memory");
     expect(loadedFrom(result.loaded, "/node_modules/@modelcontextprotocol/")).not.toEqual([]);
   });
+
+  it("stops before serving when the scope is half set", () => {
+    const result = runCli(["mcp"], {
+      env: { AGNTN_MEMORY_NAMESPACE: "default", AGNTN_MEMORY_PROFILE: "" },
+      input: initialize,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "AGNTN_MEMORY_NAMESPACE and AGNTN_MEMORY_PROFILE must be set together",
+    );
+  });
 });
 
 describe.skipIf(!existsSync(bin))("memory mcp from the built bin", () => {
+  it.each(builds)("lets a client pinned to 2026 listen, from the $from", async (build) => {
+    const legacy = await listedNames(await connectBin("legacy", build.env));
+    const client = await connectBin({ pin: "2026-07-28" }, build.env);
+    try {
+      expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
+      const subscription = await client.listen({ toolsListChanged: true });
+      await subscription.close();
+    } catch (error) {
+      await client.close();
+      throw error;
+    }
+
+    expect(legacy).toContain("memory_remember");
+    expect(await listedNames(client)).toEqual(legacy);
+  });
+
+  it.each(builds)("still opens a 2025 client with initialize, from the $from", async (build) => {
+    const client = await connectBin("legacy", build.env);
+
+    expect(client.getNegotiatedProtocolVersion()).toMatch(/^2025-/u);
+    expect(await listedNames(client)).toContain("memory_remember");
+  });
+
   it("serves the live source inside a checkout", () => {
     const result = runCli(["mcp"], { entry: bin, input: initialize });
 
