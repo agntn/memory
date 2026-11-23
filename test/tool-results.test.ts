@@ -1855,6 +1855,48 @@ describe("ingest result", () => {
     });
   });
 
+  it("strikes secrets before the batch leaves and says which shapes matched", async () => {
+    let requestBody: unknown;
+    stubCloudflare((_url, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return { result: null };
+    });
+    const wif = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+
+    const result = await memoryToolExecutors.ingest({
+      namespace: "ingest-redact",
+      profile: "agent",
+      messages: [
+        { role: "user", content: `my key is ${wif}` },
+        { role: "assistant", content: `Noted ${wif}, I won't repeat it.` },
+      ],
+    });
+
+    expect(requestBody).toMatchObject({
+      messages: [
+        { content: "my key is [redacted:wif]" },
+        { content: "Noted [redacted:wif], I won't repeat it." },
+      ],
+    });
+    expect(JSON.stringify(requestBody)).not.toContain(wif);
+    expect(textOf(result)).toContain("before sending: wif=2.");
+    expect(result.details).toMatchObject({ redactions: { wif: 2 } });
+  });
+
+  it("refuses the ingest on a bad AGNTN_MEMORY_REDACT before sending anything", async () => {
+    const urls = stubCloudflare({ result: null });
+    vi.stubEnv("AGNTN_MEMORY_REDACT", "[");
+
+    await expect(
+      memoryToolExecutors.ingest({
+        namespace: "ingest-redact",
+        profile: "agent",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toThrow("AGNTN_MEMORY_REDACT must be a JSON array");
+    expect(urls).toEqual([]);
+  });
+
   it("states that extraction is asynchronous", async () => {
     stubCloudflare({ result: null });
 

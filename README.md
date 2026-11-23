@@ -122,6 +122,16 @@ Cloudflare creates profiles on the first write, but not namespaces. When the pro
 
 Change the interval with `AGNTN_MEMORY_INGEST_TURNS` or `"ingestTurns"` in `agntn/memory.json`. `0` switches it off. A refused batch shows a warning and waits for the next try. One that may have landed, like a dropped connection, is never sent twice.
 
+A seed phrase pasted into chat shouldn't become a souvenir for recall. Every `memory_ingest` call, including Pi's automatic batches, strikes known secret shapes from each message before anything leaves your machine. Matches become markers such as `[redacted:wif]`. The result reports a count for each shape.
+
+What looks like a key might be a txid. Bare 64-digit hex stays unless a label such as `private key:` or `secret` sits right before it. WIF keys and English BIP39 phrases need valid checksums. Twelve ordinary English words stay without one. Built-ins also cover PEM private keys, `xprv` keys and known token prefixes.
+
+Need another shape? Set `AGNTN_MEMORY_REDACT` to a JSON array with up to 32 entries. Each needs a `name` and JavaScript regex `pattern`. You can add `ignoreCase`. Names use lowercase letters, digits and hyphens. A bad entry refuses the ingest before anything is sent. Only ingest is affected, not `memory_remember` or `memory_supersede`.
+
+```json
+[{ "name": "ticket", "pattern": "ACME-\\d+" }]
+```
+
 The variables set the default: omit both namespace and profile to use `default/agent`. Half a pair is no pair at all: pass both to read or write another profile, or the call is refused.
 
 Writes keep the host's session ID wherever they go, and the model can't pass `sessionId` as an argument. A default should be a starting point, not a fence.

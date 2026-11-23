@@ -5,6 +5,7 @@ import type {
   AgentMemoryNamespaceBinding,
   CloudflareMemoryOptions,
   Memory,
+  MemoryMessage,
   MemoryProfile,
   MemoryProvider,
   RecallCandidate,
@@ -20,6 +21,7 @@ import {
   withRelationLines,
 } from "./memory-relations.ts";
 import { validateMemoryScope } from "./memory-scope.ts";
+import { configuredRedactionShapes, redactSecrets } from "./redaction.ts";
 import { singleLineToolText, TOOL_TEXT_CONTROL_PATTERN } from "./terminal-text.ts";
 import { MAX_TOOL_ERROR_CHAIN_DEPTH, toolErrorMessage } from "./tool-errors.ts";
 import {
@@ -1851,6 +1853,47 @@ function assertSupersedeCopies(params: Readonly<SupersedeParams>): void {
   if (params.copySource === true) assertCopySource(params);
 }
 
+/**
+ * The messages as they go upstream: modelled fields only, secrets struck.
+ *
+ * @param messages - Validated ingest messages.
+ * @returns {Promise<object>} The messages and the matches per shape.
+ */
+async function redactedMessages(
+  messages: readonly Readonly<IngestParams["messages"][number]>[],
+): Promise<{ messages: MemoryMessage[]; counts: Record<string, number> }> {
+  const shapes = configuredRedactionShapes();
+  const counts: Record<string, number> = {};
+  const copied = await Promise.all(
+    messages.map(async (message) => {
+      const timestamp = optionalString(message.timestamp);
+      const redacted = await redactSecrets(message.content, shapes);
+      for (const [name, count] of Object.entries(redacted.counts)) {
+        counts[name] = (counts[name] ?? 0) + count;
+      }
+      return {
+        role: message.role,
+        content: redacted.text,
+        ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
+      };
+    }),
+  );
+  return { messages: copied, counts };
+}
+
+/**
+ * What the ingest struck before sending.
+ *
+ * @param counts - Matches per shape.
+ * @returns {string} One sentence, or nothing when nothing matched.
+ */
+function redactionNote(counts: Readonly<Record<string, number>>): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return "";
+  const list = entries.map(([name, count]) => `${name}=${count}`).join(", ");
+  return ` Secrets were replaced with [redacted:<shape>] before sending: ${list}.`;
+}
+
 export const memoryToolExecutors = {
   async remember(
     params: RememberParams,
@@ -2002,16 +2045,7 @@ export const memoryToolExecutors = {
     binding?: AgentMemoryNamespaceBinding,
   ): Promise<MemoryToolResult> {
     const profile = await getProfile(params, binding);
-    // Copy the modelled fields only: anything else the caller attached would be
-    // posted upstream under the account token without appearing in the schema.
-    const messages = params.messages.map((message) => {
-      const timestamp = optionalString(message.timestamp);
-      return {
-        role: message.role,
-        content: message.content,
-        ...(timestamp === undefined ? {} : { timestamp: messageTimestamp(timestamp) }),
-      };
-    });
+    const { messages, counts } = await redactedMessages(params.messages);
     await requireCapability(profile, "ingest")(messages, {
       sessionId: optionalString(params.sessionId),
       ...options,
@@ -2026,7 +2060,7 @@ export const memoryToolExecutors = {
       content: [
         {
           type: "text",
-          text: `Submitted ${messages.length} messages for ingestion into ${memoryTarget(params)}${session}. Extraction runs asynchronously: memories appear in memory_list and memory_recall once it finishes, and the service decides how many memories the messages produce.`,
+          text: `Submitted ${messages.length} messages for ingestion into ${memoryTarget(params)}${session}.${redactionNote(counts)} Extraction runs asynchronously: memories appear in memory_list and memory_recall once it finishes, and the service decides how many memories the messages produce.`,
         },
       ],
       details: {
@@ -2034,6 +2068,7 @@ export const memoryToolExecutors = {
         profile: params.profile,
         messageCount: messages.length,
         ...(sessionId === undefined ? {} : { sessionId }),
+        ...(Object.keys(counts).length === 0 ? {} : { redactions: counts }),
       },
     };
   },

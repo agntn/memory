@@ -114,6 +114,32 @@ describe("Pi turn ingest", () => {
     expect(scoped(ingest)[0]![0].messages).toHaveLength(20);
   });
 
+  it("sends the conversation with its secrets struck", async () => {
+    vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
+    vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
+    vi.stubEnv("AGNTN_MEMORY_INGEST_TURNS", "1");
+    vi.stubEnv("AGNTN_MEMORY_REDACT", '[{"name":"ticket","pattern":"ACME-\\\\d+"}]');
+    vi.stubEnv("AGNTN_CLOUDFLARE_ACCOUNT_ID", "account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ success: true, result: null });
+      }),
+    );
+    const wif = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+    const handlers = loadPi();
+
+    await exchange(handlers, `ACME-42 is done, my key is ${wif}`, 1);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toMatch(/ACME-42|5HueCGU8/u);
+    expect(bodies[0]).toContain("[redacted:ticket] is done, my key is [redacted:wif]");
+  });
+
   it("switches off with a count of 0", () => {
     vi.stubEnv("AGNTN_MEMORY_NAMESPACE", "default");
     vi.stubEnv("AGNTN_MEMORY_PROFILE", "oritwoen");
