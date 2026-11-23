@@ -1392,12 +1392,12 @@ async function namedOldCopy(
  *
  * @param profile - The copy's profile.
  * @param call - Recall query, the line to match and abort signal.
- * @returns {Promise<{ ids: string[]; checked: number }>} Matches, and how many memories were read.
+ * @returns {Promise<{ ids: string[]; checked: number; unread: number }>} Matches and read counts.
  */
 async function copiesEndingWith(
   profile: MemoryProfile,
   call: Readonly<{ query: string; line: string }> & AbortOptions,
-): Promise<{ ids: string[]; checked: number }> {
+): Promise<{ ids: string[]; checked: number; unread: number }> {
   const options = { signal: call.signal };
   const result = await requireCapability(profile, "recall")(call.query, {
     thinkingLevel: "low",
@@ -1412,7 +1412,8 @@ async function copiesEndingWith(
   const ids = readings.flatMap((reading) =>
     "memory" in reading && reading.memory.content.endsWith(call.line) ? [reading.memory.id] : [],
   );
-  return { ids, checked: readings.length };
+  const unread = readings.filter((reading) => !("memory" in reading)).length;
+  return { ids, checked: readings.length, unread };
 }
 
 /**
@@ -1434,7 +1435,7 @@ async function sourcedOldCopy(
   const target = memoryTarget(copy);
   const line = copySourceLine(old.target, old.memory.id);
   const profile = await getProfile(copy, binding);
-  let found: { ids: string[]; checked: number };
+  let found: { ids: string[]; checked: number; unread: number };
   try {
     found = await copiesEndingWith(profile, {
       query: supersessionQuery(old.memory.content),
@@ -1447,6 +1448,11 @@ async function sourcedOldCopy(
     });
   }
   const [oldMemoryId, ...others] = found.ids;
+  if (others.length === 0 && found.unread > 0) {
+    throw new Error(
+      `${found.unread} of the ${found.checked} memories recall ranked couldn't be read, so another copy may end with that line; pass that copy's oldMemoryId`,
+    );
+  }
   if (oldMemoryId !== undefined && others.length === 0)
     return { scope: copy, profile, oldMemoryId };
   const where = `${target} ending with ${JSON.stringify(line.trim())}`;
@@ -1455,6 +1461,31 @@ async function sourcedOldCopy(
       ? `Found no memory in ${where} among the ${found.checked} that recall ranked; pass that copy's oldMemoryId`
       : `Found ${found.ids.length} memories in ${where}: ${found.ids.map((id) => quoteToolText(id)).join(", ")}; pass the one to replace as oldMemoryId`,
   );
+}
+
+/**
+ * Read the old main record before any write, since its delete would fail after them.
+ *
+ * @param params - The supersede call.
+ * @param options - Request cancellation.
+ * @param binding - Workers binding, if any.
+ * @returns {Promise<Memory>} The old record.
+ * @throws {Error} When it can't be read. Nothing is written by then.
+ */
+async function readOldMemory(
+  params: Readonly<SupersedeParams>,
+  options: AbortOptions,
+  binding?: AgentMemoryNamespaceBinding,
+): Promise<Memory> {
+  const profile = await getProfile(params, binding);
+  try {
+    return await requireCapability(profile, "get")(params.oldMemoryId, options);
+  } catch (error) {
+    throw new Error(
+      `Nothing was written: old memory ${quoteToolText(params.oldMemoryId)} could not be read: ${describeReadError(params, params.oldMemoryId, error)}`,
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -1473,29 +1504,16 @@ async function findOldCopies(
   options: AbortOptions,
   binding?: AgentMemoryNamespaceBinding,
 ): Promise<OldCopy[]> {
-  const target = memoryTarget(params);
-  let old: Promise<{ memory: Memory; target: string }> | undefined;
-  const readOld = async () => {
-    const profile = await getProfile(params, binding);
-    try {
-      return {
-        memory: await requireCapability(profile, "get")(params.oldMemoryId, options),
-        target,
-      };
-    } catch (error) {
-      throw new Error(
-        `the old memory, whose copy line it looks for, could not be read: ${describeReadError(params, params.oldMemoryId, error)}`,
-        { cause: error },
-      );
-    }
+  const old = {
+    memory: await readOldMemory(params, options, binding),
+    target: memoryTarget(params),
   };
   const settled = await Promise.allSettled(
     copies.map(async (copy) => {
       const { oldMemoryId } = copy;
       if (oldMemoryId !== undefined)
         return namedOldCopy({ ...copy, oldMemoryId }, options, binding);
-      old ??= readOld();
-      return sourcedOldCopy(copy, await old, options, binding);
+      return sourcedOldCopy(copy, old, options, binding);
     }),
   );
   options.signal?.throwIfAborted();

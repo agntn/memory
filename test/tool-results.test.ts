@@ -2419,6 +2419,7 @@ describe("supersede copies", () => {
     });
 
     expect(calls).toEqual([
+      "research/project GET memories/mem-old",
       "notes/shared GET memories/copy-old",
       "research/project POST remember",
       "research/project GET memories/new-project",
@@ -2535,6 +2536,47 @@ describe("supersede copies", () => {
     expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
   });
 
+  it("writes nothing when a ranked memory can't be read to rule out a second copy", async () => {
+    const stored = {
+      "research/project": { "mem-old": "red" },
+      "notes/shared": { "copy-old": `red${OLD_LINE}`, "copy-gone": `red${OLD_LINE}` },
+    };
+    const calls = stubProfiles({ stored });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).endsWith("/memories/copy-gone")
+          ? Response.json({ success: false, errors: [{ message: "internal" }] }, { status: 500 })
+          : fetch(input, init),
+      ),
+    );
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared" }],
+      }),
+    ).rejects.toThrow(
+      "notes/shared: 1 of the 2 memories recall ranked couldn't be read, so another copy may end with that line; pass that copy's oldMemoryId",
+    );
+    expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
+  });
+
+  it("writes nothing when the old memory is gone, even with every copy id named", async () => {
+    const calls = stubProfiles({
+      stored: { "research/project": {}, "notes/shared": { "copy-old": "red" } },
+    });
+
+    await expect(
+      memoryToolExecutors.supersede({
+        ...call,
+        copies: [{ namespace: "notes", profile: "shared", oldMemoryId: "copy-old" }],
+      }),
+    ).rejects.toThrow(/^Nothing was written: old memory "mem-old" could not be read/);
+    expect(calls.filter((line) => /POST remember|DELETE/.test(line))).toEqual([]);
+  });
+
   it("writes nothing when a named copy id can't be read", async () => {
     const calls = stubProfiles({ stored: { "research/project": { "mem-old": "red" } } });
 
@@ -2546,7 +2588,10 @@ describe("supersede copies", () => {
     ).rejects.toThrow(
       /^Nothing was written: .*notes\/shared: Old copy "copy-typo" could not be read/,
     );
-    expect(calls).toEqual(["notes/shared GET memories/copy-typo"]);
+    expect(calls).toEqual([
+      "research/project GET memories/mem-old",
+      "notes/shared GET memories/copy-typo",
+    ]);
   });
 
   it("writes nothing when the old memory can't be read to find a copy's line", async () => {
@@ -2557,9 +2602,7 @@ describe("supersede copies", () => {
         ...call,
         copies: [{ namespace: "notes", profile: "shared" }],
       }),
-    ).rejects.toThrow(
-      /^Nothing was written: .*notes\/shared: the old memory, whose copy line it looks for, could not be read/,
-    );
+    ).rejects.toThrow(/^Nothing was written: old memory "mem-old" could not be read/);
     expect(calls).toEqual(["research/project GET memories/mem-old"]);
   });
 

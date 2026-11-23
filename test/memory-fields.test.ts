@@ -153,6 +153,22 @@ describe("memory fields", () => {
     expect(resumed.text).toContain("Resumed supersession");
   });
 
+  it("resumes a copy whose fields sit before its Copied from memory line", async () => {
+    const { run, stored } = boundTools({ harness: "claude" });
+    const line = '\n\nCopied from memory "01M7AAAAAAAAAAAAAAAAAAAAAA" in research/project.';
+    stored.push({ id: "01M7CCCCCCCCCCCCCCCCCCCCCC", content: `New note.\n\nauthor: Aei${line}` });
+
+    const resumed = await run("memory_supersession_resume", {
+      oldMemoryId: oldId,
+      replacementMemoryId: "01M7CCCCCCCCCCCCCCCCCCCCCC",
+      content: `New note.${line}`,
+      query: "note",
+      timeoutSeconds: 1,
+    });
+
+    expect(resumed.text).toContain("Resumed supersession");
+  });
+
   it("refuses to resume a replacement whose extra text is not field lines", async () => {
     const { run, stored } = boundTools({ harness: "claude" });
     stored.push({ id: "01M7CCCCCCCCCCCCCCCCCCCCCC", content: "New note.\n\nSomething else." });
