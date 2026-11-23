@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { MAX_TOOL_PROFILE_CHARACTERS } from "./memory-tool-contract.ts";
 import type { RoutedMessage } from "./memory-ingest-turns.ts";
 import type { IngestParams } from "./memory-tools.types.ts";
-import { ingestMessages, messageText, scopeKey } from "./memory-ingest-turns.ts";
+import { ingestMessages, messageText, redactedMessage, scopeKey } from "./memory-ingest-turns.ts";
 import {
   agentNamespace,
   agentScopePath,
@@ -29,6 +29,8 @@ export interface IngestRouterOptions {
   readonly openBotDatabase?: string;
   /** The project each OpenBot channel ingests into, by channel id; `null` leaves one unmapped. */
   readonly openBotChannels?: ReadonlyMap<string, ProfileParams | null>;
+  /** Strikes secrets after the sender is known and before a message is cut into pieces. */
+  readonly redact?: (text: string) => string;
 }
 
 /** What the router reads from the host for one message. */
@@ -256,6 +258,7 @@ function userSegments(text: string, channel: ChannelSenders | undefined): OpenBo
  */
 export function createIngestRouter(options: Readonly<IngestRouterOptions>): IngestRouter {
   const { fallback, agentNamespace: template } = options;
+  const redact = options.redact ?? ((text: string) => text);
   let mode: Mode | undefined;
   /** Who the agent last heard from, so its reply goes to the same profile. */
   let interlocutor = fallback?.profile;
@@ -307,7 +310,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     const { role, content, timestamp } = message as Record<string, unknown>;
     if (role !== "user") {
       return placed(
-        ingestMessages(message, openbot.namespace),
+        ingestMessages(redactedMessage(message, redact), openbot.namespace),
         personalScope(openbot.namespace, interlocutor),
         project,
       );
@@ -316,7 +319,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     for (const segment of userSegments(messageText(content), openbot.channel)) {
       const profile = senderProfile(openbot.agentsDirectory, segment.senderId, segment.senderName);
       interlocutor = profile;
-      const pieces = ingestMessages({ role, content: segment.text, timestamp }, profile);
+      const pieces = ingestMessages({ role, content: redact(segment.text), timestamp }, profile);
       routed.push(...placed(pieces, personalScope(openbot.namespace, profile), project));
     }
     return routed;
@@ -337,7 +340,7 @@ export function createIngestRouter(options: Readonly<IngestRouterOptions>): Inge
     const current = sessionModeOnce(host);
     if (current.kind === "off") return [];
     if (current.kind === "openbot") return routeOpenBot(message, current);
-    const pieces = ingestMessages(message);
+    const pieces = ingestMessages(redactedMessage(message, redact));
     if (current.kind === "project") return placed(pieces, current.fallback, current.scope);
     return placed(pieces, current.scope, undefined);
   };

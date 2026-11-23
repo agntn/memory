@@ -1267,7 +1267,7 @@ describe("Pi turn ingest", () => {
         ownerAgentId: "agent-mira",
       });
       task("from-mira", {
-        instruction: "Check the retry log",
+        instruction: "Check the retry log with sk-aaaaaaaaaaaaaaaaaaaaaaaa",
         parentTaskId: "mira-root",
         requestMessageId: "m-y",
         ownerAgentId: "agent-rhea",
@@ -1307,7 +1307,7 @@ describe("Pi turn ingest", () => {
 
       await said("user", "Plan the release");
       await said("assistant", "Planned");
-      await said("user", "Check the retry log");
+      await said("user", "Check the retry log with sk-aaaaaaaaaaaaaaaaaaaaaaaa");
       await said("assistant", "Checked");
       await handlers.get("session_shutdown")!({ reason: "quit" }, rhea);
 
@@ -1323,7 +1323,10 @@ describe("Pi turn ingest", () => {
         ],
         [
           "rheatwoen/miratwoen",
-          [stamped("Check the retry log", "miratwoen"), stamped("Checked", "rheatwoen")],
+          [
+            stamped("Check the retry log with [redacted:api-key]", "miratwoen"),
+            stamped("Checked", "rheatwoen"),
+          ],
         ],
       ]);
 

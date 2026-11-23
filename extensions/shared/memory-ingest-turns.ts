@@ -2,7 +2,6 @@ import { MAX_TOOL_INGEST_MESSAGES, MAX_TOOL_MESSAGE_CHARACTERS } from "./memory-
 import type { IngestParams, ProfileParams } from "./memory-tools.types.ts";
 import { toolErrorMessage } from "./tool-errors.ts";
 import { memoryFieldBlock } from "./memory-fields.ts";
-import type { Redactor } from "./redaction.ts";
 
 type IngestMessage = IngestParams["messages"][number];
 
@@ -73,13 +72,13 @@ export function messageText(content: unknown): string {
  * The host message as ingest reads it, joined text struck, so a key split across parts goes too.
  *
  * @param message - A Pi or OMP agent message.
- * @param redact - The loaded redactor.
+ * @param redact - Strikes secrets from one text.
  * @returns {unknown} The message with its text as one struck string.
  */
-export function redactedMessage(message: unknown, redact: Redactor): unknown {
+export function redactedMessage(message: unknown, redact: (text: string) => string): unknown {
   if (typeof message !== "object" || message === null) return message;
   const { content } = message as { content?: unknown };
-  return { ...message, content: redact(messageText(content)).text };
+  return { ...message, content: redact(messageText(content)) };
 }
 
 /**
