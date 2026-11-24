@@ -152,7 +152,7 @@ You can stop trusting the model to sign its work. Every memory that `memory_reme
 
 Two fields fill themselves in: `harness`, and `repository` from the git remote. Pi and OMP write `pi` and `omp`, and Pi under OpenBot adds `app: openbot`. The MCP server writes `claude` or `grok` under those two. Set either in the variable and yours wins. The AI SDK gets only what you pass.
 
-The CLI reads the same two, plus opencode's shell, session and all. Run it anywhere else and it just signs `cli`.
+The CLI signs the harness name and stamps the conversation session in Claude Code, Grok, opencode and Codex shells. Codex used to pass for a person, but now signs `codex`. Run it anywhere else and it just signs `cli`.
 
 Already stamped? No encore: content that ends with those lines, or with them plus a copy line, stays as it is. If fields push content past 32768 bytes, nothing is written.
 

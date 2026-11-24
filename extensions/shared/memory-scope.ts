@@ -352,15 +352,34 @@ export function opencodeMemorySessionId(
 }
 
 /**
- * Name the harness behind a command run from an agent's shell, opencode included.
+ * Derive Codex's session key from the thread id its shell exports.
+ *
+ * @param env - Environment of a command run by Codex's shell tool.
+ * @param cwd - Working directory used as the project component.
+ * @returns {string | undefined} The derived key, or `undefined` outside a Codex shell.
+ */
+export function codexMemorySessionId(
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  cwd: string = process.cwd(),
+): string | undefined {
+  const conversationId = env.CODEX_THREAD_ID?.trim();
+  if (!conversationId) return undefined;
+  return memorySessionId("codex", cwd, conversationId);
+}
+
+/**
+ * Name the harness behind a command run from an agent's shell, opencode and Codex included.
  *
  * @param env - Environment of the command.
- * @returns {string | undefined} `claude`, `grok` or `opencode`, or nothing outside an agent shell.
+ * @returns {string | undefined} `claude`, `grok`, `opencode`, `codex`, or nothing outside an agent.
  */
 export function shellMemoryHarness(
   env: Readonly<NodeJS.ProcessEnv> = process.env,
 ): string | undefined {
-  return detectedMemoryHarness(env) ?? (env.OPENCODE_SESSION_ID?.trim() ? "opencode" : undefined);
+  const harness = detectedMemoryHarness(env);
+  if (harness) return harness;
+  if (env.OPENCODE_SESSION_ID?.trim()) return "opencode";
+  return env.CODEX_THREAD_ID?.trim() ? "codex" : undefined;
 }
 
 /**
@@ -377,7 +396,8 @@ export function shellMemorySessionId(
   return (
     claudeCodeMemorySessionId(env) ??
     grokMemorySessionId(env, cwd) ??
-    opencodeMemorySessionId(env, cwd)
+    opencodeMemorySessionId(env, cwd) ??
+    codexMemorySessionId(env, cwd)
   );
 }
 
