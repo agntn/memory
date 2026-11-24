@@ -925,6 +925,7 @@ const OLD_KEPT_NOTE =
  * @param profile - Profile holding both records.
  * @param call - Old id, verified replacement and abort signal.
  * @returns {Promise<boolean>} `true` when the old id can stay.
+ * @throws {Error} On cancellation, naming both ids.
  */
 async function supersededByReplacement(
   profile: MemoryProfile,
@@ -933,9 +934,12 @@ async function supersededByReplacement(
   try {
     const old = await requireCapability(profile, "get")(call.oldMemoryId, { signal: call.signal });
     return isSupersededAt(old, call.replacement.createdAt.getTime());
-  } catch {
-    call.signal?.throwIfAborted();
-    return false;
+  } catch (error) {
+    if (call.signal?.aborted !== true) return false;
+    throw new Error(
+      `Replacement memory ${quoteToolText(call.replacement.id)} is stored and verified, but the call was cancelled before old memory ${quoteToolText(call.oldMemoryId)} was checked: ${quoteToolText(toolErrorMessage(call.signal.reason))}. Nothing was deleted; finish with memory_supersession_resume and both ids.`,
+      { cause: error },
+    );
   }
 }
 

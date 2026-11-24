@@ -3155,6 +3155,41 @@ describe("supersession report", () => {
     expect(result.details).toMatchObject({ oldMemoryDeleted: true });
   });
 
+  it("names both ids and deletes nothing when cancelled while reading the old id", async () => {
+    const controller = new AbortController();
+    const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/memories/mem-old") && init?.method === undefined) {
+          controller.abort(new Error("host cancelled"));
+          throw controller.signal.reason;
+        }
+        return fetch(input, init);
+      }),
+    );
+
+    const error = await memoryToolExecutors
+      .supersede(
+        {
+          namespace: "research",
+          profile: "project",
+          oldMemoryId: "mem-old",
+          content: "the notebook is blue",
+          query: "notebook colour",
+          timeoutSeconds: 30,
+        },
+        { signal: controller.signal },
+      )
+      .catch((cause: unknown) => cause);
+
+    expect((error as Error).message).toMatch(/"new-project".*"mem-old"|"mem-old".*"new-project"/);
+    expect((error as Error).message).toContain("host cancelled");
+    expect((error as Error).message).toContain("Nothing was deleted");
+    expect(requests.some(({ call }) => call.startsWith("DELETE"))).toBe(false);
+  });
+
   it("deletes the old id when reading it back fails", async () => {
     const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
     const fetch = globalThis.fetch;
