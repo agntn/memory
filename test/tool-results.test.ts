@@ -3190,7 +3190,7 @@ describe("supersession report", () => {
     expect(requests.some(({ call }) => call.startsWith("DELETE"))).toBe(false);
   });
 
-  it("deletes the old id when reading it back fails", async () => {
+  it("names both ids and deletes nothing when reading the old id fails", async () => {
     const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
     const fetch = globalThis.fetch;
     vi.stubGlobal(
@@ -3203,17 +3203,21 @@ describe("supersession report", () => {
       }),
     );
 
-    const result = await memoryToolExecutors.supersede({
-      namespace: "research",
-      profile: "project",
-      oldMemoryId: "mem-old",
-      content: "the notebook is blue",
-      query: "notebook colour",
-      timeoutSeconds: 30,
-    });
+    const error = await memoryToolExecutors
+      .supersede({
+        namespace: "research",
+        profile: "project",
+        oldMemoryId: "mem-old",
+        content: "the notebook is blue",
+        query: "notebook colour",
+        timeoutSeconds: 30,
+      })
+      .catch((cause: unknown) => cause);
 
-    expect(requests.map(({ call }) => call).slice(-1)).toEqual(["DELETE memories/mem-old"]);
-    expect(result.details).toMatchObject({ oldMemoryDeleted: true });
+    expect((error as Error).message).toMatch(
+      /^Replacement memory "new-project" is stored and verified, but reading old memory "mem-old" failed: ".*down"\. Nothing was deleted; finish with memory_supersession_resume and both ids\.$/,
+    );
+    expect(requests.some(({ call }) => call.startsWith("DELETE"))).toBe(false);
   });
 
   it("reports what the replacement superseded, the kept old id included", async () => {

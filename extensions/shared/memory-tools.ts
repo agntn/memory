@@ -920,12 +920,12 @@ const OLD_KEPT_NOTE =
   " The service had already superseded the old id, so memory_get still reads it as history.";
 
 /**
- * Whether the replacement's own write superseded the old id. A failed read says no.
+ * Whether the replacement's own write superseded the old id.
  *
  * @param profile - Profile holding both records.
  * @param call - Old id, verified replacement and abort signal.
  * @returns {Promise<boolean>} `true` when the old id can stay.
- * @throws {Error} On cancellation, naming both ids.
+ * @throws {Error} When the read fails, naming both ids.
  */
 async function supersededByReplacement(
   profile: MemoryProfile,
@@ -935,9 +935,9 @@ async function supersededByReplacement(
     const old = await requireCapability(profile, "get")(call.oldMemoryId, { signal: call.signal });
     return isSupersededAt(old, call.replacement.createdAt.getTime());
   } catch (error) {
-    if (call.signal?.aborted !== true) return false;
+    const reason: unknown = call.signal?.aborted === true ? call.signal.reason : error;
     throw new Error(
-      `Replacement memory ${quoteToolText(call.replacement.id)} is stored and verified, but the call was cancelled before old memory ${quoteToolText(call.oldMemoryId)} was checked: ${quoteToolText(toolErrorMessage(call.signal.reason))}. Nothing was deleted; finish with memory_supersession_resume and both ids.`,
+      `Replacement memory ${quoteToolText(call.replacement.id)} is stored and verified, but reading old memory ${quoteToolText(call.oldMemoryId)} failed: ${quoteToolText(toolErrorMessage(reason))}. Nothing was deleted; finish with memory_supersession_resume and both ids.`,
       { cause: error },
     );
   }

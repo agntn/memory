@@ -41,7 +41,7 @@ Tell callers what they can't control:
 - Extraction is asynchronous. Recall can lag behind a durable write.
 - Cascade deletes report nothing on their own.
 
-`memory_supersede` isn't atomic. It writes the replacement, reads it exactly, and checks recall. It deletes the old id only if its `updatedAt` didn't move to the replacement's `createdAt`, or if that read fails. `memory_supersession_resume` repeats the checks from an existing replacement id.
+`memory_supersede` isn't atomic. It writes the replacement, reads it exactly, and checks recall. It deletes the old id only if its `updatedAt` didn't move to the replacement's `createdAt`. `memory_supersession_resume` repeats the checks from an existing replacement id.
 
 A failed check never deletes the old record. A failure reports both ids, so the replacement can be cleaned up.
 
