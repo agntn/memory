@@ -130,11 +130,11 @@ export const memoryToolMeta = {
   },
   memory_supersede: {
     label: "Supersede Memory",
-    description: `Replace one durable memory without deleting the old record first. Stores the replacement, confirms it by exact read and recall, then deletes the old id. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. A replacement on the old memory's topic supersedes it the moment it is stored, so the old id has left recall before the delete removes it from history as well. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_supersession_resume and the ids the failure reported. With copies, the old memory's copies in other profiles get replaced the same way, after the main one. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Replace one durable memory without deleting the old record first. Stores the replacement and confirms it by exact read and recall. A replacement on the old memory's topic supersedes it the moment it is stored, and then the old id stays as history that memory_get still reads; otherwise the old id is deleted. This is not atomic: a failed check or delete reports both ids and keeps the replacement available for cleanup. Never retry a failed call with the same content: a second identical memory supersedes the first replacement, which then never reaches recall; finish with memory_supersession_resume and the ids the failure reported. With copies, the old memory's copies in other profiles get replaced the same way, after the main one. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_supersession_resume: {
     label: "Resume Memory Supersession",
-    description: `Finish an interrupted memory_supersede call from the replacement it already stored. Confirms the existing replacement by exact id and content and in recall, then deletes the old id without creating another memory. A failed check keeps both records. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
+    description: `Finish an interrupted memory_supersede call from the replacement it already stored. Confirms the existing replacement by exact id and content and in recall, then deletes the old id unless the replacement superseded it, without creating another memory. A failed check keeps both records. ${MEMORY_SUMMARY_TRUST_GUIDANCE}`,
   },
   memory_recall_wait: {
     label: "Wait for Recall",
@@ -207,7 +207,7 @@ export const memoryFieldDescriptions = {
     "Append a line to each copy with the first record's namespace, profile and id, so the copy still knows where it came from after this result is gone. It marks origin only: it isn't a second source for the content, and it won't follow later changes to the first record. Leave it out for verbatim copies.",
   rememberReportSuperseded: `List the memories superseded at the moment of this write, which the service never reports. Costs one recall, several seconds, and up to ${MAX_TOOL_EXPAND} reads per profile written. Only memories recall ranked for the content are checked, so an empty list proves nothing.`,
   supersedeReportSuperseded:
-    "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names. The old id can be among them, and this call deletes it.",
+    "List the memories the replacement's own write superseded, at the cost memory_remember's reportSuperseded names. The old id can be among them, and then this call keeps it.",
   rememberFields:
     "Key and value lines the memory ends with, such as author or source. Keys are lowercase and values sit on one line. The host's own fields go first. harness, app and repository belong to the host, as does any key it already writes with another value. Copies carry them too.",
   rememberRelates: `Up to ${MAX_TOOL_MEMORY_RELATIONS} older memories in this profile that this one bears on. Each is read by id before the write, and each becomes a relates: line with the kind, the id and the quoted point, after any field lines. Copies carry the lines too.`,
@@ -228,7 +228,7 @@ export const memoryFieldDescriptions = {
   recallVisibilityMemoryId:
     "Exact memory id returned by memory_remember. The check succeeds only when this id appears among recall candidates.",
   supersedeOldMemoryId:
-    "Exact id of the memory to delete only after the replacement is readable and visible in recall.",
+    "Exact id of the memory to replace, deleted only once the replacement is readable and in recall, unless the service superseded it.",
   supersedeReplacementMemoryId:
     "Exact id of the replacement already stored by a failed memory_supersede call.",
   replacementContent:

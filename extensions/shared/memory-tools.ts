@@ -915,6 +915,58 @@ async function verifyReplacement(
   return { memory, visibility };
 }
 
+/** Said when the old id outlives the call. */
+const OLD_KEPT_NOTE =
+  " The service had already superseded the old id, so memory_get still reads it as history.";
+
+/**
+ * Whether the replacement's own write superseded the old id.
+ *
+ * @param profile - Profile holding both records.
+ * @param call - Old id, verified replacement and abort signal.
+ * @returns {Promise<boolean>} `true` when the old id can stay.
+ * @throws {Error} When the read fails, naming both ids.
+ */
+async function supersededByReplacement(
+  profile: MemoryProfile,
+  call: Readonly<{ oldMemoryId: string; replacement: Memory }> & AbortOptions,
+): Promise<boolean> {
+  try {
+    const old = await requireCapability(profile, "get")(call.oldMemoryId, { signal: call.signal });
+    return isSupersededAt(old, call.replacement.createdAt.getTime());
+  } catch (error) {
+    const reason: unknown = call.signal?.aborted === true ? call.signal.reason : error;
+    throw new Error(
+      `Replacement memory ${quoteToolText(call.replacement.id)} is stored and verified, but reading old memory ${quoteToolText(call.oldMemoryId)} failed: ${quoteToolText(toolErrorMessage(reason))}. Nothing was deleted; finish with memory_supersession_resume and both ids.`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * Delete the old id, naming both ids when it fails.
+ *
+ * @param profile - Profile holding both records.
+ * @param ids - Old and replacement ids.
+ * @param options - Request cancellation.
+ * @throws {Error} When the delete fails; its outcome is unknown.
+ */
+async function deleteOldMemory(
+  profile: MemoryProfile,
+  ids: Readonly<{ oldMemoryId: string; replacementMemoryId: string }>,
+  options: AbortOptions,
+): Promise<void> {
+  try {
+    await requireCapability(profile, "delete")(ids.oldMemoryId, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Replacement memory ${quoteToolText(ids.replacementMemoryId)} is stored and verified, but deleting old memory ${quoteToolText(ids.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
+      { cause: error },
+    );
+  }
+}
+
 /** Once the replacement exists, supersede and resume differ only in wording. */
 interface SupersessionStep {
   readonly profile: MemoryProfile;
@@ -949,17 +1001,15 @@ async function completeSupersession(
       { cause: error },
     );
   }
-  try {
-    await requireCapability(profile, "delete")(params.oldMemoryId, options);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Replacement memory ${quoteToolText(replacementMemoryId)} is stored and verified, but deleting old memory ${quoteToolText(params.oldMemoryId)} failed: ${quoteToolText(message)}. The deletion outcome is unknown; keep the replacement and read the old id exactly before any cleanup.`,
-      { cause: error },
-    );
-  }
+  const kept = await supersededByReplacement(profile, {
+    oldMemoryId: params.oldMemoryId,
+    replacement: verified.memory,
+    ...options,
+  });
+  if (!kept) await deleteOldMemory(profile, { ...params, replacementMemoryId }, options);
   const details = {
     oldMemoryId: params.oldMemoryId,
+    oldMemoryDeleted: !kept,
     newMemory: verified.memory,
     ...verified.visibility,
     ...(step.superseded === undefined ? {} : { superseded: step.superseded }),
@@ -968,7 +1018,7 @@ async function completeSupersession(
     content: [
       {
         type: "text",
-        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}. ${WRITTEN_CONTENT_NOTE}${step.superseded === undefined ? "" : SUPERSEDED_REPLACED_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
+        text: `${step.done} in ${memoryTarget(params)} after ${verified.visibility.waitMilliseconds} ms and ${attemptsText(verified.visibility.attempts)}.${kept ? OLD_KEPT_NOTE : ""} ${WRITTEN_CONTENT_NOTE}${step.superseded === undefined ? "" : SUPERSEDED_REPLACED_NOTE} ${SUMMARY_TRUST_NOTE}\n${json({ ...details, newMemory: writtenRecord(verified.memory, params.content) })}`,
       },
     ],
     details,
@@ -989,8 +1039,8 @@ const SUPERSEDED_NOTE =
 /** After a plain write every listed id is still there. */
 const SUPERSEDED_READABLE_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them.`;
 
-/** memory_supersede deletes the old id, which the list may name. */
-const SUPERSEDED_REPLACED_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them, except the old id this call deleted.`;
+/** memory_supersede may delete the old id, which the list may name. */
+const SUPERSEDED_REPLACED_NOTE = `${SUPERSEDED_NOTE} memory_get still reads them, unless this call deleted the old id.`;
 
 /**
  * Content cut to the recall byte cap, on a whole character.
@@ -1829,7 +1879,7 @@ async function supersedeCopies(
     content: [
       {
         type: "text",
-        text: `Superseded the memory in ${replaced.length} profiles: each new record was read back and found by recall before its old id was deleted.${sourceNote} ${WRITTEN_CONTENT_NOTE}${report}\n${recordLines(lines)}`,
+        text: `Superseded the memory in ${replaced.length} profiles: each new record was read back and found by recall before its old id was deleted or kept as history.${sourceNote} ${WRITTEN_CONTENT_NOTE}${report}\n${recordLines(lines)}`,
       },
     ],
     details: { records: lines },

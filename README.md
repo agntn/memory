@@ -134,7 +134,7 @@ Opt in with `copySource: true` and copies get a parent. Each one ends with `Copi
 
 That's handy once the tool result is gone. Cloudflare's remember API takes only content and a session ID, so the reference has to live in the content. It marks origin, not independent confirmation, and won't follow later edits. If the line would push a copy past 32768 bytes, nothing is written. Without the flag, copies stay verbatim.
 
-You can pass `copies` and `copySource` to `memory_supersede` too. No more stale twin hanging around in recall. Give each copy an `oldMemoryId` or let recall find it by its source line. Missing or ambiguous matches stop everything before any write. The main record is replaced first. Each copy is then written, read back, recalled, and its old ID deleted.
+You can pass `copies` and `copySource` to `memory_supersede` too. No more stale twin hanging around in recall. Give each copy an `oldMemoryId` or let recall find it by its source line. Missing or ambiguous matches stop everything before any write. The main record is replaced first. Each copy's old ID is deleted unless Cloudflare already superseded it.
 
 A new fact on an old topic makes the old memory disappear from recall, and the write doesn't mention it. Opt in with `reportSuperseded: true` to get its id on each stored record. Expect one recall per profile, several seconds, and up to 30 reads. An empty list proves nothing: only memories recall ranked are checked.
 
@@ -228,7 +228,7 @@ const tools = createMemoryAiTools({
 ## Behavior worth knowing
 
 - **Treat generated text as untrusted.** Summaries and synthesized answers are service-generated. Check memory content before acting on them.
-- **Replacement isn't atomic.** `memory_supersede` writes the replacement, checks it by ID and recall, then deletes the old memory. A failed check keeps both. There is no in-place memory editing.
+- **Replacement isn't atomic.** `memory_supersede` checks the replacement by ID and recall, then deletes the old ID unless Cloudflare kept it as history. Deleting that history was a waste. A failed check keeps both. There's no in-place memory editing.
 - **Ingest is asynchronous.** Extracted memories may not be available immediately.
 - **A failed write may still have landed.** HTTP reads retry on certain failures. Writes go out once, so check the result before trying a failed write again.
 - **Backends differ.** Cloudflare binding, Cloudflare HTTP, and Mnemopi don't all offer the same capabilities. Mnemopi isn't available through the agent tools.
