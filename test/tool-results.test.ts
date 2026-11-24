@@ -714,6 +714,10 @@ describe("memory supersession", () => {
       },
       {
         path: "/client/v4/accounts/account/agent-memory/namespaces/supersede-resume/profiles/agent/memories/mem-old",
+        method: "GET",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/supersede-resume/profiles/agent/memories/mem-old",
         method: "DELETE",
       },
     ]);
@@ -2487,10 +2491,12 @@ describe("supersede copies", () => {
       "research/project POST remember",
       "research/project GET memories/new-project",
       "research/project POST recall",
+      "research/project GET memories/mem-old",
       "research/project DELETE memories/mem-old",
       "notes/shared POST remember",
       "notes/shared GET memories/new-shared",
       "notes/shared POST recall",
+      "notes/shared GET memories/copy-old",
       "notes/shared DELETE memories/copy-old",
     ]);
     expect(stored).toEqual({
@@ -2498,17 +2504,19 @@ describe("supersede copies", () => {
       "notes/shared": { "new-shared": "the notebook is blue" },
     });
     expect(textOf(result).split("\n")[0]).toBe(
-      "Superseded the memory in 2 profiles: each new record was read back and found by recall before its old id was deleted. Content that matches what this call passed is left out; memory_get reads it whole.",
+      "Superseded the memory in 2 profiles: each new record was read back and found by recall before its old id was deleted or kept as history. Content that matches what this call passed is left out; memory_get reads it whole.",
     );
     expect(records(result)).toEqual([
       expect.objectContaining({
         target: "research/project",
         oldMemoryId: "mem-old",
+        oldMemoryDeleted: true,
         id: "new-project",
       }),
       expect.objectContaining({
         target: "notes/shared",
         oldMemoryId: "copy-old",
+        oldMemoryDeleted: true,
         id: "new-shared",
       }),
     ]);
@@ -2795,11 +2803,23 @@ describe("supersession report", () => {
     return { result: { count: candidates.length, answer: "ready", candidates } };
   }
 
+  /* One record read by id; a written one keeps the createdAt remember gave it. */
+  function readBack(
+    stub: ReportStub,
+    written: ReadonlyMap<string, string>,
+    id: string,
+  ): StubResponse {
+    const twin = stub.twins?.includes(id) === true || written.has(id);
+    const createdAt = twin ? STORED_AT : "2026-08-17T00:00:00.000Z";
+    const updatedAt = twin || stub.superseded?.includes(id) === true ? STORED_AT : createdAt;
+    const content = written.get(id) ?? `content ${id}`;
+    return { result: { ...storedMemory(id), content, createdAt, updatedAt } };
+  }
+
   /* Answer recall, remember, the reads and the delete of one reported write, and log each request. */
   function stubReport(stub: ReportStub): ReportRequest[] {
     const requests: ReportRequest[] = [];
     const written = new Map<string, string>();
-    const superseded = new Set(stub.superseded);
     const failing = stub.failing ?? [];
     stubCloudflare((url, init) => {
       const request = reportRequest(url, init);
@@ -2814,12 +2834,7 @@ describe("supersession report", () => {
         written.set(id, content);
         return { result: { ...memoryEntry(id, null), content, createdAt: STORED_AT } };
       }
-      const id = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
-      const twin = stub.twins?.includes(id) === true;
-      const createdAt = twin ? STORED_AT : "2026-08-17T00:00:00.000Z";
-      const updatedAt = twin || superseded.has(id) ? STORED_AT : createdAt;
-      const content = written.get(id) ?? `content ${id}`;
-      return { result: { ...storedMemory(id), content, createdAt, updatedAt } };
+      return readBack(stub, written, decodeURIComponent(url.slice(url.lastIndexOf("/") + 1)));
     });
     return requests;
   }
@@ -3066,7 +3081,107 @@ describe("supersession report", () => {
     );
   });
 
-  it("reports what the replacement superseded before memory_supersede deletes the old id", async () => {
+  it("keeps the old id as history when the replacement's write already superseded it", async () => {
+    const requests = stubReport({
+      candidates: { "*": [["new-project", 0.9]] },
+      superseded: ["mem-old"],
+    });
+
+    const result = await memoryToolExecutors.supersede({
+      namespace: "research",
+      profile: "project",
+      oldMemoryId: "mem-old",
+      content: "the notebook is blue",
+      query: "notebook colour",
+      timeoutSeconds: 30,
+    });
+
+    expect(requests.map(({ call }) => call)).toEqual([
+      "POST remember",
+      "GET memories/new-project",
+      "POST recall",
+      "GET memories/mem-old",
+    ]);
+    expect(result.details).toMatchObject({ oldMemoryId: "mem-old", oldMemoryDeleted: false });
+    expect(textOf(result)).toContain(
+      "The service had already superseded the old id, so memory_get still reads it as history.",
+    );
+  });
+
+  it("deletes the old id when the replacement's write left it in recall", async () => {
+    const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
+
+    const result = await memoryToolExecutors.supersede({
+      namespace: "research",
+      profile: "project",
+      oldMemoryId: "mem-old",
+      content: "the notebook is blue",
+      query: "notebook colour",
+      timeoutSeconds: 30,
+    });
+
+    expect(requests.map(({ call }) => call).slice(-2)).toEqual([
+      "GET memories/mem-old",
+      "DELETE memories/mem-old",
+    ]);
+    expect(result.details).toMatchObject({ oldMemoryDeleted: true });
+    expect(textOf(result)).not.toContain("as history");
+  });
+
+  it("deletes an old id that another write superseded earlier", async () => {
+    const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/memories/mem-old") && init?.method === undefined) {
+          const result = { ...storedMemory("mem-old"), updatedAt: "2026-08-20T00:00:00.000Z" };
+          return Response.json({ success: true, result });
+        }
+        return fetch(input, init);
+      }),
+    );
+
+    const result = await memoryToolExecutors.supersede({
+      namespace: "research",
+      profile: "project",
+      oldMemoryId: "mem-old",
+      content: "the notebook is blue",
+      query: "notebook colour",
+      timeoutSeconds: 30,
+    });
+
+    expect(requests.map(({ call }) => call).slice(-1)).toEqual(["DELETE memories/mem-old"]);
+    expect(result.details).toMatchObject({ oldMemoryDeleted: true });
+  });
+
+  it("deletes the old id when reading it back fails", async () => {
+    const requests = stubReport({ candidates: { "*": [["new-project", 0.9]] } });
+    const fetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/memories/mem-old") && init?.method === undefined) {
+          return Response.json({ success: false, errors: [{ message: "down" }] }, { status: 400 });
+        }
+        return fetch(input, init);
+      }),
+    );
+
+    const result = await memoryToolExecutors.supersede({
+      namespace: "research",
+      profile: "project",
+      oldMemoryId: "mem-old",
+      content: "the notebook is blue",
+      query: "notebook colour",
+      timeoutSeconds: 30,
+    });
+
+    expect(requests.map(({ call }) => call).slice(-1)).toEqual(["DELETE memories/mem-old"]);
+    expect(result.details).toMatchObject({ oldMemoryDeleted: true });
+  });
+
+  it("reports what the replacement superseded, the kept old id included", async () => {
     const requests = stubReport({
       candidates: {
         "*": [
@@ -3093,15 +3208,16 @@ describe("supersession report", () => {
       "GET memories/mem-old",
       "GET memories/new-project",
       "POST recall",
-      "DELETE memories/mem-old",
+      "GET memories/mem-old",
     ]);
     expect(result.details).toMatchObject({
       oldMemoryId: "mem-old",
       superseded: { ids: ["mem-old"], checked: 1 },
     });
     expect(textOf(result)).toContain('"superseded": {');
+    expect(result.details).toMatchObject({ oldMemoryDeleted: false });
     expect(textOf(result)).toContain(
-      "memory_get still reads them, except the old id this call deleted.",
+      "memory_get still reads them, unless this call deleted the old id.",
     );
   });
 });

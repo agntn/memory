@@ -232,6 +232,10 @@ describe("memory MCP server", () => {
       },
       {
         path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
+        method: "GET",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
         method: "DELETE",
       },
     ]);
@@ -302,6 +306,10 @@ describe("memory MCP server", () => {
       {
         path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/recall",
         method: "POST",
+      },
+      {
+        path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
+        method: "GET",
       },
       {
         path: "/client/v4/accounts/account/agent-memory/namespaces/default/profiles/agent/memories/mem-old",
