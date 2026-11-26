@@ -17,6 +17,8 @@ const callOptions = { toolCallId: "memory-migrate", messages: [], context: {} };
 const at = new Date("2026-11-01T00:00:00.000Z");
 
 interface Failures {
+  /** Fail reads of this id with this status, as a network or auth error would. */
+  read?: { id: string; statusCode: number };
   /** Fail the remember call with this 1-based number. */
   remember?: number;
   /** Fail the delete call with this 1-based number. */
@@ -81,8 +83,14 @@ class StoredProfile {
       },
       get: async (id: string) => {
         this.calls.push(`get ${id}`);
+        const { read } = this.failures;
+        if (read?.id === id) {
+          throw Object.assign(new Error("read is down"), { statusCode: read.statusCode });
+        }
         const memory = this.records.get(id);
-        if (memory === undefined) throw new Error(`no memory ${id}`);
+        if (memory === undefined) {
+          throw Object.assign(new Error(`no memory ${id}`), { statusCode: 500 });
+        }
         return this.failures.altered === id ? { ...memory, content: "changed" } : memory;
       },
       remember: async ({ content, sessionId }: { content: string; sessionId?: string | null }) => {
@@ -312,6 +320,35 @@ describe("migrateMemories", () => {
     expect(target.records.size).toBe(2);
     expect(source.records.size).toBe(0);
   });
+
+  it.each([401, 429, 503])(
+    "stops instead of writing again when a hidden target record fails to read with %i",
+    async (statusCode) => {
+      const { source, target } = profiles();
+      const fact = source.add("The bucket is in eu-west-3.");
+      source.add(`The bucket is in eu-central-1.\n\nrelates: corrects ${fact.id}`);
+      target.afterRemember = (stored) => {
+        if (!stored.content.startsWith("The bucket is in eu-central-1.")) return;
+        const older = [...target.records.values()].find(({ content }) =>
+          content.endsWith("eu-west-3."),
+        );
+        if (older) target.records.set(older.id, { ...older, updatedAt: stored.createdAt });
+      };
+      source.failures = { delete: 1 };
+      await migrateMemories({ from: source.profile, to: target.profile }).catch(() => undefined);
+      const hidden = [...target.records.values()].find(({ content }) =>
+        content.endsWith("eu-west-3."),
+      );
+      source.failures = {};
+      target.failures = { read: { id: hidden?.id ?? "", statusCode } };
+
+      await expect(migrateMemories({ from: source.profile, to: target.profile })).rejects.toThrow(
+        "read is down",
+      );
+      expect(target.records.size).toBe(2);
+      expect(source.records.size).toBe(2);
+    },
+  );
 
   it("does not take a record from another session for a moved one", async () => {
     const { source, target } = profiles();

@@ -81,6 +81,31 @@ interface MigrationStop {
 }
 
 /**
+ * Read one record by id, or nothing when the service says it isn't there.
+ *
+ * Cloudflare answers an unknown id with 500, so that counts as absent along
+ * with 404. Any other failure stops the call: taking a dropped connection for a
+ * missing record would write the record a second time.
+ *
+ * @param get - The profile's read.
+ * @param call - Id and abort signal.
+ * @returns {Promise<Memory | undefined>} The record, or nothing for an absent id.
+ * @throws {Error} The read's failure when it isn't a not-found answer.
+ */
+async function readIfThere(
+  get: NonNullable<MemoryProfile["get"]>,
+  call: AbortOptions & Readonly<{ id: string }>,
+): Promise<Memory | undefined> {
+  try {
+    return await get(call.id, { signal: call.signal });
+  } catch (error) {
+    const status = (error as { statusCode?: unknown } | null)?.statusCode;
+    if (status === 404 || status === 500) return undefined;
+    throw error;
+  }
+}
+
+/**
  * One profile operation, or a refusal naming the side that lacks it.
  *
  * @param profile - Source or target profile.
@@ -263,9 +288,8 @@ class TargetRecords {
   async #holds(id: string): Promise<boolean> {
     let held = this.#held.get(id);
     if (held === undefined) {
-      held = this.#get(id, { signal: this.#signal }).then(
-        () => true,
-        () => false,
+      held = readIfThere(this.#get, { id, signal: this.#signal }).then(
+        (memory) => memory !== undefined,
       );
       this.#held.set(id, held);
     }
@@ -308,7 +332,7 @@ class TargetRecords {
 }
 
 /**
- * Read hidden records by id, keeping the ones that answer.
+ * Read hidden records by id, keeping the ones the service still holds.
  *
  * @param to - Target profile.
  * @param step - Ids and abort signal.
@@ -320,7 +344,7 @@ async function readFound(to: MemoryProfile, step: MigrationRead): Promise<Memory
   for (let start = 0; start < step.ids.length; start += READ_CONCURRENCY) {
     const batch = step.ids.slice(start, start + READ_CONCURRENCY);
     const read = await Promise.all(
-      batch.map((id) => get(id, { signal: step.signal }).catch(() => undefined)),
+      batch.map((id) => readIfThere(get, { id, signal: step.signal })),
     );
     step.signal?.throwIfAborted();
     found.push(...read.filter((memory) => memory !== undefined));
