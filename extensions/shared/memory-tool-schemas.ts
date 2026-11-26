@@ -422,6 +422,22 @@ export const summaryParameters = Type.Object(
   closed,
 );
 export const profileOnlyParameters = Type.Object(profileParameters, closed);
+export const migrateParameters = Type.Object(
+  {
+    namespace: namespaceString(memoryFieldDescriptions.migrateNamespace),
+    profile: profileString(memoryFieldDescriptions.migrateProfile),
+    targetNamespace: Type.Optional(namespaceString(memoryFieldDescriptions.migrateTargetNamespace)),
+    targetProfile: Type.Optional(profileString(memoryFieldDescriptions.migrateTargetProfile)),
+    dryRun: Type.Optional(Type.Boolean({ description: memoryFieldDescriptions.migrateDryRun })),
+    keepSource: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.migrateKeepSource }),
+    ),
+    copySource: Type.Optional(
+      Type.Boolean({ description: memoryFieldDescriptions.migrateCopySource }),
+    ),
+  },
+  closed,
+);
 
 /**
  * Namespace and profile as a bound host offers them: optional, and named after the default.

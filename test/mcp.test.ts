@@ -39,6 +39,7 @@ const expectedNames = [
   "memory_delete",
   "memory_summary",
   "memory_session_delete",
+  "memory_migrate",
   "memory_profile_delete",
 ];
 

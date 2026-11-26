@@ -61,6 +61,7 @@ const expectedToolNames = [
   "memory_delete",
   "memory_summary",
   "memory_session_delete",
+  "memory_migrate",
   "memory_profile_delete",
 ];
 
@@ -294,7 +295,7 @@ try {
   const lockedTools = createMemoryAiTools({ namespace: "packed", profile: "app", locked: true });
   assert.deepEqual(
     Object.keys(lockedTools),
-    expectedToolNames.filter((name) => !/^memory_(namespace|profile)_/.test(name)),
+    expectedToolNames.filter((name) => !/^memory_(namespace_|profile_|migrate$)/.test(name)),
     "wrong locked tool set from packed dist/ai.mjs",
   );
   const sentBeforeEscape = requests.length;

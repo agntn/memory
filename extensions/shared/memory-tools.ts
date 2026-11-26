@@ -6,6 +6,7 @@ import type {
   CloudflareMemoryOptions,
   Memory,
   MemoryMessage,
+  MemoryMigrationResult,
   MemoryProfile,
   MemoryProvider,
   RecallCandidate,
@@ -50,6 +51,7 @@ import type {
   MemoryModule,
   MemoryParams,
   MemoryToolResult,
+  MigrateParams,
   NamespaceListParams,
   NamespaceParams,
   ProfileListParams,
@@ -1951,6 +1953,119 @@ function redactionNote(counts: Readonly<Record<string, number>>): string {
   return ` Secrets were replaced with [redacted:<shape>] before sending: ${list}.`;
 }
 
+/**
+ * Read an optional flag strictly, so a JS caller's `"true"` isn't taken for `false`.
+ *
+ * @param value - The flag as passed.
+ * @param name - Its argument name, for the message.
+ * @returns {boolean} The flag, `false` when left out.
+ * @throws {TypeError} When it is neither boolean nor left out.
+ */
+function flag(value: unknown, name: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new TypeError(`${name} must be a boolean`);
+  return value;
+}
+
+/**
+ * Source and target of a migration, the target filled in from the source and both checked.
+ *
+ * @param params - The migrate call.
+ * @returns {{ source: ProfileParams; target: ProfileParams }} Both pairs.
+ * @throws {Error} On a bad name, or a target that is the source.
+ */
+function migrationRoute(params: Readonly<MigrateParams>): {
+  source: ProfileParams;
+  target: ProfileParams;
+} {
+  const source = validateMemoryScope(params.namespace, params.profile, "A migration source");
+  const target = validateMemoryScope(
+    optionalString(params.targetNamespace) ?? source.namespace,
+    optionalString(params.targetProfile) ?? source.profile,
+    "A migration target",
+  );
+  if (memoryTarget(source) === memoryTarget(target)) {
+    throw new Error(
+      `A migration needs a target other than ${memoryTarget(source)}; pass targetNamespace, targetProfile or both`,
+    );
+  }
+  return { source, target };
+}
+
+/**
+ * A count of memories with the noun it takes.
+ *
+ * @param count - How many.
+ * @returns {string} `1 memory` or `<n> memories`.
+ */
+function memoriesText(count: number): string {
+  return count === 1 ? "1 memory" : `${count} memories`;
+}
+
+/**
+ * What the migration did, one line per record under a header that counts them.
+ *
+ * @param route - Source and target.
+ * @param result - The library's result.
+ * @param keepSource - Whether the source stayed.
+ * @returns {string} The result text.
+ */
+function migratedText(
+  route: Readonly<{ source: ProfileParams; target: ProfileParams }>,
+  result: MemoryMigrationResult,
+  keepSource: boolean,
+): string {
+  const from = memoryTarget(route.source);
+  const to = memoryTarget(route.target);
+  const skipped = result.memories.filter((memory) => memory.skipped).length;
+  const superseded = result.memories.filter((memory) => memory.superseded).length;
+  const verb = keepSource ? "Copied" : "Moved";
+  const kept = keepSource
+    ? ` ${from} keeps them.`
+    : ` Deleted ${memoriesText(result.deleted)} from ${from}.`;
+  const found =
+    skipped === 0
+      ? ""
+      : ` ${memoriesText(skipped)} were already in ${to}, so nothing was written for them.`;
+  const hidden =
+    superseded === 0
+      ? ""
+      : ` A newer memory in ${to} superseded ${memoriesText(superseded)} of them: memory_get reads those, memory_list and memory_recall don't.`;
+  const header = `${verb} ${memoriesText(result.memories.length)} from ${from} to ${to}.${found}${kept}${hidden}`;
+  return result.memories.length === 0 ? header : `${header}\n${recordLines(result.memories)}`;
+}
+
+/**
+ * The failure with every id pair it got to, so a retry starts from a known state.
+ *
+ * @param error - What the library threw.
+ * @param route - Source and target.
+ * @returns {unknown} An error naming the map, or the original one when it carries none.
+ */
+function migrationFailure(
+  error: unknown,
+  route: Readonly<{ source: ProfileParams; target: ProfileParams }>,
+): unknown {
+  const { memories, deleted } = (error ?? {}) as { memories?: unknown; deleted?: unknown };
+  if (!(error instanceof Error) || !Array.isArray(memories) || typeof deleted !== "number") {
+    return error;
+  }
+  const pairs = memories as readonly { from: string; to: string }[];
+  const shown = pairs
+    .slice(0, MAX_TOOL_EXPAND)
+    .map(({ from, to }) => `${quoteToolText(from)} -> ${quoteToolText(to)}`);
+  const more = pairs.length - shown.length;
+  const map = `${shown.join(", ")}${more === 0 ? "" : `, and ${more} more`}`;
+  const landed =
+    pairs.length === 0
+      ? "No memory reached the target"
+      : `${memoryTarget(route.target)} holds ${memoriesText(pairs.length)} from it: ${map}`;
+  return new Error(
+    `${toolErrorMessage(error)}. ${landed}. Deleted ${memoriesText(deleted)} from ${memoryTarget(route.source)}. Run the same call again to finish: records already in the target are found and not written twice.`,
+    { cause: error },
+  );
+}
+
 export const memoryToolExecutors = {
   async remember(
     params: RememberParams,
@@ -2357,6 +2472,58 @@ export const memoryToolExecutors = {
         listedAtLeast: removed?.atLeast ?? null,
       },
     };
+  },
+
+  /**
+   * Move or copy every listed memory of one profile into another.
+   *
+   * @param params - Source, target and flags.
+   * @param options - Request cancellation.
+   * @param binding - Workers binding the call goes through, if any.
+   * @returns {Promise<MemoryToolResult>} The id map, or the count for a dry run.
+   * @throws {Error} With the id map so far when a step fails.
+   */
+  async migrate(
+    params: MigrateParams,
+    options: AbortOptions = {},
+    binding?: AgentMemoryNamespaceBinding,
+  ): Promise<MemoryToolResult> {
+    const route = migrationRoute(params);
+    const dryRun = flag(params.dryRun, "dryRun");
+    const keepSource = flag(params.keepSource, "keepSource");
+    const copySource = flag(params.copySource, "copySource");
+    const memory = await loadMemory();
+    const from = memoryTarget(route.source);
+    const stamp = copySource ? (id: string) => copySourceLine(from, id) : undefined;
+    let result: MemoryMigrationResult;
+    try {
+      result = await memory.migrateMemories(
+        {
+          from: await getProfile(route.source, binding),
+          to: await getProfile(route.target, binding),
+        },
+        {
+          dryRun,
+          keepSource,
+          maxContentBytes: MAX_TOOL_MEMORY_CONTENT_CHARACTERS,
+          ...(stamp === undefined ? {} : { stamp }),
+          ...options,
+        },
+      );
+    } catch (error) {
+      throw migrationFailure(error, route);
+    }
+    const details = {
+      source: route.source,
+      target: route.target,
+      dryRun,
+      keepSource,
+      ...result,
+    };
+    const text = dryRun
+      ? `${from} lists ${result.listed} memories that would move to ${memoryTarget(route.target)}. Nothing was written.`
+      : migratedText(route, result, keepSource);
+    return { content: [{ type: "text", text }], details };
   },
 
   async listNamespaces(

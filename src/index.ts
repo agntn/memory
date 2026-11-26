@@ -9,9 +9,16 @@ export {
   MemoryServerError,
   MemoryNetworkError,
   MemoryInputError,
+  MemoryMigrationError,
   UnknownProviderError,
   normalizeMemoryError,
 } from "./errors.ts";
+export { migrateMemories } from "./migrate.ts";
+export type {
+  MemoryMigrationOptions,
+  MemoryMigrationResult,
+  MemoryMigrationRoute,
+} from "./migrate.ts";
 export { isUnknownRecord } from "./type-guards.ts";
 export { register, create, providers, has } from "./registry.ts";
 export type { MemoryProviderFactory } from "./registry.ts";

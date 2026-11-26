@@ -172,6 +172,10 @@ export const memoryToolMeta = {
     description:
       "Delete every memory carrying one session id, which memory_list reports per memory, and the raw messages ingested under it, which memory_recall ranks as candidates marked kind: message. This is the only bulk deletion below profile level. The result counts the memories memory_list showed for the session and says so when it showed none, because the service accepts a delete for a session that does not exist; superseded memories tagged with the session and the ingested messages are hidden from that count and removed all the same.",
   },
+  memory_migrate: {
+    label: "Migrate Memories",
+    description: `Move every listed memory of one profile into another profile, in the same namespace or another one, in one call. The service has no move or rename, so each record is written again: it gets a new id and createdAt, and the service assigns its type and summary afresh, while its content and sessionId carry over. Superseded versions, raw messages from memory_ingest, the original createdAt and the original ids do not move. A relates: line naming another moved memory gets that memory's new id. A moved fact or instruction can supersede one the target already holds on its topic, as any write does, and the map flags a moved record a later one superseded. The source is deleted only after every new record reads back with the content and session it should hold, and keepSource copies instead. With dryRun the call only counts what the source lists. A failed call lists up to ${MAX_TOOL_EXPAND} of the old and new id pairs it wrote and deletes nothing before every record checks out, so run the same call again: a target record with the session and exact content a record would get counts as moved and is not written twice. Finding them reads every target record in a session the source uses. A moved record superseded in the target is hidden from that search: a call that failed before deleting writes it again, and a call that reaches the delete removes its source first. Writes go one at a time, so a big profile takes a while.`,
+  },
   memory_profile_delete: {
     label: "Delete Memory Profile",
     description:
@@ -186,6 +190,7 @@ export const memoryToolProgress = {
   memory_recall_wait: "Waiting for memory to reach recall",
   memory_recall: "Searching memories",
   memory_ingest: "Submitting messages for extraction",
+  memory_migrate: "Migrating memories",
 } as const;
 
 /** Field descriptions for the parameter schemas in `memory-tool-schemas.ts`. */
@@ -217,6 +222,17 @@ export const memoryFieldDescriptions = {
   supersedeCopies: `Up to ${MAX_TOOL_MEMORY_COPIES} copies of the old memory in other profiles, each replaced after the main record with the same content, session and query. Name a copy's old id, or leave it out to find the copy ending with the old memory's Copied from memory line through one recall in that profile. Every old copy is found before the first write. Each pair must differ from the others and from the main profile.`,
   supersedeCopyOldMemoryId:
     "Exact id of the old copy. Left out, recall looks for the copy that ends with the old memory's Copied from memory line.",
+  migrateNamespace: "Namespace the memories move out of.",
+  migrateProfile: "Profile the memories move out of.",
+  migrateTargetNamespace:
+    "Namespace the memories move into. Left out, the source namespace; pass this, targetProfile or both.",
+  migrateTargetProfile:
+    "Profile the memories move into, created by the first write. Left out, the source profile name; pass this, targetNamespace or both.",
+  migrateDryRun:
+    "Count the memories the source lists and stop. Nothing is read in full, written or deleted.",
+  migrateKeepSource: "Leave the source memories in place, so the call copies instead of moving.",
+  migrateCopySource:
+    'End each new record with a blank line and Copied from memory "<old id>" in <namespace>/<profile>., the line memory_remember copySource writes. A record it would push past the size cap stops the call before any write.',
   copyNamespace: "Namespace of the copy.",
   copyProfile: "Profile inside the copy's namespace. The first write creates it.",
   messageRole: "Who produced the message.",

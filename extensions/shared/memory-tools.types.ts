@@ -3,6 +3,7 @@ import type {
   CloudflareAccountOptions,
   MemoryProvider,
   MemoryType,
+  migrateMemories,
   ResponseLength,
   ThinkingLevel,
 } from "@agntn/memory";
@@ -22,6 +23,7 @@ export interface ProfileResult {
 
 export interface MemoryModule {
   registerAll(): void;
+  migrateMemories: typeof migrateMemories;
   create<TOptions>(name: string, options: TOptions): MemoryProvider;
   CloudflareNamespaceClient: new (options?: CloudflareAccountOptions) => {
     list(options?: NamespaceListParams & AbortOptions): Promise<{
@@ -150,6 +152,17 @@ export interface SessionParams extends ProfileParams {
 
 export interface SummaryParams extends ProfileParams {
   sessionId?: string;
+}
+
+export interface MigrateParams extends ProfileParams {
+  /** Left out, the source namespace. */
+  targetNamespace?: string;
+  /** Left out, the source profile name. */
+  targetProfile?: string;
+  dryRun?: boolean;
+  keepSource?: boolean;
+  /** End each new record with a line naming its old id. */
+  copySource?: boolean;
 }
 
 export interface MemoryToolResult {

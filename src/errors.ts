@@ -1,4 +1,5 @@
 import type { CredentialSource } from "@agntn/credentials";
+import type { MigratedMemory } from "./types.ts";
 
 export class MemoryError extends Error {
   readonly provider?: string;
@@ -64,6 +65,31 @@ export class MemoryServerError extends MemoryHttpError {}
 export class MemoryNetworkError extends MemoryError {}
 
 export class MemoryInputError extends MemoryError {}
+
+/** What a stopped migration got done, and why it stopped. */
+export interface MemoryMigrationErrorOptions {
+  readonly memoryId?: string;
+  readonly memories: readonly MigratedMemory[];
+  readonly deleted: number;
+  readonly cause?: unknown;
+}
+
+/** A migration that stopped partway. The map says what landed, so the same call can finish it. */
+export class MemoryMigrationError extends MemoryError {
+  /** The record it stopped at, when one step failed on one record. */
+  readonly memoryId?: string;
+  /** Old id to new id for every record written or found before the stop. */
+  readonly memories: readonly MigratedMemory[];
+  /** Source records already deleted. */
+  readonly deleted: number;
+
+  constructor(message: string, options: MemoryMigrationErrorOptions) {
+    super(message, { cause: options.cause });
+    this.memoryId = options.memoryId;
+    this.memories = options.memories;
+    this.deleted = options.deleted;
+  }
+}
 export class UnknownProviderError extends MemoryError {}
 
 export function normalizeMemoryError(error: unknown, provider: string): MemoryError {

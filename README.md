@@ -142,6 +142,8 @@ An old memory can now name its replacement. Call `memory_get` with `reportSucces
 
 Not every follow-up is a complement. Give `memory_remember` a `relates` list when the new memory corrects, refutes or narrows an older one. Then `memory_get` with `reportRelations: true` shows the old record who's been arguing with it.
 
+Call `memory_migrate` to move a whole profile, within or across namespaces. Four tools per record was a lot of packing. Try `dryRun: true` first to count the boxes. If the move stops halfway, repeat the same call. Records already at the destination aren't written twice. The source stays until they all read back. Each record gets a new id.
+
 Set `AGNTN_MEMORY_FIELDS` once for MCP, CLI, Pi or OMP. Give it a JSON object of strings:
 
 ```json
@@ -191,11 +193,11 @@ const { text } = await generateText({
 });
 ```
 
-Locked gives you 11 tools that work inside one profile. The six `memory_namespace_*` and `memory_profile_*` tools aren't returned, and TypeScript knows they're missing.
+Locked gives you 11 tools that work inside one profile. The six `memory_namespace_*` and `memory_profile_*` tools and `memory_migrate` aren't returned, and TypeScript knows they're missing.
 
 No tool schema has a `namespace` or `profile` field. Calls that name either are refused before reaching Cloudflare. The model in user-42's chat can't read or delete user-43's memories. Creation throws unless both namespace and profile are set.
 
-Without `locked`, you get the same 17 tools as MCP, Pi, and OMP. That's for an agent managing its own memory. Namespace and profile must still go together, or creation throws. Calls can name both to reach another profile, never just one.
+Without `locked`, you get the same 18 tools as MCP, Pi, and OMP. That's for an agent managing its own memory. Namespace and profile must still go together, or creation throws. Calls can name both to reach another profile, never just one.
 
 With a profile set, writes carry your `sessionId`, and the model can't pass its own. Scope and session come from your code, never environment variables. No Claude Code session hides in your chat app.
 
@@ -212,7 +214,7 @@ const tools = createMemoryAiTools({
 });
 ```
 
-Namespace and profile are required. The binding serves one namespace. Calls that name another, copies included, are refused before anything is written. It can't list namespaces or profiles either. The four `memory_namespace_*` tools and `memory_profile_list` stay home. Without `locked` that leaves 12 tools. With it, the same 11 as over HTTP.
+Namespace and profile are required. The binding serves one namespace. Calls that name another, copies and migration targets included, are refused before anything is written. It can't list namespaces or profiles either. The four `memory_namespace_*` tools and `memory_profile_list` stay home. Without `locked` that leaves 13 tools. With it, the same 11 as over HTTP.
 
 With the AI SDK, you can pass the same fields as an option:
 
