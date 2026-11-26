@@ -2026,7 +2026,7 @@ function migratedText(
   const found =
     skipped === 0
       ? ""
-      : ` ${memoriesText(skipped)} were already in ${to}, so nothing was written for them.`;
+      : ` Found ${memoriesText(skipped)} already in ${to} and wrote nothing for them.`;
   const hidden =
     superseded === 0
       ? ""

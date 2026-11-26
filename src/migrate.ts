@@ -150,7 +150,21 @@ export function withRelationIds(content: string, ids: ReadonlyMap<string, string
 }
 
 /**
- * The key a moved record is found by: its session and its exact content.
+ * The content with every relates: id blanked, for a record whose related memory moved in an earlier run.
+ *
+ * @param content - Stored memory content.
+ * @returns {string} The content with `*` in place of each relation id.
+ */
+function withoutRelationIds(content: string): string {
+  return content.replaceAll(
+    relationLinePattern,
+    (line: string, rel: string, _id: string, point: string) =>
+      MIGRATED_RELATION_KINDS.has(rel) ? `relates: ${rel} *${point}` : line,
+  );
+}
+
+/**
+ * The key a moved record is found by: its session and its content.
  *
  * @param record - Session and content of a record.
  * @returns {string} One string per pair.
@@ -160,30 +174,82 @@ function moveKey(record: Readonly<Pick<Memory, "sessionId" | "content">>): strin
 }
 
 /**
- * The target's listed records in the sessions the source uses, by session and content.
+ * What the target already holds, found by exact content first and by content with its relation ids blanked second.
+ *
+ * A record whose related memory a failed run already moved and deleted can't
+ * spell the new id any more, so the second key still finds it.
+ */
+class TargetRecords {
+  readonly #exact = new Map<string, Memory[]>();
+  readonly #loose = new Map<string, Memory[]>();
+  readonly #taken = new Set<string>();
+
+  /**
+   * Index records read from the target.
+   *
+   * @param records - Target records, oldest first.
+   */
+  constructor(records: readonly Memory[]) {
+    for (const record of records) {
+      const exact = moveKey(record);
+      const loose = moveKey({ ...record, content: withoutRelationIds(record.content) });
+      this.#exact.set(exact, [...(this.#exact.get(exact) ?? []), record]);
+      this.#loose.set(loose, [...(this.#loose.get(loose) ?? []), record]);
+    }
+  }
+
+  /**
+   * Take the oldest untaken record holding this session and content.
+   *
+   * @param record - Session and the content a moved record would get.
+   * @returns {Memory | undefined} The record, which no later lookup returns again.
+   */
+  take(record: Readonly<Pick<Memory, "sessionId" | "content">>): Memory | undefined {
+    const loose = { ...record, content: withoutRelationIds(record.content) };
+    const found = [
+      ...(this.#exact.get(moveKey(record)) ?? []),
+      ...(this.#loose.get(moveKey(loose)) ?? []),
+    ].find(({ id }) => !this.#taken.has(id));
+    if (found !== undefined) this.#taken.add(found.id);
+    return found;
+  }
+}
+
+/**
+ * The target's listed records in the sessions the source uses, read in full.
  *
  * A record from another session can't be one this migration wrote, so only
  * the matching sessions cost a read each.
  *
  * @param to - Target profile.
- * @param state - The source records and abort signal.
- * @returns {Promise<Map<string, Memory[]>>} Records per key, oldest first.
+ * @param state - The target listing, the source records and abort signal.
+ * @returns {Promise<TargetRecords>} The records, ready to be found.
  */
 async function targetRecords(
   to: MemoryProfile,
-  state: AbortOptions & Readonly<{ sources: readonly Memory[] }>,
-): Promise<Map<string, Memory[]>> {
-  const step = { side: "target", signal: state.signal } as const;
+  state: AbortOptions &
+    Readonly<{ listed: readonly MemoryListEntry[]; sources: readonly Memory[] }>,
+): Promise<TargetRecords> {
   const sessions = new Set(state.sources.map(({ sessionId }) => sessionId));
-  const ids = (await listAll(to, step))
-    .filter(({ sessionId }) => sessions.has(sessionId))
-    .map(({ id }) => id);
-  const present = new Map<string, Memory[]>();
-  for (const record of await readAll(to, { ...step, ids })) {
-    const key = moveKey(record);
-    present.set(key, [...(present.get(key) ?? []), record]);
+  const ids = state.listed.filter(({ sessionId }) => sessions.has(sessionId)).map(({ id }) => id);
+  return new TargetRecords(await readAll(to, { side: "target", ids, signal: state.signal }));
+}
+
+/**
+ * Refuse one profile as both ends, which two wrappers over it would hide from `===`.
+ *
+ * @param sources - The source listing.
+ * @param targets - The target listing.
+ * @throws {MemoryInputError} When a record shows in both.
+ */
+function assertTwoProfiles(
+  sources: readonly MemoryListEntry[],
+  targets: readonly MemoryListEntry[],
+): void {
+  const ids = new Set(sources.map(({ id }) => id));
+  if (targets.some(({ id }) => ids.has(id))) {
+    throw new MemoryInputError("Source and target are the same profile, so nothing was written");
   }
-  return present;
 }
 
 /**
@@ -261,7 +327,6 @@ function assertContentBytes(
  * @param sources - Source records, oldest first.
  * @param state - Target profile, its records, the stamp and abort signal.
  * @returns {Promise<Move[]>} One move per record.
- * @throws {MemoryInputError} When the target turns out to be the source.
  * @throws {MemoryMigrationError} When a write fails, with every move before it.
  */
 async function writeAll(
@@ -269,7 +334,7 @@ async function writeAll(
   state: AbortOptions &
     Readonly<{
       to: MemoryProfile;
-      present: Map<string, Memory[]>;
+      present: TargetRecords;
       stamp?: (memoryId: string) => string;
     }>,
 ): Promise<Move[]> {
@@ -277,17 +342,17 @@ async function writeAll(
   const ids = new Map<string, string>();
   const moves: Move[] = [];
   for (const source of sources) {
-    const content = `${withRelationIds(source.content, ids)}${state.stamp?.(source.id) ?? ""}`;
-    const found = state.present.get(moveKey({ sessionId: source.sessionId, content }))?.shift();
-    /** Ids are unique across profiles, so finding the record itself means one profile twice. */
-    if (found?.id === source.id) {
-      throw new MemoryInputError("Source and target are the same profile, so nothing was written");
-    }
+    const written = `${withRelationIds(source.content, ids)}${state.stamp?.(source.id) ?? ""}`;
+    const found = state.present.take({ sessionId: source.sessionId, content: written });
     try {
       const record =
         found ??
-        (await remember({ content, sessionId: source.sessionId }, { signal: state.signal }));
+        (await remember(
+          { content: written, sessionId: source.sessionId },
+          { signal: state.signal },
+        ));
       ids.set(source.id, record.id);
+      const content = found?.content ?? written;
       moves.push({ source, content, to: record.id, skipped: found !== undefined });
     } catch (error) {
       throw stopped(error, { memoryId: source.id, memories: migrated(moves), deleted: 0 });
@@ -371,9 +436,8 @@ async function deleteAll(
  *
  * The service can't move a record, so each one is read, written to the target
  * with its session and read back, and the source goes only after all of them
- * check out. A target record already holding the session and exact content a
- * record would get counts as moved, which makes a failed migration safe to run
- * again. New records get new ids and timestamps, and the service assigns their
+ * check out. A target record already holding the session and content a record
+ * would get counts as moved, which makes a failed migration safe to run again. New records get new ids and timestamps, and the service assigns their
  * types and summaries again. Superseded versions and ingested messages stay.
  *
  * @param route - Source and target profile.
@@ -391,10 +455,12 @@ export async function migrateMemories(
   const { signal, stamp } = options;
   const entries = await listAll(from, { side: "source", signal });
   if (options.dryRun === true) return { listed: entries.length, memories: [], deleted: 0 };
+  const listed = await listAll(to, { side: "target", signal });
+  assertTwoProfiles(entries, listed);
   const ids = entries.map(({ id }) => id);
   const sources = await readAll(from, { side: "source", ids, signal });
   assertContentBytes(sources, options);
-  const present = await targetRecords(to, { sources, signal });
+  const present = await targetRecords(to, { listed, sources, signal });
   const moves = await writeAll(sources, { to, present, stamp, signal });
   const memories = migrated(moves, await verifyAll(moves, { to, signal }));
   const deleted = options.keepSource === true ? 0 : await deleteAll(from, { memories, signal });

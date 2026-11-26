@@ -246,6 +246,19 @@ describe("migrateMemories", () => {
     expect(source.calls.some((call) => call.startsWith("delete"))).toBe(false);
   });
 
+  it("takes one target record for one source record when two sources read the same", async () => {
+    const { source, target } = profiles();
+    source.add("same", "chat-1");
+    source.add("same", "chat-1");
+    target.add("same", "chat-1");
+
+    const result = await migrateMemories({ from: source.profile, to: target.profile });
+
+    expect(result.memories.map(({ skipped }) => skipped)).toEqual([true, false]);
+    expect(new Set(result.memories.map(({ to }) => to)).size).toBe(2);
+    expect(target.records.size).toBe(2);
+  });
+
   it("does not take a record from another session for a moved one", async () => {
     const { source, target } = profiles();
     target.add("one", "chat-2");
@@ -288,6 +301,47 @@ describe("migrateMemories", () => {
       "Source and target are the same profile, so nothing was written",
     );
     expect(source.records.size).toBe(1);
+  });
+
+  it("refuses one profile behind two wrappers even when the stamp changes the content", async () => {
+    const { source } = profiles();
+    source.add("one");
+
+    await expect(
+      migrateMemories(
+        { from: source.profile, to: source.profile },
+        { stamp: (id) => `\n\nfrom ${id}` },
+      ),
+    ).rejects.toThrow("Source and target are the same profile, so nothing was written");
+    expect(source.records.size).toBe(1);
+    expect(source.calls.filter((call) => call.startsWith("remember"))).toEqual([]);
+  });
+
+  it("finishes after a failed delete took the memory a correction relates to", async () => {
+    const { source, target } = profiles();
+    const fact = source.add("The bucket is in eu-west-3.");
+    source.add(`The bucket is in eu-central-1.\n\nrelates: corrects ${fact.id}`);
+    target.afterRemember = (stored) => {
+      if (!stored.content.startsWith("The bucket is in eu-central-1.")) return;
+      const older = [...target.records.values()].find(({ content }) =>
+        content.endsWith("eu-west-3."),
+      );
+      if (older) target.records.set(older.id, { ...older, updatedAt: stored.createdAt });
+    };
+    source.failures = { delete: 2 };
+
+    const failed = (await migrateMemories({ from: source.profile, to: target.profile }).catch(
+      (error: unknown) => error,
+    )) as MemoryMigrationError;
+    expect(failed).toBeInstanceOf(MemoryMigrationError);
+    expect([...source.records.keys()]).toHaveLength(1);
+
+    source.failures = {};
+    const result = await migrateMemories({ from: source.profile, to: target.profile });
+
+    expect(result.memories.map(({ skipped }) => skipped)).toEqual([true]);
+    expect(target.records.size).toBe(2);
+    expect(source.records.size).toBe(0);
   });
 
   it("flags a moved record that a later one superseded in the target", async () => {
