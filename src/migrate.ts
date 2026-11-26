@@ -15,7 +15,7 @@ export const MIGRATED_RELATION_KINDS: ReadonlySet<string> = new Set([
   "refutes",
   "depends-on",
 ]);
-/** One relates: line, its kind and id first, the way the tools write it. */
+/** One relates: line: kind, id and the quoted point, the way the tools write it. */
 const relationLinePattern = /^relates: ([a-z-]+) (\S+)((?: "(?:[^"\\]|\\.)*")?)$/gmu;
 
 /** The two profiles a migration runs between. */
@@ -50,6 +50,17 @@ interface Move {
   readonly content: string;
   readonly to: string;
   readonly skipped: boolean;
+}
+
+/** What a source record becomes, and what a target record has to agree with to count as it. */
+interface Match {
+  readonly sessionId: string | null;
+  /** Content as the source holds it. */
+  readonly source: string;
+  /** Content this run would write. */
+  readonly written: string;
+  /** Ids of the sources this run moves. */
+  readonly moved: ReadonlySet<string>;
 }
 
 /** Which profile a step touches, and its abort signal. */
@@ -150,7 +161,19 @@ export function withRelationIds(content: string, ids: ReadonlyMap<string, string
 }
 
 /**
- * The content with every relates: id blanked, for a record whose related memory moved in an earlier run.
+ * The ids on the relates: lines of a record, in content order.
+ *
+ * @param content - Stored memory content.
+ * @returns {string[]} One id per line of a kind the tools write.
+ */
+function relationIds(content: string): string[] {
+  return [...content.matchAll(relationLinePattern)].flatMap(([, rel, id]) =>
+    rel !== undefined && id !== undefined && MIGRATED_RELATION_KINDS.has(rel) ? [id] : [],
+  );
+}
+
+/**
+ * The content with every relates: id blanked, so two records differing only in those ids compare equal.
  *
  * @param content - Stored memory content.
  * @returns {string} The content with `*` in place of each relation id.
@@ -164,6 +187,33 @@ function withoutRelationIds(content: string): string {
 }
 
 /**
+ * The relation ids a target record holds where this run would write another one.
+ *
+ * An id this run maps must land on its new id, so a mismatch there rules the
+ * record out. An id it can't map, because a failed run moved that memory and
+ * deleted its source, is left for the caller to find in the target.
+ *
+ * @param candidate - A target record with the same session and content up to relation ids.
+ * @param move - The source content, what this run would write and the moved sources.
+ * @returns {string[] | undefined} Ids to look up in the target, or nothing when the record can't be the move.
+ */
+function unmappedRelations(
+  candidate: Readonly<Pick<Memory, "content">>,
+  move: Readonly<Match>,
+): string[] | undefined {
+  const before = relationIds(move.source);
+  const wanted = relationIds(move.written);
+  const lookups: string[] = [];
+  /* The blanked key already matched, so both hold the same relates: lines in the same order. */
+  for (const [index, id] of relationIds(candidate.content).entries()) {
+    if (id === wanted[index]) continue;
+    if (move.moved.has(before[index] ?? "")) return undefined;
+    lookups.push(id);
+  }
+  return lookups;
+}
+
+/**
  * The key a moved record is found by: its session and its content.
  *
  * @param record - Session and content of a record.
@@ -174,52 +224,117 @@ function moveKey(record: Readonly<Pick<Memory, "sessionId" | "content">>): strin
 }
 
 /**
- * What the target already holds, found by exact content first and by content with its relation ids blanked second.
+ * What the target already holds, by session and content with relation ids blanked.
  *
- * A record whose related memory a failed run already moved and deleted can't
- * spell the new id any more, so the second key still finds it.
+ * A record whose related memory a failed run moved and deleted can't spell the
+ * new id any more, so the blanked key finds it, and its other relation ids
+ * have to name records the target holds. Superseded ones count: the listing
+ * hides them, a read by id does not.
  */
 class TargetRecords {
-  readonly #exact = new Map<string, Memory[]>();
-  readonly #loose = new Map<string, Memory[]>();
+  readonly #records = new Map<string, Memory[]>();
   readonly #taken = new Set<string>();
+  readonly #held = new Map<string, Promise<boolean>>();
+  readonly #get: NonNullable<MemoryProfile["get"]>;
+  readonly #signal: AbortSignal | undefined;
 
   /**
    * Index records read from the target.
    *
    * @param records - Target records, oldest first.
+   * @param target - The target profile and abort signal, for relation ids the listing hides.
    */
-  constructor(records: readonly Memory[]) {
+  constructor(records: readonly Memory[], target: AbortOptions & Readonly<{ to: MemoryProfile }>) {
+    this.#get = operation(target.to, "get", "target");
+    this.#signal = target.signal;
     for (const record of records) {
-      const exact = moveKey(record);
-      const loose = moveKey({ ...record, content: withoutRelationIds(record.content) });
-      this.#exact.set(exact, [...(this.#exact.get(exact) ?? []), record]);
-      this.#loose.set(loose, [...(this.#loose.get(loose) ?? []), record]);
+      this.#held.set(record.id, Promise.resolve(true));
+      const key = moveKey({ ...record, content: withoutRelationIds(record.content) });
+      this.#records.set(key, [...(this.#records.get(key) ?? []), record]);
     }
   }
 
   /**
-   * Take the oldest untaken record holding this session and content.
+   * Whether the target holds a record with this id, superseded or not.
    *
-   * @param record - Session and the content a moved record would get.
-   * @returns {Memory | undefined} The record, which no later lookup returns again.
+   * @param id - A relation id from a target record.
+   * @returns {Promise<boolean>} `true` when a read by id finds it.
    */
-  take(record: Readonly<Pick<Memory, "sessionId" | "content">>): Memory | undefined {
-    const loose = { ...record, content: withoutRelationIds(record.content) };
-    const found = [
-      ...(this.#exact.get(moveKey(record)) ?? []),
-      ...(this.#loose.get(moveKey(loose)) ?? []),
-    ].find(({ id }) => !this.#taken.has(id));
+  async #holds(id: string): Promise<boolean> {
+    let held = this.#held.get(id);
+    if (held === undefined) {
+      held = this.#get(id, { signal: this.#signal }).then(
+        () => true,
+        () => false,
+      );
+      this.#held.set(id, held);
+    }
+    const found = await held;
+    this.#signal?.throwIfAborted();
+    return found;
+  }
+
+  /**
+   * Take the oldest untaken record holding what a source record becomes, an exact match first.
+   *
+   * @param move - What the source record becomes.
+   * @returns {Promise<Memory | undefined>} The record, which no later lookup returns again.
+   */
+  async take(move: Readonly<Match>): Promise<Memory | undefined> {
+    const key = moveKey({ sessionId: move.sessionId, content: withoutRelationIds(move.written) });
+    const open = (this.#records.get(key) ?? []).filter(({ id }) => !this.#taken.has(id));
+    const exact = open.find(({ content }) => content === move.written);
+    const found = exact ?? (await this.#firstHolding(open, move));
     if (found !== undefined) this.#taken.add(found.id);
     return found;
   }
+
+  /**
+   * The first candidate whose unmapped relation ids all name records in the target.
+   *
+   * @param open - Untaken candidates, oldest first.
+   * @param move - What the source record becomes.
+   * @returns {Promise<Memory | undefined>} The candidate, or nothing.
+   */
+  async #firstHolding(open: readonly Memory[], move: Readonly<Match>): Promise<Memory | undefined> {
+    for (const candidate of open) {
+      const lookups = unmappedRelations(candidate, move);
+      if (lookups === undefined) continue;
+      const held = await Promise.all(lookups.map((id) => this.#holds(id)));
+      if (held.every(Boolean)) return candidate;
+    }
+    return undefined;
+  }
+}
+
+/**
+ * Read hidden records by id, keeping the ones that answer.
+ *
+ * @param to - Target profile.
+ * @param step - Ids and abort signal.
+ * @returns {Promise<Memory[]>} The records found, in the order of `ids`.
+ */
+async function readFound(to: MemoryProfile, step: MigrationRead): Promise<Memory[]> {
+  const get = operation(to, "get", step.side);
+  const found: Memory[] = [];
+  for (let start = 0; start < step.ids.length; start += READ_CONCURRENCY) {
+    const batch = step.ids.slice(start, start + READ_CONCURRENCY);
+    const read = await Promise.all(
+      batch.map((id) => get(id, { signal: step.signal }).catch(() => undefined)),
+    );
+    step.signal?.throwIfAborted();
+    found.push(...read.filter((memory) => memory !== undefined));
+  }
+  return found;
 }
 
 /**
  * The target's listed records in the sessions the source uses, read in full.
  *
  * A record from another session can't be one this migration wrote, so only
- * the matching sessions cost a read each.
+ * the matching sessions cost a read each. A record that a later one of an
+ * earlier run superseded is gone from the listing, but the later one still
+ * names it on its relates: line, so those ids are read too.
  *
  * @param to - Target profile.
  * @param state - The target listing, the source records and abort signal.
@@ -230,9 +345,19 @@ async function targetRecords(
   state: AbortOptions &
     Readonly<{ listed: readonly MemoryListEntry[]; sources: readonly Memory[] }>,
 ): Promise<TargetRecords> {
+  const step = { side: "target", signal: state.signal } as const;
   const sessions = new Set(state.sources.map(({ sessionId }) => sessionId));
   const ids = state.listed.filter(({ sessionId }) => sessions.has(sessionId)).map(({ id }) => id);
-  return new TargetRecords(await readAll(to, { side: "target", ids, signal: state.signal }));
+  const records = await readAll(to, { ...step, ids });
+  const listed = new Set(state.listed.map(({ id }) => id));
+  const hidden = [...new Set(records.flatMap(({ content }) => relationIds(content)))].filter(
+    (id) => !listed.has(id),
+  );
+  const found = (await readFound(to, { ...step, ids: hidden })).filter(({ sessionId }) =>
+    sessions.has(sessionId),
+  );
+  const oldestFirst = [...records, ...found].toSorted((a, b) => (a.id < b.id ? -1 : 1));
+  return new TargetRecords(oldestFirst, { to, signal: state.signal });
 }
 
 /**
@@ -340,11 +465,14 @@ async function writeAll(
 ): Promise<Move[]> {
   const remember = operation(state.to, "remember", "target");
   const ids = new Map<string, string>();
+  const moved = new Set(sources.map(({ id }) => id));
   const moves: Move[] = [];
   for (const source of sources) {
     const written = `${withRelationIds(source.content, ids)}${state.stamp?.(source.id) ?? ""}`;
-    const found = state.present.take({ sessionId: source.sessionId, content: written });
+    const { sessionId, content: from } = source;
+    let found: Memory | undefined;
     try {
+      found = await state.present.take({ sessionId, source: from, written, moved });
       const record =
         found ??
         (await remember(

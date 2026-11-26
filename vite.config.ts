@@ -64,7 +64,15 @@ const readonlyParameterOptions = {
     },
     {
       from: "lib" as const,
-      name: ["AbortSignal", "Date", "Iterable", "ReadonlyMap", "RequestInit", "Response"],
+      name: [
+        "AbortSignal",
+        "Date",
+        "Iterable",
+        "ReadonlyMap",
+        "ReadonlySet",
+        "RequestInit",
+        "Response",
+      ],
     },
     {
       from: "package" as const,

@@ -64,9 +64,14 @@ class StoredProfile {
     return {
       list: async ({ limit = 100, cursor }: { limit?: number; cursor?: string } = {}) => {
         this.calls.push("list");
+        /* Like Cloudflare, the listing hides a record a newer one superseded. */
         const ids = [...this.records.keys()]
           .toSorted()
-          .filter((id) => cursor === undefined || id > cursor);
+          .filter((id) => cursor === undefined || id > cursor)
+          .filter((id) => {
+            const memory = this.records.get(id) as Memory;
+            return memory.updatedAt.getTime() === memory.createdAt.getTime();
+          });
         const page = ids.slice(0, limit);
         const memories = page.map((id) => {
           const { content: _content, ...entry } = this.records.get(id) as Memory;
@@ -257,6 +262,55 @@ describe("migrateMemories", () => {
     expect(result.memories.map(({ skipped }) => skipped)).toEqual([true, false]);
     expect(new Set(result.memories.map(({ to }) => to)).size).toBe(2);
     expect(target.records.size).toBe(2);
+  });
+
+  it("does not take a target record whose relation points somewhere else", async () => {
+    const { source, target } = profiles();
+    const other = target.add("Unrelated note.", "chat-1");
+    target.add(`Depends on it.\n\nrelates: depends-on ${other.id}`, "chat-1");
+    const base = source.add("Base fact.", "chat-1");
+    source.add(`Depends on it.\n\nrelates: depends-on ${base.id}`, "chat-1");
+
+    const result = await migrateMemories({ from: source.profile, to: target.profile });
+
+    const moved = target.records.get(result.memories[1]?.to ?? "");
+    expect(result.memories.map(({ skipped }) => skipped)).toEqual([false, false]);
+    expect(moved?.content).toBe(`Depends on it.\n\nrelates: depends-on ${result.memories[0]?.to}`);
+  });
+
+  it("does not take a record whose unmapped relation names a memory the target lacks", async () => {
+    const { source, target } = profiles();
+    target.add("Depends on it.\n\nrelates: depends-on 01X00000000000000000000077", "chat-1");
+    source.add("Depends on it.\n\nrelates: depends-on 01X00000000000000000000099", "chat-1");
+
+    const result = await migrateMemories({ from: source.profile, to: target.profile });
+
+    expect(result.memories[0]?.skipped).toBe(false);
+    expect(target.records.size).toBe(2);
+  });
+
+  it("finishes when the first delete fails on a correction that superseded its fact", async () => {
+    const { source, target } = profiles();
+    const fact = source.add("The bucket is in eu-west-3.");
+    source.add(`The bucket is in eu-central-1.\n\nrelates: corrects ${fact.id}`);
+    target.afterRemember = (stored) => {
+      if (!stored.content.startsWith("The bucket is in eu-central-1.")) return;
+      const older = [...target.records.values()].find(({ content }) =>
+        content.endsWith("eu-west-3."),
+      );
+      if (older) target.records.set(older.id, { ...older, updatedAt: stored.createdAt });
+    };
+    source.failures = { delete: 1 };
+
+    await expect(migrateMemories({ from: source.profile, to: target.profile })).rejects.toThrow(
+      "delete is down",
+    );
+    source.failures = {};
+    const result = await migrateMemories({ from: source.profile, to: target.profile });
+
+    expect(result.memories.map(({ skipped }) => skipped)).toEqual([true, true]);
+    expect(target.records.size).toBe(2);
+    expect(source.records.size).toBe(0);
   });
 
   it("does not take a record from another session for a moved one", async () => {
