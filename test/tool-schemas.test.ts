@@ -131,6 +131,7 @@ const sharedToolSchemas: Record<keyof typeof memoryToolMeta, unknown> = {
   memory_delete: sharedSchemas.memoryParameters,
   memory_summary: sharedSchemas.summaryParameters,
   memory_session_delete: sharedSchemas.sessionParameters,
+  memory_migrate: sharedSchemas.migrateParameters,
   memory_profile_delete: sharedSchemas.profileOnlyParameters,
 };
 

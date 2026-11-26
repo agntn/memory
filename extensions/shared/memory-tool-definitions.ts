@@ -12,6 +12,7 @@ import {
   createOperationalMemoryToolSchemas,
   namespaceListParameters,
   namespaceParameters,
+  migrateParameters,
   profileListParameters,
   profileOnlyParameters,
 } from "./memory-tool-schemas.ts";
@@ -40,6 +41,7 @@ const administrationToolNames = [
   "memory_namespace_create",
   "memory_namespace_delete",
   "memory_profile_list",
+  "memory_migrate",
   "memory_profile_delete",
 ] as const satisfies readonly MemoryToolName[];
 
@@ -197,13 +199,22 @@ function assertWholeScope(input: object, scope: ProfileParams | undefined): void
  * @throws {ToolInputError} When the call or one of its copies names another namespace.
  */
 function assertBindingNamespace(params: object, namespace: string): void {
-  const { namespace: called, copies } = params as { namespace?: unknown; copies?: unknown };
+  const {
+    namespace: called,
+    copies,
+    targetNamespace,
+  } = params as {
+    namespace?: unknown;
+    copies?: unknown;
+    targetNamespace?: unknown;
+  };
   const copied = Array.isArray(copies)
     ? copies.map((copy: unknown) => (copy as { namespace?: unknown }).namespace)
     : [];
-  if ([called, ...copied].every((name) => name === namespace)) return;
+  const target = targetNamespace === undefined ? [] : [targetNamespace];
+  if ([called, ...copied, ...target].every((name) => name === namespace)) return;
   throw new ToolInputError([
-    `Invalid arguments: the Workers binding serves only namespace ${namespace}, so leave namespace out or pass ${namespace}, in copies too`,
+    `Invalid arguments: the Workers binding serves only namespace ${namespace}, so leave namespace out or pass ${namespace}, in copies and targetNamespace too`,
   ]);
 }
 
@@ -463,6 +474,18 @@ function memoryToolSpecs(options: MemoryToolOptions): readonly MemoryToolSpec[] 
       snippet: "Delete one exact memory session.",
       guidelines: ["This is destructive; use only with an exact session id."],
       operation: "deleteSession",
+    },
+    {
+      name: "memory_migrate",
+      input: migrateParameters,
+      effect: "destructive",
+      idempotent: false,
+      reach: "none",
+      snippet: "Move or copy every memory of one profile into another profile or namespace.",
+      guidelines: [
+        "Start with dryRun for the count. After a failure, repeat the same call: records already moved are found and not written twice.",
+      ],
+      operation: "migrate",
     },
     {
       name: "memory_profile_delete",

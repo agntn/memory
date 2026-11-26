@@ -16,6 +16,18 @@ export interface Memory {
 
 export type MemoryListEntry = Omit<Memory, "content">;
 
+/** Where one record went in a migration. */
+export interface MigratedMemory {
+  /** Id in the source profile. */
+  from: string;
+  /** Id of the record holding it in the target. */
+  to: string;
+  /** The target already held it, from an earlier run, so nothing was written. */
+  skipped: boolean;
+  /** A later write in the target superseded it: readable by id, gone from listing and recall. */
+  superseded: boolean;
+}
+
 export interface MemoryMessage {
   role: MessageRole;
   content: string;

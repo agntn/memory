@@ -87,6 +87,7 @@ export const MEMORY_TOOL_SYMBOLS = {
   memory_delete: "🗑️",
   memory_summary: "📝",
   memory_session_delete: "🧹",
+  memory_migrate: "🚚",
   memory_profile_delete: "🗑️",
 } as const;
 

@@ -305,6 +305,7 @@ describe("@agntn/memory/ai locked to one profile", () => {
       "memory_namespace_create",
       "memory_namespace_delete",
       "memory_profile_list",
+      "memory_migrate",
       "memory_profile_delete",
     ];
     const tools = createMemoryAiTools(locked);
